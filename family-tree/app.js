@@ -29,7 +29,7 @@
   let pendingPhoto = null;   // dataURL staged in the person form
   let formSex = "male";
   let formColor = "";
-  const FAMILY_COLORS = ["#38607a", "#7a5c3e", "#5e8c6a", "#3f8a8a", "#b0894a", "#9c5d7a"];
+  const FAMILY_COLORS = ["#2f6fb0", "#9e6b3f", "#3f8f5a", "#2a9d9d", "#bf8b30", "#8a4f80"];
 
   function blankState() {
     return { title: "Family Tree", subtitle: "", persons: [], unions: [], links: [], manual: {} };
@@ -147,7 +147,8 @@
       let i = 0; cls.forEach((c) => c.ids.forEach((id) => (colIndex[id] = i++)));
     });
     reindex();
-    for (let pass = 0; pass < 10; pass++) {
+    // (1) barycenter sweeps sort out the gross left/right arrangement
+    for (let pass = 0; pass < 8; pass++) {
       const down = pass % 2 === 0;
       const seq = down ? range(1, maxGen) : range(maxGen - 1, 0, -1);
       seq.forEach((g) => {
@@ -156,6 +157,28 @@
         order[g] = stableSort(order[g], (a, b) => a._bary - b._bary);
         reindex();
       });
+    }
+    // (2) sibling grouping: keep every couple's children contiguous and sitting
+    // under that couple, so half/step-sibling sets don't interleave (e.g. the
+    // Hauck children stay together even though one married into another family).
+    const primaryUnion = {};
+    state.links.forEach((l) => { if (l.type === "bio") primaryUnion[l.child] = l.union; });
+    state.links.forEach((l) => { if (!(l.child in primaryUnion)) primaryUnion[l.child] = l.union; });
+    const clusterUnion = (c) => { for (const id of c.ids) if (primaryUnion[id]) return primaryUnion[id]; return null; };
+    const unionPos = (uid) => {
+      const u = unionById(uid); if (!u) return Infinity;
+      const xs = [u.a, u.b].filter((x) => x != null && x in colIndex).map((x) => colIndex[x]);
+      return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : Infinity;
+    };
+    for (let pass = 0; pass < 3; pass++) {
+      for (let g = 1; g <= maxGen; g++) {
+        order[g].forEach((c, i) => {
+          const gu = clusterUnion(c);
+          c._sort = gu != null ? unionPos(gu) : (c.ids[0] in colIndex ? colIndex[c.ids[0]] : i);
+        });
+        order[g] = stableSort(order[g], (a, b) => a._sort - b._sort);
+        reindex();
+      }
     }
 
     // assign x coordinates, cluster granularity, refined toward neighbours
@@ -333,7 +356,7 @@
 
   function shapeOutline(sex, hasPhoto, color) {
     const fill = hasPhoto ? "none" : "var(--node-fill)";
-    const style = color ? "stroke:" + color : null; // family colour; inline style beats the class rule
+    const style = color ? "stroke:" + color + ";stroke-width:3.4" : null; // family colour; inline style beats the class rule
     if (sex === "female") return el("circle", { class: "shape", r: 41, cx: 0, cy: 0, fill: hasPhoto ? "none" : fill, "fill-opacity": hasPhoto ? 0 : 1, style });
     if (sex === "unknown") return el("polygon", { class: "shape", points: "0,-46 46,0 0,46 -46,0", fill, style });
     return el("rect", { class: "shape", x: -40, y: -40, width: 80, height: 80, rx: 6, fill, style });

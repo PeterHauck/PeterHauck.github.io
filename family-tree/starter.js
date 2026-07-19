@@ -207,11 +207,11 @@ window.FAMILY_TREE_STARTER = {
 // clearly). Assigned by id so the person entries above stay readable.
 (function () {
   var groups = {
-    "#7a5c3e": ["cecil", "elvera", "dick", "tania", "audrey", "peggyH", "rhonda", "marcine", "don"], // Tania's Wheeldon/Reiners side
-    "#38607a": ["valentine", "maryk", "wm", "jerry", "jamesm", "donna", "joann", "janice", "cynthia", "teresa", "barney", "fritz", "marian", "michael", "bill", "peggyM", "peter"], // Hauck
-    "#5e8c6a": ["bob", "anne", "david", "robertjay"], // Goos
-    "#3f8a8a": ["edwardf", "alicef", "harlan", "lisa", "linda", "debra", "davef", "christine", "alicen"], // Fuchs
-    "#b0894a": ["arthurm", "myrtlem", "darleen"], // Miller
+    "#9e6b3f": ["cecil", "elvera", "dick", "tania", "audrey", "peggyH", "rhonda", "marcine", "don"], // Tania's Wheeldon/Reiners side (brown)
+    "#2f6fb0": ["valentine", "maryk", "wm", "jerry", "jamesm", "donna", "joann", "janice", "cynthia", "teresa", "barney", "fritz", "marian", "michael", "bill", "peggyM", "peter"], // Hauck (blue)
+    "#3f8f5a": ["bob", "anne", "david", "robertjay"], // Goos (green)
+    "#2a9d9d": ["edwardf", "alicef", "harlan", "lisa", "linda", "debra", "davef", "christine", "alicen"], // Fuchs (teal)
+    "#bf8b30": ["arthurm", "myrtlem", "darleen"], // Miller (gold)
   };
   var byId = {};
   window.FAMILY_TREE_STARTER.persons.forEach(function (p) { byId[p.id] = p; });
