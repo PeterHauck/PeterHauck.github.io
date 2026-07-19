@@ -160,6 +160,11 @@ window.FAMILY_TREE_STARTER = {
     P("palmer", "Palmer Eide", "male", { birth: 1906, death: 1991, deceased: true,
       docs: [{ id: "obit_palmer", title: "Obituary — Argus Leader (Newspapers.com)", url: "", capturedAt: "2026-07-19", kind: "text", content: PALMER_OBIT }] }),
     P("esther", "Esther (Hockenstad) Eide", "female", { death: 1978, deceased: true }), // Mary's mother
+    // Allison's brother (Peter's uncle) and his family
+    P("aaron", "Aaron Boyd", "male"),
+    P("shannon", "Shannon Boyd", "female"),
+    P("josie", "Josephine (Josie) Boyd", "female"),
+    P("palmerBoyd", "Palmer Boyd", "male"),
     // Michael's current wife
     P("jessica", "Jessica (Grams) Hauck", "female"),
     // ---- Peter's sister and her family (Glover) ----
@@ -167,6 +172,10 @@ window.FAMILY_TREE_STARTER = {
     P("danny", "Daniel “Danny” Glover", "male"),
     P("maisy", "Maisy Glover", "female"),
     P("willa", "Willa Glover", "female"),
+    // Peter's cousins on his dad's side (Bill & Kristi Hauck's sons)
+    P("tanner", "Tanner Hauck", "male"),
+    P("hunter", "Hunter Hauck", "male"),
+    P("jack", "Jack Hauck", "male"),
 
     // ---- Alicen's side (Peter's wife) ----
     P("alicen", "Alicen Hauck", "female"),
@@ -214,6 +223,7 @@ window.FAMILY_TREE_STARTER = {
     // Peter's mother's side (Boyd / Eide) and sister's family (Glover)
     U("u_maryBoyd", "bruceBoyd", "maryBoyd"),
     U("u_palmer", "palmer", "esther"),
+    U("u_aaron", "aaron", "shannon", "divorced"),
     U("u_lauren", "danny", "lauren"),
     // Alicen's side
     U("u_peteralicen", "peter", "alicen"),
@@ -234,10 +244,12 @@ window.FAMILY_TREE_STARTER = {
     L("u_valprior", "teresa"), L("u_valprior", "barney"), L("u_valprior", "fritz"), L("u_valprior", "marian"),
     L("u_hauck", "michael"), L("u_hauck", "bill"), L("u_hauck", "peggyM"),
     L("u_bobprior", "anne"), L("u_bobprior", "david"), L("u_bobprior", "robertjay"),
+    L("u_bill", "tanner"), L("u_bill", "hunter"), L("u_bill", "jack"),
     L("u_michaelAllison", "peter"), L("u_michaelAllison", "lauren"),
     // Peter's mother's side (Boyd / Eide) and sister's family (Glover)
     L("u_palmer", "maryBoyd"),
-    L("u_maryBoyd", "allison"),
+    L("u_maryBoyd", "allison"), L("u_maryBoyd", "aaron"),
+    L("u_aaron", "josie"), L("u_aaron", "palmerBoyd"),
     L("u_lauren", "maisy"), L("u_lauren", "willa"),
     // Alicen's side
     L("u_edwardf", "harlan"),
@@ -246,6 +258,17 @@ window.FAMILY_TREE_STARTER = {
     L("u_lisa", "alicen"),
   ],
   manual: {},
+  // Open centred on Peter & Alicen.
+  focus: ["peter", "alicen"],
+  // Hidden by default (data kept — "Show all" brings them back): Tania's side
+  // and step-family — her Wheeldon/Reiners siblings & step-siblings, her step-
+  // father, and her 2nd husband Bob Goos with his children. Tania herself and
+  // her parents (Cecil & Elvera Wheeldon, Peter's great-grandparents) stay.
+  hidden: {
+    dick: true, audrey: true, peggyH: true, si: true, rhonda: true, marvin: true,
+    marcine: true, alvin: true, don: true,
+    bob: true, anne: true, dennis: true, david: true, norma: true, robertjay: true, marilyn: true,
+  },
 };
 
 // Family colours (people who married in stay neutral, so the birth families read
@@ -253,11 +276,11 @@ window.FAMILY_TREE_STARTER = {
 (function () {
   var groups = {
     "#9e6b3f": ["cecil", "elvera", "dick", "tania", "audrey", "peggyH", "rhonda", "marcine", "don"], // Tania's Wheeldon/Reiners side (brown)
-    "#2f6fb0": ["valentine", "maryk", "wm", "jerry", "jamesm", "donna", "joann", "janice", "cynthia", "teresa", "barney", "fritz", "marian", "michael", "bill", "peggyM", "peter", "lauren"], // Hauck (blue)
+    "#2f6fb0": ["valentine", "maryk", "wm", "jerry", "jamesm", "donna", "joann", "janice", "cynthia", "teresa", "barney", "fritz", "marian", "michael", "bill", "peggyM", "peter", "lauren", "tanner", "hunter", "jack"], // Hauck (blue)
     "#3f8f5a": ["bob", "anne", "david", "robertjay"], // Goos (green)
     "#2a9d9d": ["edwardf", "alicef", "harlan", "lisa", "linda", "debra", "davef", "christine", "alicen"], // Fuchs (teal)
     "#bf8b30": ["arthurm", "myrtlem", "darleen"], // Miller (gold)
-    "#b5495b": ["palmer", "esther", "maryBoyd", "allison"], // Peter's mother's side, Boyd / Eide (crimson)
+    "#b5495b": ["palmer", "esther", "maryBoyd", "allison", "aaron", "josie", "palmerBoyd"], // Peter's mother's side, Boyd / Eide (crimson)
   };
   var byId = {};
   window.FAMILY_TREE_STARTER.persons.forEach(function (p) { byId[p.id] = p; });
