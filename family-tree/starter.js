@@ -260,14 +260,12 @@ window.FAMILY_TREE_STARTER = {
   manual: {},
   // Open centred on Peter & Alicen.
   focus: ["peter", "alicen"],
-  // Hidden by default (data kept — "Show all" brings them back): Tania's side
-  // and step-family — her Wheeldon/Reiners siblings & step-siblings, her step-
-  // father, and her 2nd husband Bob Goos with his children. Tania herself and
-  // her parents (Cecil & Elvera Wheeldon, Peter's great-grandparents) stay.
+  // Hidden by default (data kept — "Show all" brings them back): only Bob Goos's
+  // own children (and their spouses) from his prior marriage — step-family with
+  // no blood relation to Tania. Tania's siblings/step-family and Bob himself (her
+  // husband) stay visible.
   hidden: {
-    dick: true, audrey: true, peggyH: true, si: true, rhonda: true, marvin: true,
-    marcine: true, alvin: true, don: true,
-    bob: true, anne: true, dennis: true, david: true, norma: true, robertjay: true, marilyn: true,
+    anne: true, dennis: true, david: true, norma: true, robertjay: true, marilyn: true,
   },
 };
 
