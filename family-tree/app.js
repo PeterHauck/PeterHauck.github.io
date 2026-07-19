@@ -623,6 +623,136 @@
       }, "Encrypt & download");
   }
 
+  /* ============================================================ AI OBITUARY IMPORT */
+  function openImportModal() {
+    if (readonly) return;
+    const saved = (function () { try { return localStorage.getItem("familyTree.importPass") || ""; } catch (e) { return ""; } })();
+    const back = document.createElement("div");
+    back.className = "modal-backdrop";
+    back.innerHTML = `<div class="modal"><h2>Import from an obituary</h2>
+      <div class="hint">Claude reads the source and proposes people & relationships. Review before it’s added. Nothing is saved until you confirm.</div>
+      <label class="field"><span>Import passcode</span><input type="password" id="imPass" placeholder="set in Vercel (IMPORT_PASSCODE)" value="${escapeHtml(saved)}"/></label>
+      <label class="field"><span>Paste obituary text</span><textarea id="imText" rows="6" placeholder="Paste the obituary here…"></textarea></label>
+      <label class="field"><span>…or a link to one</span><input type="text" id="imUrl" placeholder="https://…"/></label>
+      <label class="field"><span>…or upload a PDF / photo</span><input type="file" id="imFile" accept="application/pdf,image/*"/></label>
+      <div class="err" id="imErr" style="color:var(--divorce);font-size:12.5px;min-height:16px"></div>
+      <div id="imStatus" class="hint"></div>
+      <div class="btn-row"><button class="btn" data-cancel>Cancel</button><button class="btn primary" id="imGo">Read & preview</button></div></div>`;
+    document.body.appendChild(back);
+    const close = () => back.remove();
+    back.querySelector("[data-cancel]").onclick = close;
+    back.addEventListener("click", (e) => { if (e.target === back) close(); });
+    const err = back.querySelector("#imErr");
+    const status = back.querySelector("#imStatus");
+
+    back.querySelector("#imGo").onclick = async () => {
+      err.textContent = "";
+      const pass = back.querySelector("#imPass").value.trim();
+      const text = back.querySelector("#imText").value.trim();
+      const url = back.querySelector("#imUrl").value.trim();
+      const fileEl = back.querySelector("#imFile");
+      if (!pass) { err.textContent = "Enter the import passcode."; return; }
+      if (!text && !url && !fileEl.files[0]) { err.textContent = "Add some text, a link, or a file."; return; }
+      try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
+
+      const payload = {
+        passcode: pass, text, url,
+        existing: state.persons.map((p) => ({ name: p.name, birth: p.birth, death: p.death })),
+      };
+      if (fileEl.files[0]) {
+        const f = fileEl.files[0];
+        if (f.size > 8 * 1024 * 1024) { err.textContent = "File is too large (max 8 MB)."; return; }
+        payload.file = { mediaType: f.type, data: await fileToBase64(f) };
+      }
+
+      status.textContent = "Reading with Claude… this can take a moment.";
+      back.querySelector("#imGo").disabled = true;
+      try {
+        const data = await callExtract(payload);
+        const counts = countExtraction(data);
+        if (!counts.people && !counts.couples && !counts.children) { err.textContent = "Nothing usable was found in that source."; status.textContent = ""; back.querySelector("#imGo").disabled = false; return; }
+        if (confirm(`Add to the tree?\n\n• ${counts.people} people\n• ${counts.couples} couples\n• ${counts.children} parent–child links`)) {
+          mergeExtraction(data);
+          relayoutAndSave(); fitView();
+          toast("Imported from obituary");
+          close();
+        } else {
+          status.textContent = ""; back.querySelector("#imGo").disabled = false;
+        }
+      } catch (e2) {
+        err.textContent = e2.message || "Import failed.";
+        status.textContent = "";
+        back.querySelector("#imGo").disabled = false;
+      }
+    };
+  }
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(",")[1]);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+  }
+
+  async function callExtract(payload) {
+    let res;
+    try {
+      res = await fetch("api/extract", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    } catch (e) { throw new Error("Couldn’t reach the import service."); }
+    if (!res.ok) {
+      let msg = "Import failed (" + res.status + ").";
+      try { msg = (await res.json()).error || msg; } catch (e) {}
+      if (res.status === 404) msg = "The import service isn’t available here — it needs the Vercel deployment.";
+      throw new Error(msg);
+    }
+    return res.json();
+  }
+
+  function countExtraction(d) {
+    return {
+      people: (d.people || []).length,
+      couples: (d.couples || []).length,
+      children: (d.children || []).length,
+    };
+  }
+
+  function mergeExtraction(d) {
+    const keyToId = {};
+    const findByName = (name) => state.persons.find((p) => p.name.trim().toLowerCase() === String(name || "").trim().toLowerCase());
+    (d.people || []).forEach((pp) => {
+      const ex = findByName(pp.name);
+      if (ex) {
+        keyToId[pp.key] = ex.id;
+        if (ex.birth == null && pp.birthYear) ex.birth = num(pp.birthYear);
+        if (ex.death == null && pp.deathYear) ex.death = num(pp.deathYear);
+      } else {
+        const np = addPerson({ name: pp.name || "Unnamed", sex: pp.sex || "unknown", birth: pp.birthYear, death: pp.deathYear });
+        keyToId[pp.key] = np.id;
+      }
+    });
+    const resolve = (ref) => {
+      if (!ref) return null;
+      if (keyToId[ref]) return keyToId[ref];
+      const ex = findByName(ref);
+      return ex ? ex.id : null;
+    };
+    const findUnion = (a, b) => state.unions.find((u) => (u.a === a && u.b === b) || (u.a === b && u.b === a));
+    (d.couples || []).forEach((c) => {
+      const a = resolve(c.a), b = resolve(c.b);
+      if (!a) return;
+      if (!findUnion(a, b)) addUnion(a, b, c.status || "married");
+    });
+    (d.children || []).forEach((ch) => {
+      const child = resolve(ch.child); if (!child) return;
+      const a = resolve(ch.parentA), b = resolve(ch.parentB);
+      let u = findUnion(a, b);
+      if (!u && a) u = addUnion(a, b || null, "married");
+      if (u) addChild(u.id, child, ch.relationship === "adopted" ? "adopted" : "bio");
+    });
+  }
+
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
     return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual };
@@ -676,6 +806,7 @@
     r.readAsText(f); e.target.value = "";
   });
   $("#publishBtn").onclick = openPublishModal;
+  $("#importObitBtn").onclick = openImportModal;
   $("#resetBtn").onclick = () => { if (confirm("Clear the entire tree from this browser?")) { state = blankState(); localStorage.removeItem(STORE_KEY); selectedId = null; resetPersonForm(); relayoutAndSave(); } };
   $("#panelToggle").onclick = () => $("#panel").classList.toggle("collapsed");
   function ensurePanel() { $("#panel").classList.remove("collapsed"); }
