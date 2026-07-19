@@ -32,7 +32,7 @@
   const FAMILY_COLORS = ["#2f6fb0", "#9e6b3f", "#3f8f5a", "#2a9d9d", "#bf8b30", "#b5495b", "#8a4f80"];
 
   function blankState() {
-    return { title: "Family Tree", subtitle: "", persons: [], unions: [], links: [], manual: {}, hidden: {} };
+    return { title: "Family Tree", subtitle: "", persons: [], unions: [], links: [], manual: {}, hidden: {}, focus: [] };
   }
 
   /* --------------------------------------------------------------- lookups */
@@ -615,7 +615,9 @@
     $("#zoomLabel").textContent = Math.round(view.scale * 100) + "%";
   }
   function bbox() {
-    const ids = state.persons.map((p) => p.id);
+    // only visible people have layout positions; hidden ones would otherwise
+    // drag the box back to the origin and throw off fit-to-screen.
+    const ids = visiblePersons().map((p) => p.id);
     if (!ids.length) return { x: 0, y: 0, w: 100, h: 100 };
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     ids.forEach((id) => { const p = posOf(id); minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); });
@@ -634,6 +636,38 @@
     const p = posOf(id); const r = stage.getBoundingClientRect();
     view.tx = r.width / 2 - p.x * view.scale;
     view.ty = r.height / 2 - p.y * view.scale;
+    applyView();
+  }
+  // Open the page centred on a chosen couple (e.g. Peter & Alicen): the focus
+  // people sit dead-centre, with the zoom set so their immediate family (spouses,
+  // parents and children) is comfortably in view around them.
+  function focusView(ids) {
+    const focus = ids.filter((id) => personById(id) && !isHidden(id));
+    if (!focus.length) return fitView();
+    const fp = focus.map((id) => posOf(id));
+    const cx = fp.reduce((s, p) => s + p.x, 0) / fp.length;
+    const cy = fp.reduce((s, p) => s + p.y, 0) / fp.length;
+    // gather the immediate family to size the zoom
+    const set = new Set(focus);
+    focus.forEach((id) => {
+      unionsOfPerson(id).forEach((u) => {
+        [u.a, u.b].forEach((x) => { if (x != null && !isHidden(x)) set.add(x); });
+        childLinksOfUnion(u.id).forEach((l) => { if (!isHidden(l.child)) set.add(l.child); });
+      });
+      parentLinksOfPerson(id).forEach((l) => {
+        const u = unionById(l.union); if (!u) return;
+        [u.a, u.b].forEach((x) => { if (x != null && !isHidden(x)) set.add(x); });
+      });
+    });
+    // widest distance from the couple's centre, so the frame stays centred on
+    // them; capped so a scattered relative can't zoom the couple out to a speck.
+    let halfW = 220, halfH = 200;
+    set.forEach((id) => { const p = posOf(id); halfW = Math.max(halfW, Math.abs(p.x - cx) + 110); halfH = Math.max(halfH, Math.abs(p.y - cy) + 110); });
+    halfW = Math.min(halfW, 650); halfH = Math.min(halfH, 430);
+    const r = stage.getBoundingClientRect();
+    view.scale = Math.max(0.55, Math.min(r.width / (halfW * 2), r.height / (halfH * 2), 1.1));
+    view.tx = r.width / 2 - cx * view.scale;
+    view.ty = r.height / 2 - cy * view.scale;
     applyView();
   }
   function zoomAt(factor, cx, cy) {
@@ -1241,12 +1275,13 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, hidden: state.hidden };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, hidden: state.hidden, focus: state.focus };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
       title: obj.title || "Family Tree", subtitle: obj.subtitle || "",
       persons: obj.persons || [], unions: obj.unions || [], links: obj.links || [], manual: obj.manual || {}, hidden: obj.hidden || {},
+      focus: Array.isArray(obj.focus) ? obj.focus : [],
     });
   }
   function downloadFile(name, content, type) {
@@ -1396,7 +1431,11 @@
       $("#panel").classList.add("collapsed");
       const l = $("#legend"); if (l) { l.classList.add("min"); const t = $("#legendToggle"); if (t) t.textContent = "+"; }
     }
-    autoLayout(); render(); syncTitle(); fitView();
+    autoLayout(); render(); syncTitle();
+    // Open centred on the chosen people (e.g. Peter & Alicen) if the tree names
+    // any that are visible; otherwise fit the whole tree to the screen.
+    const focus = (state.focus || []).filter((id) => personById(id) && !isHidden(id));
+    if (focus.length) focusView(focus); else fitView();
   }
 
   function init() {
