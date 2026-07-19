@@ -56,10 +56,11 @@
 
   /* ================================================================ MODEL */
   function addPerson(data) {
-    const p = { id: uid(), name: data.name || "Unnamed", birth: num(data.birth), death: num(data.death), sex: data.sex || "unknown", photo: data.photo || null };
+    const p = { id: uid(), name: data.name || "Unnamed", birth: num(data.birth), death: num(data.death), deceased: !!data.deceased, sex: data.sex || "unknown", photo: data.photo || null, docs: data.docs || [] };
     state.persons.push(p);
     return p;
   }
+  const isDeceased = (p) => p.death != null || !!p.deceased;
   function num(v) { const n = parseInt(v, 10); return Number.isFinite(n) ? n : null; }
 
   function deletePerson(pid) {
@@ -275,7 +276,7 @@
     // shape outline on top
     g.appendChild(shapeOutline(p.sex, !!p.photo));
     // deceased slash
-    if (p.death != null) g.appendChild(el("line", { class: "deceased", x1: -HALF, y1: HALF, x2: HALF, y2: -HALF }));
+    if (isDeceased(p)) g.appendChild(el("line", { class: "deceased", x1: -HALF, y1: HALF, x2: HALF, y2: -HALF }));
 
     // labels
     g.appendChild(el("text", { class: "label", x: 0, y: HALF + 20 }, txt(p.name)));
@@ -303,8 +304,9 @@
 
   function dateStr(p) {
     if (p.birth != null && p.death != null) return p.birth + "–" + p.death;
-    if (p.birth != null) return "b. " + p.birth;
+    if (p.birth != null) return "b. " + p.birth + (isDeceased(p) ? " · d." : "");
     if (p.death != null) return "d. " + p.death;
+    if (p.deceased) return "deceased";
     return "";
   }
 
@@ -458,6 +460,7 @@
     $("#pName").value = p.name;
     $("#pBirth").value = p.birth == null ? "" : p.birth;
     $("#pDeath").value = p.death == null ? "" : p.death;
+    $("#pDeceased").checked = isDeceased(p);
     setSex(p.sex);
     pendingPhoto = p.photo || null;
     updatePhotoPreview();
@@ -517,10 +520,10 @@
   $("#personForm").addEventListener("submit", (e) => {
     e.preventDefault();
     const id = $("#personId").value;
-    const data = { name: $("#pName").value.trim() || "Unnamed", birth: $("#pBirth").value, death: $("#pDeath").value, sex: formSex, photo: pendingPhoto };
+    const data = { name: $("#pName").value.trim() || "Unnamed", birth: $("#pBirth").value, death: $("#pDeath").value, deceased: $("#pDeceased").checked, sex: formSex, photo: pendingPhoto };
     if (id) {
       const p = personById(id);
-      Object.assign(p, { name: data.name, birth: num(data.birth), death: num(data.death), sex: data.sex, photo: data.photo });
+      Object.assign(p, { name: data.name, birth: num(data.birth), death: num(data.death), deceased: data.deceased, sex: data.sex, photo: data.photo });
     } else {
       const p = addPerson(data); selectedId = p.id;
     }
