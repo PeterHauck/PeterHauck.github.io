@@ -18,7 +18,6 @@
   const COLW = 168;   // horizontal spacing between two people
   const ROWH = 250;   // vertical spacing between generations
   const CLUSTER_GAP = COLW * 0.7; // min horizontal gap between unrelated family clusters
-  const BAND_GAP = COLW * 1.6;    // horizontal gap between separate bloodline families
   const HALF = 46;    // half the visual footprint of a shape
 
   /* ---------------------------------------------------------------- state */
@@ -158,37 +157,29 @@
     // vertically (a grandparent is always on the same row, whichever family).
     const gen = computeGenerations(persons, unions, links, uById);
 
-    // Partition people into bloodline "families" — connected ONLY through
-    // parent↔child links, never through a marriage on its own. Each family is
-    // then laid out in its own horizontal band, so no unrelated family ever sits
-    // vertically above another (the Haucks are never stacked over the Oies /
-    // Delaneys / Fuchs). Marriages that join two families become bridges — a
-    // horizontal line reaching from one band to the next.
-    const comps = lineageComponents(persons, unions, links, uById);
-    const ordered = orderComponents(comps, unions);
-
-    layoutPos = {};
-    let cursor = 0;
-    ordered.forEach((ids) => {
-      const sub = layoutComponent(ids, persons, unions, links, uById, gen);
-      if (sub.minX === Infinity) return;
-      const shift = cursor - sub.minX;
-      ids.forEach((id) => {
-        if (!sub.pos[id]) return;
-        layoutPos[id] = { x: sub.pos[id].x + shift, y: sub.pos[id].y };
-      });
-      cursor += (sub.maxX - sub.minX) + BAND_GAP;
-    });
+    // Lay everyone out together as a "meet in the middle" pedigree (see
+    // layoutComponent): married couples sit adjacent so each partner's family
+    // fans up and outward and the two families converge on the couple.
+    const all = new Set(persons.map((p) => p.id));
+    const sub = layoutComponent(all, persons, unions, links, uById, gen);
+    layoutPos = sub.pos;
   }
 
-  // Lay out ONE bloodline family (a set of person ids) on its own, using the
-  // GLOBAL generation map for vertical position so it aligns with every other
-  // band. Returns local x/y positions plus the band's min/max x.
+  // Lay the whole graph out as a "meet in the middle" pedigree: married couples
+  // sit adjacent, so each partner's family fans up and outward and the two
+  // families converge on the couple (and their children below). Every bloodline
+  // family is kept as a CONTIGUOUS block so unrelated families never interleave
+  // or stack — the tangle that free barycenter layout produces. Returns local
+  // x/y positions plus the min/max x.
   function layoutComponent(idSet, persons, unions, links, uById, gen) {
     const cPersons = persons.filter((p) => idSet.has(p.id));
     if (!cPersons.length) return { pos: {}, minX: Infinity, maxX: -Infinity };
     const cUnions = unions.filter((u) => idSet.has(u.a) && (u.b == null || idSet.has(u.b)));
     const cLinks = links.filter((l) => { const u = uById[l.union]; return idSet.has(l.child) && u && idSet.has(u.a); });
+
+    // which bloodline family each person belongs to (contiguity grouping)
+    const familyId = {};
+    lineageComponents(cPersons, cUnions, cLinks, uById).forEach((set, i) => set.forEach((id) => (familyId[id] = i)));
 
     // adjacency to neighbouring generations (within this family only)
     const childrenOf = {}, parentsOf = {};
@@ -247,6 +238,26 @@
           c._sort = gu != null ? unionPos(gu) : (c.ids[0] in colIndex ? colIndex[c.ids[0]] : i);
         });
         order[g] = stableSort(order[g], (a, b) => a._sort - b._sort);
+        reindex();
+      }
+    }
+    // (3) family contiguity: keep every bloodline family together as one block,
+    // ordered by the family's overall horizontal centre. This stops unrelated
+    // families from interleaving or sitting over one another, while the couples
+    // that join two families still land next to each other (their barycentres
+    // are adjacent), preserving the meet-in-the-middle convergence.
+    const clusterFam = (c) => { for (const id of c.ids) if (familyId[id] != null) return familyId[id]; return -1; };
+    for (let pass = 0; pass < 4; pass++) {
+      const acc = {}, cnt = {};
+      for (const id in colIndex) { const f = familyId[id]; if (f == null) continue; acc[f] = (acc[f] || 0) + colIndex[id]; cnt[f] = (cnt[f] || 0) + 1; }
+      const famBary = {}; for (const f in acc) famBary[f] = acc[f] / cnt[f];
+      for (let g = 0; g <= maxGen; g++) {
+        order[g].forEach((c, i) => {
+          const f = clusterFam(c);
+          c._famB = f in famBary ? famBary[f] : i;
+          c._inB = c.ids[0] in colIndex ? colIndex[c.ids[0]] : i;
+        });
+        order[g] = stableSort(order[g], (a, b) => (a._famB - b._famB) || (a._inB - b._inB));
         reindex();
       }
     }
@@ -324,32 +335,6 @@
     const groups = {};
     persons.forEach((p) => { const r = find(p.id); (groups[r] = groups[r] || new Set()).add(p.id); });
     return Object.values(groups);
-  }
-
-  // Order the bands so families joined by a marriage sit side by side (the bridge
-  // stays short), starting from the largest family; unbridged families follow.
-  function orderComponents(comps, unions) {
-    const compOf = {};
-    comps.forEach((set, i) => set.forEach((id) => (compOf[id] = i)));
-    const adj = comps.map(() => new Set());
-    unions.forEach((u) => {
-      if (u.b == null) return;
-      const ca = compOf[u.a], cb = compOf[u.b];
-      if (ca != null && cb != null && ca !== cb) { adj[ca].add(cb); adj[cb].add(ca); }
-    });
-    const start = comps.map((_, i) => i).sort((a, b) => comps[b].size - comps[a].size);
-    const seen = new Set(), out = [];
-    start.forEach((s) => {
-      if (seen.has(s)) return;
-      const stack = [s];
-      while (stack.length) {
-        const c = stack.shift();
-        if (seen.has(c)) continue;
-        seen.add(c); out.push(comps[c]);
-        [...adj[c]].sort((a, b) => comps[b].size - comps[a].size).forEach((n) => { if (!seen.has(n)) stack.push(n); });
-      }
-    });
-    return out;
   }
 
   // Collapse vertical corridors of empty space that span a band — preserves
@@ -643,16 +628,17 @@
     const badge = e.target.closest && e.target.closest(".doc-badge");
     if (badge) { openDocsForPerson(badge.getAttribute("data-id")); return; }
     const personEl = e.target.closest && e.target.closest(".person");
-    if (personEl && !readonly) {
+    const isTouch = e.pointerType !== "mouse";
+    if (personEl && !readonly && !isTouch) {
+      // desktop only: click-and-drag a person to fine-tune their position
       const id = personEl.getAttribute("data-id");
       const p = posOf(id);
       drag = { mode: "node", id, startX: e.clientX, startY: e.clientY, ox: p.x, oy: p.y, moved: false };
-    } else if (personEl && readonly) {
-      selectPerson(personEl.getAttribute("data-id"));
-      drag = { mode: "pan", startX: e.clientX, startY: e.clientY, tx: view.tx, ty: view.ty };
-      stage.classList.add("panning");
     } else {
-      drag = { mode: "pan", startX: e.clientX, startY: e.clientY, tx: view.tx, ty: view.ty };
+      // touch (or the read-only view): a finger on a person taps to select and
+      // otherwise pans — it never drags the person out of place.
+      drag = { mode: "pan", startX: e.clientX, startY: e.clientY, tx: view.tx, ty: view.ty, moved: false };
+      if (personEl) drag.tapId = personEl.getAttribute("data-id");
       stage.classList.add("panning");
     }
   });
@@ -671,7 +657,10 @@
     }
     if (!drag) return;
     const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
-    if (drag.mode === "pan") { view.tx = drag.tx + dx; view.ty = drag.ty + dy; applyView(); }
+    if (drag.mode === "pan") {
+      if (Math.abs(dx) + Math.abs(dy) > 6) drag.moved = true;
+      view.tx = drag.tx + dx; view.ty = drag.ty + dy; applyView();
+    }
     else if (drag.mode === "node") {
       if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
       state.manual[drag.id] = { x: drag.ox + dx / view.scale, y: drag.oy + dy / view.scale };
@@ -692,8 +681,10 @@
     if (pointers.size === 0) {
       stage.classList.remove("panning");
       if (drag && drag.mode === "node") { if (!drag.moved) selectPerson(drag.id); else save(); }
-      // double-tap anywhere on the canvas zooms in on that spot (touch only)
-      if (e.pointerType !== "mouse" && (!drag || (drag.mode === "pan"))) {
+      // a tap on a person (no real movement) selects them
+      else if (drag && drag.mode === "pan" && drag.tapId && !drag.moved) { selectPerson(drag.tapId); }
+      // double-tap on empty canvas zooms in on that spot (touch only)
+      if (e.pointerType !== "mouse" && drag && drag.mode === "pan" && !drag.tapId && !drag.moved) {
         if (e.timeStamp - lastTap < 300) { zoomAt(1.6, e.clientX, e.clientY); lastTap = 0; }
         else lastTap = e.timeStamp;
       }
