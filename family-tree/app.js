@@ -32,7 +32,7 @@
   const FAMILY_COLORS = ["#2f6fb0", "#9e6b3f", "#3f8f5a", "#2a9d9d", "#bf8b30", "#8a4f80"];
 
   function blankState() {
-    return { title: "Family Tree", subtitle: "", persons: [], unions: [], links: [], manual: {} };
+    return { title: "Family Tree", subtitle: "", persons: [], unions: [], links: [], manual: {}, hidden: {} };
   }
 
   /* --------------------------------------------------------------- lookups */
@@ -42,6 +42,36 @@
   const childLinksOfUnion = (uid) => state.links.filter((l) => l.union === uid);
   const parentLinksOfPerson = (pid) => state.links.filter((l) => l.child === pid);
   const unionsOfPerson = (pid) => state.unions.filter((u) => u.a === pid || u.b === pid);
+
+  /* --------- visibility (hidden people keep their data; view-only filter) --- */
+  const isHidden = (id) => !!(state.hidden && state.hidden[id]);
+  const anyHidden = () => state.hidden && Object.keys(state.hidden).length > 0;
+  const visiblePersons = () => state.persons.filter((p) => !isHidden(p.id));
+  const unionVisible = (u) => !isHidden(u.a) && (u.b == null || !isHidden(u.b));
+  const visibleUnions = () => state.unions.filter(unionVisible);
+  const visibleLinks = () => state.links.filter((l) => { const u = unionById(l.union); return !isHidden(l.child) && u && unionVisible(u); });
+
+  // Everyone who should stay visible when focusing on X: X, X's spouses, and all
+  // of X's descendants plus their spouses. Everyone "above"/aside is hidden.
+  function focusSet(rootId) {
+    const keep = new Set([rootId]);
+    const spousesOf = (id) => unionsOfPerson(id).map((u) => (u.a === id ? u.b : u.a)).filter((x) => x != null);
+    const childrenOf = (id) => state.unions.filter((u) => u.a === id || u.b === id).flatMap((u) => childLinksOfUnion(u.id).map((l) => l.child));
+    const queue = [rootId];
+    while (queue.length) {
+      const id = queue.shift();
+      spousesOf(id).forEach((s) => keep.add(s));
+      childrenOf(id).forEach((c) => { if (!keep.has(c)) { keep.add(c); queue.push(c); } });
+    }
+    return keep;
+  }
+  function hideAbove(rootId) {
+    const keep = focusSet(rootId);
+    state.hidden = {};
+    state.persons.forEach((p) => { if (!keep.has(p.id)) state.hidden[p.id] = true; });
+  }
+  function toggleHidden(id) { if (isHidden(id)) delete state.hidden[id]; else state.hidden[id] = true; }
+  function showAll() { state.hidden = {}; }
 
   function uid() {
     return "n" + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
@@ -92,20 +122,20 @@
 
   /* ============================================================= LAYOUT */
   /* generation number for every person (0 = oldest at the top) */
-  function computeGenerations() {
+  function computeGenerations(persons, unions, links, uById) {
     const gen = {};
-    state.persons.forEach((p) => (gen[p.id] = 0));
+    persons.forEach((p) => (gen[p.id] = 0));
     const unionGen = (u) => Math.max(gen[u.a] || 0, u.b != null ? gen[u.b] || 0 : 0);
     for (let it = 0; it < 300; it++) {
       let changed = false;
-      state.unions.forEach((u) => {
+      unions.forEach((u) => {
         if (u.b == null) return;
         const g = Math.max(gen[u.a] || 0, gen[u.b] || 0);
         if (gen[u.a] !== g) { gen[u.a] = g; changed = true; }
         if (gen[u.b] !== g) { gen[u.b] = g; changed = true; }
       });
-      state.links.forEach((l) => {
-        const u = unionById(l.union);
+      links.forEach((l) => {
+        const u = uById[l.union];
         if (!u) return;
         const need = unionGen(u) + 1;
         if ((gen[l.child] || 0) < need) { gen[l.child] = need; changed = true; }
@@ -116,19 +146,24 @@
   }
 
   function autoLayout() {
-    const persons = state.persons;
+    // Work over the VISIBLE subset only — hidden people keep their data but are
+    // dropped from layout so they take no space (see state.hidden).
+    const persons = visiblePersons();
     if (!persons.length) { layoutPos = {}; return; }
-    const gen = computeGenerations();
+    const unions = visibleUnions();
+    const links = visibleLinks();
+    const uById = {}; unions.forEach((u) => (uById[u.id] = u));
+    const gen = computeGenerations(persons, unions, links, uById);
 
     // adjacency to neighbouring generations
     const childrenOf = {}, parentsOf = {};
     persons.forEach((p) => { childrenOf[p.id] = []; parentsOf[p.id] = []; });
-    state.links.forEach((l) => {
-      const u = unionById(l.union); if (!u) return;
+    links.forEach((l) => {
+      const u = uById[l.union]; if (!u) return;
       [u.a, u.b].forEach((pid) => {
         if (pid == null) return;
-        childrenOf[pid].push(l.child);
-        parentsOf[l.child].push(pid);
+        if (childrenOf[pid]) childrenOf[pid].push(l.child);
+        if (parentsOf[l.child]) parentsOf[l.child].push(pid);
       });
     });
 
@@ -138,7 +173,7 @@
     for (let g = 0; g <= maxGen; g++) genList[g] = persons.filter((p) => gen[p.id] === g).map((p) => p.id);
 
     // spouse clusters (chains of partners) inside each generation
-    const clustersByGen = genList.map((ids, g) => buildClusters(ids, g, gen));
+    const clustersByGen = genList.map((ids, g) => buildClusters(ids, g, gen, unions));
 
     // order clusters within each generation via barycenter sweeps
     const order = clustersByGen.map((cl) => cl.slice()); // order[g] = [cluster,...]
@@ -150,7 +185,7 @@
     // (1) barycenter sweeps sort out the gross left/right arrangement
     for (let pass = 0; pass < 8; pass++) {
       const down = pass % 2 === 0;
-      const seq = down ? range(1, maxGen) : range(maxGen - 1, 0, -1);
+      const seq = down ? (maxGen >= 1 ? range(1, maxGen) : []) : (maxGen >= 1 ? range(maxGen - 1, 0, -1) : []);
       seq.forEach((g) => {
         const adj = down ? parentsOf : childrenOf;
         order[g].forEach((c, i) => (c._bary = clusterBary(c, adj, colIndex, i)));
@@ -162,11 +197,11 @@
     // under that couple, so half/step-sibling sets don't interleave (e.g. the
     // Hauck children stay together even though one married into another family).
     const primaryUnion = {};
-    state.links.forEach((l) => { if (l.type === "bio") primaryUnion[l.child] = l.union; });
-    state.links.forEach((l) => { if (!(l.child in primaryUnion)) primaryUnion[l.child] = l.union; });
+    links.forEach((l) => { if (l.type === "bio") primaryUnion[l.child] = l.union; });
+    links.forEach((l) => { if (!(l.child in primaryUnion)) primaryUnion[l.child] = l.union; });
     const clusterUnion = (c) => { for (const id of c.ids) if (primaryUnion[id]) return primaryUnion[id]; return null; };
     const unionPos = (uid) => {
-      const u = unionById(uid); if (!u) return Infinity;
+      const u = uById[uid]; if (!u) return Infinity;
       const xs = [u.a, u.b].filter((x) => x != null && x in colIndex).map((x) => colIndex[x]);
       return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : Infinity;
     };
@@ -246,10 +281,10 @@
     });
   }
 
-  function buildClusters(ids, g, gen) {
+  function buildClusters(ids, g, gen, unions) {
     const inGen = new Set(ids);
     const adj = {}; ids.forEach((id) => (adj[id] = []));
-    state.unions.forEach((u) => {
+    unions.forEach((u) => {
       if (u.b == null) return;
       if (inGen.has(u.a) && inGen.has(u.b)) { adj[u.a].push(u.b); adj[u.b].push(u.a); }
     });
@@ -300,11 +335,11 @@
     gLinks.textContent = "";
     emptyState.style.display = state.persons.length ? "none" : "flex";
 
-    state.unions.forEach(renderUnion);
-    // single-parent links (child whose only parent link points to a 1-person "union" handled in renderUnion)
-    state.persons.forEach(renderPerson);
+    visibleUnions().forEach(renderUnion);
+    visiblePersons().forEach(renderPerson);
     updatePeopleList();
     $("#peopleCount").textContent = state.persons.length;
+    updateHiddenChip();
   }
 
   function el(tag, attrs, children) {
@@ -383,7 +418,7 @@
     const pa = personById(u.a); if (!pa) return;
     const pb = u.b != null ? personById(u.b) : null;
     const A = posOf(u.a), B = pb ? posOf(u.b) : null;
-    const kids = childLinksOfUnion(u.id).map((l) => ({ l, p: personById(l.child) })).filter((k) => k.p);
+    const kids = childLinksOfUnion(u.id).map((l) => ({ l, p: personById(l.child) })).filter((k) => k.p && !isHidden(k.p.id));
 
     let midX, midY, dropTop;
     if (pb) {
@@ -430,9 +465,9 @@
     const sorted = state.persons.slice().sort((a, b) => (a.birth || 9999) - (b.birth || 9999) || a.name.localeCompare(b.name));
     sorted.forEach((p) => {
       const li = document.createElement("li");
-      if (p.id === selectedId) li.className = "sel";
+      li.className = (p.id === selectedId ? "sel " : "") + (isHidden(p.id) ? "hidden" : "");
       li.innerHTML = miniShape(p.sex) + `<span>${escapeHtml(p.name)}</span><span class="meta">${dateStr(p)}</span>`;
-      li.onclick = () => { selectPerson(p.id); centerOn(p.id); };
+      li.onclick = () => { selectPerson(p.id); if (!isHidden(p.id)) centerOn(p.id); };
       ul.appendChild(li);
     });
   }
@@ -538,6 +573,9 @@
     $("#personSubmit").textContent = "Save changes";
     $("#personCancel").hidden = false;
     $("#personDelete").hidden = false;
+    $("#hideAboveBtn").disabled = false;
+    $("#hideOneBtn").disabled = false;
+    $("#hideOneBtn").textContent = isHidden(p.id) ? "Unhide this person" : "Hide this person";
     renderDocsForm(p);
   }
   function resetPersonForm() {
@@ -549,6 +587,9 @@
     $("#personSubmit").textContent = "Add person";
     $("#personCancel").hidden = true;
     $("#personDelete").hidden = true;
+    $("#hideAboveBtn").disabled = true;
+    $("#hideOneBtn").disabled = true;
+    $("#hideOneBtn").textContent = "Hide this person";
     renderDocsForm(null);
   }
 
@@ -1010,12 +1051,12 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, hidden: state.hidden };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
       title: obj.title || "Family Tree", subtitle: obj.subtitle || "",
-      persons: obj.persons || [], unions: obj.unions || [], links: obj.links || [], manual: obj.manual || {},
+      persons: obj.persons || [], unions: obj.unions || [], links: obj.links || [], manual: obj.manual || {}, hidden: obj.hidden || {},
     });
   }
   function downloadFile(name, content, type) {
@@ -1034,6 +1075,12 @@
   function toast(msg) {
     const t = $("#toast"); t.textContent = msg; t.classList.add("show");
     clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 1800);
+  }
+  function updateHiddenChip() {
+    const chip = $("#hiddenChip");
+    const n = state.hidden ? Object.keys(state.hidden).length : 0;
+    chip.hidden = n === 0;
+    chip.textContent = "Show all (" + n + " hidden)";
   }
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
   function syncTitle() {
@@ -1063,6 +1110,19 @@
   $("#publishBtn").onclick = openPublishModal;
   $("#importObitBtn").onclick = openImportModal;
   $("#addDocBtn").onclick = () => { const id = $("#personId").value; if (id) openAttachModal(id); };
+  $("#hideAboveBtn").onclick = () => {
+    const id = $("#personId").value; if (!id) return;
+    const p = personById(id);
+    hideAbove(id); relayoutAndSave(); fitView();
+    toast("Hid everyone above " + (p ? p.name.split(" ")[0] : "this person"));
+  };
+  $("#hideOneBtn").onclick = () => {
+    const id = $("#personId").value; if (!id) return;
+    toggleHidden(id);
+    $("#hideOneBtn").textContent = isHidden(id) ? "Unhide this person" : "Hide this person";
+    relayoutAndSave(); fitView();
+  };
+  $("#hiddenChip").onclick = () => { showAll(); relayoutAndSave(); fitView(); toast("Showing everyone"); };
   $("#resetBtn").onclick = () => { if (confirm("Clear the entire tree from this browser?")) { state = blankState(); localStorage.removeItem(STORE_KEY); selectedId = null; resetPersonForm(); relayoutAndSave(); } };
   $("#panelToggle").onclick = () => $("#panel").classList.toggle("collapsed");
   function ensurePanel() { $("#panel").classList.remove("collapsed"); }

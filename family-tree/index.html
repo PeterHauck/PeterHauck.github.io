@@ -81,6 +81,7 @@
       </div>
 
       <button id="panelToggle" class="floating" title="Show / hide editor">✎</button>
+      <button id="hiddenChip" class="floating" hidden>Show all</button>
     </div>
 
     <!-- Editor panel -->
@@ -131,6 +132,14 @@
               <ul class="docs-list" id="docsList"></ul>
               <button type="button" class="btn" id="addDocBtn">📄 Attach obituary / record</button>
               <p class="hint" id="docsHint" style="margin-top:6px"></p>
+            </div>
+            <div id="visRow" style="margin:2px 0 12px">
+              <label class="field"><span>View</span></label>
+              <div class="btn-row">
+                <button type="button" class="btn" id="hideAboveBtn" disabled>⤒ Hide everyone above</button>
+                <button type="button" class="btn" id="hideOneBtn" disabled>Hide this person</button>
+              </div>
+              <p class="hint" style="margin-top:6px">Hides from view only — the data (and lineage) is kept. Use “Show all” to bring everyone back.</p>
             </div>
             <div class="btn-row">
               <button type="submit" class="btn primary" id="personSubmit">Add person</button>

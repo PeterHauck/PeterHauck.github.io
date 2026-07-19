@@ -243,6 +243,13 @@ button.btn.danger { color: var(--divorce); }
 }
 .color-row .swatch.sel { box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--ink); }
 .person .label-bg { fill: var(--paper); stroke: none; }
+.people-list li.hidden .meta::after { content: " · hidden"; }
+.people-list li.hidden { opacity: .5; }
+#hiddenChip {
+  top: 14px; left: 50%; transform: translateX(-50%);
+  background: var(--accent); color: #fff; border: none; box-shadow: var(--shadow);
+  padding: 9px 14px; border-radius: 999px; cursor: pointer; font-size: 13px;
+}
 .person.selected .shape { stroke: var(--accent-2) !important; stroke-width: 4; }
 
 /* obituary / record attachments */
