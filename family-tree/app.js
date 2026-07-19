@@ -244,18 +244,24 @@
     // (3) family contiguity: keep every bloodline family together as one block,
     // ordered by the family's overall horizontal centre. This stops unrelated
     // families from interleaving or sitting over one another. A couple that
-    // BRIDGES two families is keyed to the AVERAGE of the two families' centres,
-    // so it sorts to the boundary BETWEEN them — the two spouses end up at the
-    // adjacent ends of their family lines, with each family's siblings kept to
-    // their own side rather than squeezed between the couple.
+    // bridges two families is anchored to the family of whichever partner has
+    // more siblings in the tree — so the couple stays next to that partner's
+    // brothers and sisters (e.g. Peter stays beside his sister rather than being
+    // pulled across to Alicen's side, with cousins slotting into the gap). The
+    // couple still lands at that family's edge, next to the family they married
+    // into, because the two spouses are drawn as one adjacent cluster.
+    const unionKids = {};
+    cLinks.forEach((l) => { unionKids[l.union] = (unionKids[l.union] || 0) + 1; });
+    const sibCount = (id) => { const u = primaryUnion[id]; return u ? (unionKids[u] || 1) : 0; };
     const clusterFamKey = (c, famBary) => {
-      let sum = 0, n = 0; const seen = {};
+      let best = null, bestScore = -1;
       for (const id of c.ids) {
         const f = familyId[id];
-        if (f == null || seen[f] || !(f in famBary)) continue;
-        seen[f] = 1; sum += famBary[f]; n++;
+        if (f == null || !(f in famBary)) continue;
+        const s = sibCount(id);
+        if (s > bestScore) { bestScore = s; best = f; }
       }
-      return n ? sum / n : null;
+      return best != null ? famBary[best] : null;
     };
     for (let pass = 0; pass < 4; pass++) {
       const acc = {}, cnt = {};
