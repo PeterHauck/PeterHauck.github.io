@@ -94,6 +94,10 @@ function U(id, a, b, status) { return { id, a, b: b || null, status: status || "
 function L(union, child, type) { return { id: "l_" + union + "_" + child, union, child, type: type || "bio" }; }
 
 window.FAMILY_TREE_STARTER = {
+  // Bump this whenever the tree data below changes. On load, a higher version
+  // here beats an older copy saved in the browser, so updates always show and a
+  // stale local copy can't get "stuck".
+  version: 3,
   title: "The Hauck / Goos Family",
   subtitle: "Started from Tania Goos's obituary",
   persons: [

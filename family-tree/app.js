@@ -32,7 +32,7 @@
   const FAMILY_COLORS = ["#2f6fb0", "#9e6b3f", "#3f8f5a", "#2a9d9d", "#bf8b30", "#b5495b", "#8a4f80"];
 
   function blankState() {
-    return { title: "Family Tree", subtitle: "", persons: [], unions: [], links: [], manual: {}, hidden: {}, focus: [] };
+    return { title: "Family Tree", subtitle: "", persons: [], unions: [], links: [], manual: {}, hidden: {}, focus: [], version: 0 };
   }
 
   /* --------------------------------------------------------------- lookups */
@@ -1281,15 +1281,16 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, hidden: state.hidden, focus: state.focus };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, hidden: state.hidden, focus: state.focus, version: state.version || 0 };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
       title: obj.title || "Family Tree", subtitle: obj.subtitle || "",
       persons: obj.persons || [], unions: obj.unions || [], links: obj.links || [], manual: obj.manual || {}, hidden: obj.hidden || {},
-      focus: Array.isArray(obj.focus) ? obj.focus : [],
+      focus: Array.isArray(obj.focus) ? obj.focus : [], version: obj.version || 0,
     });
   }
+  function savedVersion() { try { const s = localStorage.getItem(STORE_KEY); return s ? (JSON.parse(s).version || 0) : 0; } catch (e) { return 0; } }
   function downloadFile(name, content, type) {
     const blob = new Blob([content], { type: type || "application/json" });
     const a = document.createElement("a");
@@ -1463,9 +1464,16 @@
       showLock(true);
       return;
     }
-    // normal editor
-    if (hasLocalData()) loadLocal();
-    else if (window.FAMILY_TREE_STARTER && typeof window.FAMILY_TREE_STARTER === "object") loadObject(window.FAMILY_TREE_STARTER);
+    // normal editor. Prefer a newer published starter over an older saved copy:
+    // when the built-in tree's version is higher than what's saved in this
+    // browser, load the fresh tree (so updates always show and a stale local
+    // copy — or a stray dragged node — can't get "stuck"). Local edits made
+    // against the current version are still respected.
+    const starter = window.FAMILY_TREE_STARTER;
+    const starterV = (starter && typeof starter === "object" && starter.version) || 0;
+    if (hasLocalData() && savedVersion() >= starterV) loadLocal();
+    else if (starter && typeof starter === "object") loadObject(starter);
+    else if (hasLocalData()) loadLocal();
     boot();
   }
 
