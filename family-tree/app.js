@@ -282,6 +282,15 @@
     const d = dateStr(p);
     if (d) g.appendChild(el("text", { class: "dates", x: 0, y: HALF + 38 }, txt(d)));
 
+    // attached obituaries/records badge
+    if (p.docs && p.docs.length) {
+      const badge = el("g", { class: "doc-badge", "data-id": p.id, transform: `translate(${HALF - 4},${-HALF + 2})` });
+      badge.appendChild(el("text", { x: 0, y: 0, "text-anchor": "middle" }, txt("📄")));
+      const tt = el("title", null, txt(p.docs.length + " attached record" + (p.docs.length > 1 ? "s" : "")));
+      badge.appendChild(tt);
+      g.appendChild(badge);
+    }
+
     gNodes.appendChild(g);
   }
 
@@ -400,6 +409,8 @@
   /* ============================================================ INTERACTION */
   let drag = null;
   svg.addEventListener("pointerdown", (e) => {
+    const badge = e.target.closest && e.target.closest(".doc-badge");
+    if (badge) { openDocsForPerson(badge.getAttribute("data-id")); return; }
     const personEl = e.target.closest && e.target.closest(".person");
     if (personEl && !readonly) {
       const id = personEl.getAttribute("data-id");
@@ -453,6 +464,7 @@
     $("#personSubmit").textContent = "Save changes";
     $("#personCancel").hidden = false;
     $("#personDelete").hidden = false;
+    renderDocsForm(p);
   }
   function resetPersonForm() {
     $("#personId").value = "";
@@ -462,6 +474,33 @@
     $("#personSubmit").textContent = "Add person";
     $("#personCancel").hidden = true;
     $("#personDelete").hidden = true;
+    renderDocsForm(null);
+  }
+
+  const docIcon = (k) => ({ link: "🔗", text: "📄", pdf: "📕", image: "🖼️" }[k] || "📄");
+  function renderDocsForm(p) {
+    const list = $("#docsList"), addBtn = $("#addDocBtn"), hint = $("#docsHint");
+    list.innerHTML = "";
+    if (!p) {
+      addBtn.disabled = true;
+      hint.textContent = "Add this person first, then reopen them to attach an obituary or record.";
+      return;
+    }
+    addBtn.disabled = false;
+    const docs = p.docs || [];
+    if (!docs.length) hint.textContent = "Attach an obituary — paste the text, upload a PDF/photo, or save a link. Kept with the tree so it survives even if the original goes offline.";
+    else hint.textContent = "";
+    docs.forEach((doc) => {
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="badge">${docIcon(doc.kind)}</span>
+        <span class="t">${escapeHtml(doc.title || "Untitled")} <span class="kind">${doc.kind === "link" ? "link only" : doc.kind}</span></span>
+        <button data-view>View</button><button class="rm" data-rm>✕</button>`;
+      li.querySelector("[data-view]").onclick = () => openDocViewer(doc);
+      li.querySelector("[data-rm]").onclick = () => {
+        if (confirm("Remove this record?")) { p.docs = docs.filter((x) => x.id !== doc.id); save(); render(); renderDocsForm(p); }
+      };
+      list.appendChild(li);
+    });
   }
   function setSex(s) {
     formSex = s;
@@ -753,6 +792,134 @@
     });
   }
 
+  /* ============================================================ OBITUARY / RECORD ATTACHMENTS */
+  function todayStr() { return new Date().toISOString().slice(0, 10); }
+  function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ""); } catch (e) { return "link"; } }
+
+  function openAttachModal(personId) {
+    const person = personById(personId); if (!person) return;
+    const back = document.createElement("div");
+    back.className = "modal-backdrop";
+    back.innerHTML = `<div class="modal"><h2>Attach obituary / record</h2>
+      <div class="hint">Saved with the tree so it stays even if the original goes offline. Paste the text or upload a file for a durable copy — a link alone can be archived later.</div>
+      <label class="field"><span>Title</span><input type="text" id="dTitle" placeholder="e.g. Obituary — Spitzer Funeral Home"/></label>
+      <label class="field"><span>Link (optional)</span><input type="text" id="dUrl" placeholder="https://…"/></label>
+      <div class="btn-row" style="justify-content:flex-start;margin:0 0 10px">
+        <button type="button" class="btn" id="dFetch">⬇︎ Fetch &amp; archive text from link</button>
+      </div>
+      <label class="field"><span>Paste the text (durable copy)</span><textarea id="dText" rows="6" placeholder="Paste the obituary text here…"></textarea></label>
+      <label class="field"><span>…or upload a PDF / photo / file</span><input type="file" id="dFile" accept="application/pdf,image/*,.txt,.html"/></label>
+      <div class="err" id="dErr" style="color:var(--divorce);font-size:12.5px;min-height:16px"></div>
+      <div class="hint" id="dStatus"></div>
+      <div class="btn-row"><button class="btn" data-cancel>Cancel</button><button class="btn primary" id="dSave">Save record</button></div></div>`;
+    document.body.appendChild(back);
+    const close = () => back.remove();
+    back.querySelector("[data-cancel]").onclick = close;
+    back.addEventListener("click", (e) => { if (e.target === back) close(); });
+    const err = back.querySelector("#dErr"), status = back.querySelector("#dStatus");
+
+    back.querySelector("#dFetch").onclick = async () => {
+      err.textContent = "";
+      const url = back.querySelector("#dUrl").value.trim();
+      if (!url) { err.textContent = "Enter a link first."; return; }
+      let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+      if (!pass) pass = prompt("Import passcode (set as IMPORT_PASSCODE in Vercel):") || "";
+      if (!pass) return;
+      try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
+      status.textContent = "Fetching…";
+      try {
+        const data = await callArchive({ passcode: pass, url });
+        if (!back.querySelector("#dTitle").value.trim()) back.querySelector("#dTitle").value = data.title || "";
+        back.querySelector("#dText").value = data.text || "";
+        status.textContent = "Fetched — review and Save.";
+      } catch (e2) { err.textContent = e2.message; status.textContent = ""; }
+    };
+
+    back.querySelector("#dSave").onclick = async () => {
+      err.textContent = "";
+      const title = back.querySelector("#dTitle").value.trim();
+      const url = back.querySelector("#dUrl").value.trim();
+      const text = back.querySelector("#dText").value.trim();
+      const file = back.querySelector("#dFile").files[0];
+      let kind = "link", content = "";
+      if (file) {
+        if (file.size > 8 * 1024 * 1024) { err.textContent = "File is too large (max 8 MB)."; return; }
+        if (file.type === "application/pdf") { kind = "pdf"; content = "data:application/pdf;base64," + (await fileToBase64(file)); }
+        else if (file.type.startsWith("image/")) { kind = "image"; content = "data:" + file.type + ";base64," + (await fileToBase64(file)); }
+        else { kind = "text"; content = await file.text(); }
+      } else if (text) { kind = "text"; content = text; }
+      else if (url) { kind = "link"; content = ""; }
+      else { err.textContent = "Add some text, a file, or a link."; return; }
+
+      const doc = { id: uid(), title: title || (url ? hostOf(url) : "Record"), url, capturedAt: todayStr(), kind, content };
+      if (!person.docs) person.docs = [];
+      person.docs.push(doc);
+      save(); render(); renderDocsForm(person);
+      close(); toast("Record attached");
+    };
+  }
+
+  async function callArchive(payload) {
+    let res;
+    try { res = await fetch("api/archive", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); }
+    catch (e) { throw new Error("Couldn’t reach the archive service."); }
+    if (!res.ok) {
+      let msg = "Fetch failed (" + res.status + ").";
+      try { msg = (await res.json()).error || msg; } catch (e) {}
+      if (res.status === 404) msg = "Fetching a link needs the Vercel deployment — for now, paste the text or upload a file.";
+      throw new Error(msg);
+    }
+    return res.json();
+  }
+
+  function openDocsForPerson(id) {
+    const p = personById(id); if (!p || !p.docs || !p.docs.length) return;
+    selectPerson(id);
+    if (p.docs.length === 1) { openDocViewer(p.docs[0]); return; }
+    const back = document.createElement("div");
+    back.className = "modal-backdrop";
+    back.innerHTML = `<div class="modal"><h2>${escapeHtml(p.name)} — records</h2><ul class="docs-list" id="chooseList"></ul>
+      <div class="btn-row"><button class="btn primary" data-cancel>Close</button></div></div>`;
+    document.body.appendChild(back);
+    back.querySelector("[data-cancel]").onclick = () => back.remove();
+    back.addEventListener("click", (e) => { if (e.target === back) back.remove(); });
+    const ul = back.querySelector("#chooseList");
+    p.docs.forEach((doc) => {
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="badge">${docIcon(doc.kind)}</span><span class="t">${escapeHtml(doc.title || "Untitled")}</span><button data-view>View</button>`;
+      li.querySelector("[data-view]").onclick = () => { back.remove(); openDocViewer(doc); };
+      ul.appendChild(li);
+    });
+  }
+
+  function openDocViewer(doc) {
+    let bodyHtml;
+    if (doc.kind === "text") bodyHtml = `<pre>${escapeHtml(doc.content || "")}</pre>`;
+    else if (doc.kind === "pdf") bodyHtml = `<iframe src="${doc.content}"></iframe>`;
+    else if (doc.kind === "image") bodyHtml = `<img src="${doc.content}" alt=""/>`;
+    else bodyHtml = `<p class="hint">No archived copy is saved yet — open the original above, or edit this record to paste the text or upload a PDF for a permanent copy.</p>`;
+    const srcLine = (doc.url ? `<a href="${escapeHtml(doc.url)}" target="_blank" rel="noopener">View original listing ↗</a> · ` : "") + "saved " + (doc.capturedAt || "");
+    const back = document.createElement("div");
+    back.className = "modal-backdrop";
+    back.innerHTML = `<div class="modal doc-view"><h2>${escapeHtml(doc.title || "Record")}</h2>
+      <div class="src">${srcLine}</div>${bodyHtml}
+      <div class="btn-row">${doc.kind !== "link" ? '<button class="btn" data-dl>⬇︎ Download</button>' : ""}<button class="btn primary" data-cancel>Close</button></div></div>`;
+    document.body.appendChild(back);
+    back.querySelector("[data-cancel]").onclick = () => back.remove();
+    back.addEventListener("click", (e) => { if (e.target === back) back.remove(); });
+    const dl = back.querySelector("[data-dl]");
+    if (dl) dl.onclick = () => downloadDoc(doc);
+  }
+
+  function downloadDoc(doc) {
+    const base = (doc.title || "record").replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase() || "record";
+    if (doc.kind === "text") { downloadFile(base + ".txt", doc.content || "", "text/plain"); return; }
+    const a = document.createElement("a");
+    a.href = doc.content;
+    a.download = base + (doc.kind === "pdf" ? ".pdf" : "");
+    a.click();
+  }
+
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
     return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual };
@@ -807,6 +974,7 @@
   });
   $("#publishBtn").onclick = openPublishModal;
   $("#importObitBtn").onclick = openImportModal;
+  $("#addDocBtn").onclick = () => { const id = $("#personId").value; if (id) openAttachModal(id); };
   $("#resetBtn").onclick = () => { if (confirm("Clear the entire tree from this browser?")) { state = blankState(); localStorage.removeItem(STORE_KEY); selectedId = null; resetPersonForm(); relayoutAndSave(); } };
   $("#panelToggle").onclick = () => $("#panel").classList.toggle("collapsed");
   function ensurePanel() { $("#panel").classList.remove("collapsed"); }
@@ -889,6 +1057,7 @@
 
   function init() {
     setSex("male");
+    renderDocsForm(null);
     const params = new URLSearchParams(location.search);
     const wantEdit = params.has("edit");
     const published = typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20;
@@ -905,6 +1074,7 @@
     }
     // normal editor
     if (hasLocalData()) loadLocal();
+    else if (window.FAMILY_TREE_STARTER && typeof window.FAMILY_TREE_STARTER === "object") loadObject(window.FAMILY_TREE_STARTER);
     boot();
   }
 

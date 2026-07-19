@@ -118,6 +118,12 @@
               <input type="file" id="photoInput" accept="image/*" hidden />
               <button type="button" class="btn danger" id="photoClear" hidden style="margin-top:6px">Remove photo</button>
             </div>
+            <div id="docsSection" style="margin:4px 0 12px">
+              <label class="field"><span>Obituaries &amp; records</span></label>
+              <ul class="docs-list" id="docsList"></ul>
+              <button type="button" class="btn" id="addDocBtn">📄 Attach obituary / record</button>
+              <p class="hint" id="docsHint" style="margin-top:6px"></p>
+            </div>
             <div class="btn-row">
               <button type="submit" class="btn primary" id="personSubmit">Add person</button>
               <button type="button" class="btn" id="personCancel" hidden>Cancel</button>
@@ -174,6 +180,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="family-data.js"></script>
+  <script src="starter.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -25,6 +25,12 @@ and can populate itself from obituaries using Claude.
 - **AI import** — paste an obituary (or a link, PDF, or photo) and Claude fills
   in the people and relationships for you to review. (Requires the Vercel
   deployment below.)
+- **Obituaries & records** — attach obituaries (and other documents) to a
+  person's profile. Save a **durable copy** — paste the text, or upload a
+  PDF/photo — so it survives even if the original listing goes offline. You can
+  also keep just a **link** and archive it later. A 📄 badge appears on people
+  with records; anyone viewing the tree can click it to read them. On the Vercel
+  deployment, a link can be fetched and archived to text in one click.
 - **Layout** is automatic and even; it re-arranges as you add people. Drag any
   person to fine-tune, and press ✦ to auto-arrange again.
 - **Canvas** pans (drag the background) and zooms (scroll / the ± buttons) with
