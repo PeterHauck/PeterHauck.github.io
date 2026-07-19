@@ -5,7 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <title>Family Tree</title>
   <meta name="description" content="A private, scrollable family genealogy chart." />
-  <link rel="stylesheet" href="styles.css" />
+  <!-- Always load the latest version: don't let the browser reuse a cached page -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <!-- Load the stylesheet with a per-load cache-buster so style changes show up immediately -->
+  <script>document.write('<link rel="stylesheet" href="styles.css?v=' + Date.now() + '">');</script>
+  <noscript><link rel="stylesheet" href="styles.css" /></noscript>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8C%B3%3C/text%3E%3C/svg%3E" />
 </head>
 <body>
@@ -196,8 +202,15 @@
 
   <div id="toast" class="toast"></div>
 
-  <script src="family-data.js"></script>
-  <script src="starter.js"></script>
-  <script src="app.js"></script>
+  <!-- Load the scripts with a per-load cache-buster (in order) so the newest
+       code and data always win over anything the browser cached. -->
+  <script>
+    (function () {
+      var v = Date.now();
+      document.write('<script src="family-data.js?v=' + v + '"><\/script>');
+      document.write('<script src="starter.js?v=' + v + '"><\/script>');
+      document.write('<script src="app.js?v=' + v + '"><\/script>');
+    })();
+  </script>
 </body>
 </html>
