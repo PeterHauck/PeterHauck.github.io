@@ -15,9 +15,9 @@
   const STORE_KEY = "familyTree.v1";
 
   /* ---- layout constants ---- */
-  const COLW = 205;   // horizontal spacing between two people
-  const ROWH = 260;   // vertical spacing between generations
-  const CLUSTER_GAP = COLW; // min horizontal gap between unrelated family clusters
+  const COLW = 168;   // horizontal spacing between two people
+  const ROWH = 250;   // vertical spacing between generations
+  const CLUSTER_GAP = COLW * 0.7; // min horizontal gap between unrelated family clusters
   const HALF = 46;    // half the visual footprint of a shape
 
   /* ---------------------------------------------------------------- state */
@@ -437,7 +437,11 @@
 
     if (!kids.length) return;
 
-    // bus below the couple, connecting to each child
+    // Colour the descent lines by the children's family so each set of lines is
+    // traceable at a glance instead of a grey tangle.
+    const famColor = kids.map((k) => k.p.color).find(Boolean) || (pa && pa.color) || (pb && pb.color) || null;
+    const cstyle = famColor ? "stroke:" + famColor + ";stroke-width:2.8" : null;
+
     const childTops = kids.map((k) => ({ x: posOf(k.p.id).x, top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
     // Place the sibling bus in the clear band BELOW the parents' name labels and
     // ABOVE the children — so it never runs through anyone's name. A small
@@ -445,15 +449,15 @@
     const uIdx = state.unions.indexOf(u);
     const busY = midY + 158 + (uIdx % 3) * 13;
     // vertical drop from union to bus
-    gLinks.appendChild(el("line", { class: "link", x1: midX, y1: dropTop, x2: midX, y2: busY }));
+    gLinks.appendChild(el("line", { class: "link", x1: midX, y1: dropTop, x2: midX, y2: busY, style: cstyle }));
     // horizontal bus
     const minX = Math.min(midX, ...childTops.map((c) => c.x));
     const maxX = Math.max(midX, ...childTops.map((c) => c.x));
     if (childTops.length > 1 || minX !== maxX)
-      gLinks.appendChild(el("line", { class: "link", x1: minX, y1: busY, x2: maxX, y2: busY }));
+      gLinks.appendChild(el("line", { class: "link", x1: minX, y1: busY, x2: maxX, y2: busY, style: cstyle }));
     // verticals to each child (dashed + green if adopted)
     childTops.forEach((c) => {
-      gLinks.appendChild(el("line", { class: "link" + (c.type === "adopted" ? " adopt" : ""), x1: c.x, y1: busY, x2: c.x, y2: c.top }));
+      gLinks.appendChild(el("line", { class: "link" + (c.type === "adopted" ? " adopt" : ""), x1: c.x, y1: busY, x2: c.x, y2: c.top, style: c.type === "adopted" ? null : cstyle }));
     });
   }
 
