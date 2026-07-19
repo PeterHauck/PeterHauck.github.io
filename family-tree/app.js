@@ -15,8 +15,8 @@
   const STORE_KEY = "familyTree.v1";
 
   /* ---- layout constants ---- */
-  const COLW = 175;   // horizontal spacing between two people
-  const ROWH = 215;   // vertical spacing between generations
+  const COLW = 205;   // horizontal spacing between two people
+  const ROWH = 260;   // vertical spacing between generations
   const CLUSTER_GAP = COLW; // min horizontal gap between unrelated family clusters
   const HALF = 46;    // half the visual footprint of a shape
 
@@ -28,6 +28,8 @@
   let view = { tx: 0, ty: 0, scale: 1 };
   let pendingPhoto = null;   // dataURL staged in the person form
   let formSex = "male";
+  let formColor = "";
+  const FAMILY_COLORS = ["#38607a", "#7a5c3e", "#5e8c6a", "#3f8a8a", "#b0894a", "#9c5d7a"];
 
   function blankState() {
     return { title: "Family Tree", subtitle: "", persons: [], unions: [], links: [], manual: {} };
@@ -56,7 +58,7 @@
 
   /* ================================================================ MODEL */
   function addPerson(data) {
-    const p = { id: uid(), name: data.name || "Unnamed", birth: num(data.birth), death: num(data.death), deceased: !!data.deceased, sex: data.sex || "unknown", photo: data.photo || null, docs: data.docs || [] };
+    const p = { id: uid(), name: data.name || "Unnamed", birth: num(data.birth), death: num(data.death), deceased: !!data.deceased, sex: data.sex || "unknown", color: data.color || null, photo: data.photo || null, docs: data.docs || [] };
     state.persons.push(p);
     return p;
   }
@@ -300,14 +302,22 @@
       g.appendChild(el("text", { class: "placeholder-emoji", x: 0, y: 2 }, txt("👤")));
     }
     // shape outline on top
-    g.appendChild(shapeOutline(p.sex, !!p.photo));
+    g.appendChild(shapeOutline(p.sex, !!p.photo, p.color));
     // deceased slash
     if (isDeceased(p)) g.appendChild(el("line", { class: "deceased", x1: -HALF, y1: HALF, x2: HALF, y2: -HALF }));
 
-    // labels
-    g.appendChild(el("text", { class: "label", x: 0, y: HALF + 20 }, txt(p.name)));
+    // labels — with a paper-coloured backing so connectors pass BEHIND the text
+    const lines = nameLines(p.name);
     const d = dateStr(p);
-    if (d) g.appendChild(el("text", { class: "dates", x: 0, y: HALF + 38 }, txt(d)));
+    const cw = 7.5, dcw = 6.5;
+    let w = 0;
+    lines.forEach((l) => (w = Math.max(w, l.length * cw)));
+    if (d) w = Math.max(w, d.length * dcw);
+    const nLines = lines.length;
+    const bgH = nLines * 18 + (d ? 15 : 0) + 8;
+    g.appendChild(el("rect", { class: "label-bg", x: -(w / 2) - 6, y: HALF + 6, width: w + 12, height: bgH, rx: 5 }));
+    lines.forEach((l, i) => g.appendChild(el("text", { class: "label", x: 0, y: HALF + 22 + i * 18 }, txt(l))));
+    if (d) g.appendChild(el("text", { class: "dates", x: 0, y: HALF + 24 + nLines * 18 }, txt(d)));
 
     // attached obituaries/records badge
     if (p.docs && p.docs.length) {
@@ -321,11 +331,21 @@
     gNodes.appendChild(g);
   }
 
-  function shapeOutline(sex, hasPhoto) {
+  function shapeOutline(sex, hasPhoto, color) {
     const fill = hasPhoto ? "none" : "var(--node-fill)";
-    if (sex === "female") return el("circle", { class: "shape", r: 41, cx: 0, cy: 0, fill: hasPhoto ? "none" : fill, "fill-opacity": hasPhoto ? 0 : 1 });
-    if (sex === "unknown") return el("polygon", { class: "shape", points: "0,-46 46,0 0,46 -46,0", fill });
-    return el("rect", { class: "shape", x: -40, y: -40, width: 80, height: 80, rx: 6, fill });
+    const style = color ? "stroke:" + color : null; // family colour; inline style beats the class rule
+    if (sex === "female") return el("circle", { class: "shape", r: 41, cx: 0, cy: 0, fill: hasPhoto ? "none" : fill, "fill-opacity": hasPhoto ? 0 : 1, style });
+    if (sex === "unknown") return el("polygon", { class: "shape", points: "0,-46 46,0 0,46 -46,0", fill, style });
+    return el("rect", { class: "shape", x: -40, y: -40, width: 80, height: 80, rx: 6, fill, style });
+  }
+
+  // Wrap a long name onto two lines (split at the space nearest the middle).
+  function nameLines(name) {
+    if (name.length <= 16 || name.indexOf(" ") < 0) return [name];
+    const mid = name.length / 2;
+    let best = -1, bd = 1e9;
+    for (let i = 0; i < name.length; i++) if (name[i] === " ") { const dd = Math.abs(i - mid); if (dd < bd) { bd = dd; best = i; } }
+    return best < 0 ? [name] : [name.slice(0, best), name.slice(best + 1)];
   }
 
   function dateStr(p) {
@@ -361,10 +381,11 @@
 
     // bus below the couple, connecting to each child
     const childTops = kids.map((k) => ({ x: posOf(k.p.id).x, top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
-    // stagger the sibling-bus height a little so unions in the same generation
-    // (e.g. birth parents + adoptive parents of the same children) don't overlap
+    // Place the sibling bus in the clear band BELOW the parents' name labels and
+    // ABOVE the children — so it never runs through anyone's name. A small
+    // stagger keeps same-generation unions from sharing one line.
     const uIdx = state.unions.indexOf(u);
-    const busY = midY + ROWH * 0.46 + (uIdx % 4) * 16;
+    const busY = midY + 158 + (uIdx % 3) * 13;
     // vertical drop from union to bus
     gLinks.appendChild(el("line", { class: "link", x1: midX, y1: dropTop, x2: midX, y2: busY }));
     // horizontal bus
@@ -488,6 +509,7 @@
     $("#pDeath").value = p.death == null ? "" : p.death;
     $("#pDeceased").checked = isDeceased(p);
     setSex(p.sex);
+    setColor(p.color || "");
     pendingPhoto = p.photo || null;
     updatePhotoPreview();
     $("#personSubmit").textContent = "Save changes";
@@ -500,6 +522,7 @@
     $("#personForm").reset();
     setSex("male");
     pendingPhoto = null; updatePhotoPreview();
+    setColor("");
     $("#personSubmit").textContent = "Add person";
     $("#personCancel").hidden = true;
     $("#personDelete").hidden = true;
@@ -535,6 +558,19 @@
     formSex = s;
     document.querySelectorAll("#sexToggle button").forEach((b) => b.classList.toggle("active", b.dataset.sex === s));
   }
+  function buildColorSwatches() {
+    const row = $("#colorRow");
+    FAMILY_COLORS.forEach((c) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "swatch"; b.dataset.color = c; b.style.background = c; b.title = c;
+      row.appendChild(b);
+    });
+    row.querySelectorAll(".swatch").forEach((b) => (b.onclick = () => setColor(b.dataset.color)));
+  }
+  function setColor(c) {
+    formColor = c || "";
+    document.querySelectorAll("#colorRow .swatch").forEach((b) => b.classList.toggle("sel", (b.dataset.color || "") === formColor));
+  }
   function updatePhotoPreview() {
     const img = $("#photoPreview"), clr = $("#photoClear");
     if (pendingPhoto) { img.src = pendingPhoto; img.hidden = false; clr.hidden = false; }
@@ -546,10 +582,10 @@
   $("#personForm").addEventListener("submit", (e) => {
     e.preventDefault();
     const id = $("#personId").value;
-    const data = { name: $("#pName").value.trim() || "Unnamed", birth: $("#pBirth").value, death: $("#pDeath").value, deceased: $("#pDeceased").checked, sex: formSex, photo: pendingPhoto };
+    const data = { name: $("#pName").value.trim() || "Unnamed", birth: $("#pBirth").value, death: $("#pDeath").value, deceased: $("#pDeceased").checked, sex: formSex, color: formColor, photo: pendingPhoto };
     if (id) {
       const p = personById(id);
-      Object.assign(p, { name: data.name, birth: num(data.birth), death: num(data.death), deceased: data.deceased, sex: data.sex, photo: data.photo });
+      Object.assign(p, { name: data.name, birth: num(data.birth), death: num(data.death), deceased: data.deceased, sex: data.sex, color: data.color || null, photo: data.photo });
     } else {
       const p = addPerson(data); selectedId = p.id;
     }
@@ -1085,7 +1121,9 @@
   }
 
   function init() {
+    buildColorSwatches();
     setSex("male");
+    setColor("");
     renderDocsForm(null);
     const params = new URLSearchParams(location.search);
     const wantEdit = params.has("edit");

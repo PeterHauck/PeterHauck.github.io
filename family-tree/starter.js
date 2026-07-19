@@ -4,8 +4,10 @@
  *
  * A few connections are best-guesses from the obituary and are noted below —
  * edit them to match what you know:
- *   • Peter is placed as a child of Bill & Kristi Hauck (both of Sioux Falls).
- *     If Peter's parent is Michael instead, just move him.
+ *   • Peter is a child of Michael (Mike) Hauck. Peter's mother isn't in the
+ *     obituaries yet — add her and connect her to Michael when you have her.
+ *   • Families are colour-coded (Hauck blue, Tania's Wheeldon side brown, Goos
+ *     green, Fuchs teal, Miller gold); people who married in stay neutral.
  *   • Alicen (Peter's wife) is a daughter of Lisa Miller (Alicen's mother, now
  *     divorced from Lee Whiting) — connecting Alicen's maternal side (the Fuchs
  *     / Miller family). Her other 15 Fuchs grandchildren-cousins aren't added.
@@ -65,7 +67,7 @@ Funeral service 12 noon Tuesday, June 7 at St. John Lutheran Church, 9231 Viking
 
 function P(id, name, sex, opts) {
   opts = opts || {};
-  return { id, name, sex, birth: opts.birth || null, death: opts.death || null, deceased: !!opts.deceased, photo: null, docs: opts.docs || [] };
+  return { id, name, sex, birth: opts.birth || null, death: opts.death || null, deceased: !!opts.deceased, color: opts.color || null, photo: null, docs: opts.docs || [] };
 }
 function U(id, a, b, status) { return { id, a, b: b || null, status: status || "married" }; }
 function L(union, child, type) { return { id: "l_" + union + "_" + child, union, child, type: type || "bio" }; }
@@ -103,7 +105,7 @@ window.FAMILY_TREE_STARTER = {
     P("evelyn", "Evelyn “Evie” (Lester) Orr Hauck", "female", { birth: 1932, death: 2013, deceased: true }),
     P("bob", "Robert S. “Bob” Goos", "male"),
     // Tania's children (Hauck)
-    P("michael", "Michael Hauck", "male"),
+    P("michael", "Michael (Mike) Hauck", "male"),
     P("bill", "Bill Hauck", "male"),
     P("kristi", "Kristi Hauck", "female"),
     P("peggyM", "Peggy McCaghy", "female"),
@@ -167,6 +169,7 @@ window.FAMILY_TREE_STARTER = {
     U("u_rhonda", "rhonda", "marvin"),
     U("u_marcine", "marcine", "alvin"),
     U("u_bill", "bill", "kristi"),
+    U("u_michael", "michael", null),
     U("u_peggyM", "peggyM", "todd"),
     U("u_anne", "anne", "dennis"),
     U("u_david", "david", "norma"),
@@ -190,7 +193,7 @@ window.FAMILY_TREE_STARTER = {
     L("u_valprior", "teresa"), L("u_valprior", "barney"), L("u_valprior", "fritz"), L("u_valprior", "marian"),
     L("u_hauck", "michael"), L("u_hauck", "bill"), L("u_hauck", "peggyM"),
     L("u_bobprior", "anne"), L("u_bobprior", "david"), L("u_bobprior", "robertjay"),
-    L("u_bill", "peter"),
+    L("u_michael", "peter"),
     // Alicen's side
     L("u_edwardf", "harlan"),
     L("u_arthurm", "darleen"),
@@ -199,3 +202,18 @@ window.FAMILY_TREE_STARTER = {
   ],
   manual: {},
 };
+
+// Family colours (people who married in stay neutral, so the birth families read
+// clearly). Assigned by id so the person entries above stay readable.
+(function () {
+  var groups = {
+    "#7a5c3e": ["cecil", "elvera", "dick", "tania", "audrey", "peggyH", "rhonda", "marcine", "don"], // Tania's Wheeldon/Reiners side
+    "#38607a": ["valentine", "maryk", "wm", "jerry", "jamesm", "donna", "joann", "janice", "cynthia", "teresa", "barney", "fritz", "marian", "michael", "bill", "peggyM", "peter"], // Hauck
+    "#5e8c6a": ["bob", "anne", "david", "robertjay"], // Goos
+    "#3f8a8a": ["edwardf", "alicef", "harlan", "lisa", "linda", "debra", "davef", "christine", "alicen"], // Fuchs
+    "#b0894a": ["arthurm", "myrtlem", "darleen"], // Miller
+  };
+  var byId = {};
+  window.FAMILY_TREE_STARTER.persons.forEach(function (p) { byId[p.id] = p; });
+  Object.keys(groups).forEach(function (c) { groups[c].forEach(function (id) { if (byId[id]) byId[id].color = c; }); });
+})();
