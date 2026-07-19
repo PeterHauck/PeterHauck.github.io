@@ -6,6 +6,9 @@
  * edit them to match what you know:
  *   • Peter is placed as a child of Bill & Kristi Hauck (both of Sioux Falls).
  *     If Peter's parent is Michael instead, just move him.
+ *   • Alicen (Peter's wife) is a daughter of Lisa Miller (Alicen's mother, now
+ *     divorced from Lee Whiting) — connecting Alicen's maternal side (the Fuchs
+ *     / Miller family). Her other 15 Fuchs grandchildren-cousins aren't added.
  *   • Tania & William Hauck are shown divorced (both remarried in 1988 per
  *     his memorial); his profile carries the Find a Grave memorial text.
  *   • Step/half relationships (Reiners/Straatmeyer and the Hauck half-siblings
@@ -49,6 +52,16 @@ He was preceded in death by his father, one brother and one half brother.
 — Aberdeen (SD) American News, Sunday, May 26, 1991, Page 2B.
 
 Family (Find a Grave): Parents — Valentine Felix Hauck (1894–1974), Mary A. Kessler Hauck (1906–1994). Spouse — Evelyn M. "Evie" Lester Orr Hauck (1932–2013, m. 1988). Siblings — Teresa Elma Hauck Ressa (1924–1999), Donna Hauck Izlar (1930–2019), James Michael Hauck (1944–1987). Half siblings — Sgt Bernard J. Hauck (1920–2008), Francis Joseph "Fritz" Hauck (1923–2015).`;
+
+var HARLAN_OBIT = `Fuchs, Harlan J., age 79, formerly of Ramsey, passed away peacefully Aug. 5, 2014 surrounded by family. Preceded in death by parents, Edward and Alice, and a grandson. "Foxy" will be missed by his wife of 56 years, Darleen; children, Lisa Whiting (Lee), Linda Oie (Tim), Debra Delaney (Bill), Dave Fox (Karla) and Christine Drasher (Tom); 16 grandchildren and 2 great-grandchildren; siblings, Conrad Fuchs, Alice Bushnell and Delores Holt; and many nieces, nephews and friends. Proudly served in the USMC. Member of Anoka American Legion Post 102.
+
+Visitation at the church 3-6 PM Sunday, Aug. 10 and one hour prior to service on Monday. Funeral service 11 AM Monday, Aug. 11, all at St. John Lutheran Church, 9231 Viking Blvd., Nowthen. Private interment. Memorials are preferred. Washburn-McReavy Funeral Chapels, Coon Rapids Chapel.`;
+
+var DARLEEN_OBIT = `Fuchs, Darleen G., age 77, formerly of Ramsey, passed away peacefully June 2, 2016 surrounded by her family. She is free now to walk through Heaven's gardens after a 40-year struggle with Multiple Sclerosis. Preceded in death by husband of 56 years, Harlan; parents, Arthur & Myrtle Miller; a grandson; brothers, Melvin and Lloyd; and sister, Mildred.
+
+Survived by children, Lisa Whiting (Lee), Linda Oie (Tim), Debra Delaney (Bill), David Fox (Karla) and Christine Drasher (Tom); grandchildren, Melissa (Alex), Sarah (Tyler), Justin (Amanda), Alysha, Emily, Matthew, Jonathan, Alicen, Jake, Laura, Cassandra, Hannah, Mitchell, Kaylee, Madelynn and Alexandra; great-grandchildren, Branden, Brynn, Adley, Camryn and Christian; siblings, Marvel Gorham, Inez Quist, Doris Springer, Kenneth Miller and Robert Miller; and many nieces, nephews, family and friends.
+
+Funeral service 12 noon Tuesday, June 7 at St. John Lutheran Church, 9231 Viking Blvd., Nowthen. Visitation one hour prior to service at church. Private interment. Memorials preferred to the MS Society. Washburn-McReavy Funeral Chapels, Coon Rapids Chapel.`;
 
 function P(id, name, sex, opts) {
   opts = opts || {};
@@ -116,6 +129,29 @@ window.FAMILY_TREE_STARTER = {
     P("marian", "Marian (Hauck) Unkrur", "female"),
     // Grandson
     P("peter", "Peter Hauck", "male"),
+
+    // ---- Alicen's side (Peter's wife) ----
+    P("alicen", "Alicen Hauck", "female"),
+    // Alicen's maternal grandparents (Fuchs) and their parents
+    P("harlan", "Harlan J. “Foxy” Fuchs", "male", { birth: 1935, death: 2014, deceased: true,
+      docs: [{ id: "obit_harlan", title: "Obituary — Washburn-McReavy", url: "https://www.washburn-mcreavy.com/obituaries/Harlan-Fuchs", capturedAt: "2026-07-19", kind: "text", content: HARLAN_OBIT }] }),
+    P("darleen", "Darleen G. (Miller) Fuchs", "female", { birth: 1939, death: 2016, deceased: true,
+      docs: [{ id: "obit_darleen", title: "Obituary — Washburn-McReavy", url: "https://www.washburn-mcreavy.com/obituaries/Darleen-Fuchs", capturedAt: "2026-07-19", kind: "text", content: DARLEEN_OBIT }] }),
+    P("edwardf", "Edward Fuchs", "male", { deceased: true }),
+    P("alicef", "Alice Fuchs", "female", { deceased: true }),
+    P("arthurm", "Arthur Miller", "male", { deceased: true }),
+    P("myrtlem", "Myrtle Miller", "female", { deceased: true }),
+    // Harlan & Darleen's children (Alicen's mother + aunts/uncle)
+    P("lisa", "Lisa Miller", "female"),
+    P("lee", "Lee Whiting", "male"),
+    P("linda", "Linda Oie", "female"),
+    P("timo", "Tim Oie", "male"),
+    P("debra", "Debra Delaney", "female"),
+    P("billd", "Bill Delaney", "male"),
+    P("davef", "David “Dave” Fox", "male"),
+    P("karla", "Karla Fox", "female"),
+    P("christine", "Christine Drasher", "female"),
+    P("tomd", "Tom Drasher", "male"),
   ],
   unions: [
     U("u_wheeldon", "cecil", "elvera"),
@@ -135,6 +171,16 @@ window.FAMILY_TREE_STARTER = {
     U("u_anne", "anne", "dennis"),
     U("u_david", "david", "norma"),
     U("u_robertjay", "robertjay", "marilyn"),
+    // Alicen's side
+    U("u_peteralicen", "peter", "alicen"),
+    U("u_edwardf", "edwardf", "alicef"),
+    U("u_arthurm", "arthurm", "myrtlem"),
+    U("u_fuchs", "harlan", "darleen"),
+    U("u_lisa", "lisa", "lee", "divorced"),
+    U("u_linda", "linda", "timo"),
+    U("u_debra", "debra", "billd"),
+    U("u_davef", "davef", "karla"),
+    U("u_christine", "christine", "tomd"),
   ],
   links: [
     L("u_wheeldon", "tania"), L("u_wheeldon", "peggyH"), L("u_wheeldon", "rhonda"),
@@ -145,6 +191,11 @@ window.FAMILY_TREE_STARTER = {
     L("u_hauck", "michael"), L("u_hauck", "bill"), L("u_hauck", "peggyM"),
     L("u_bobprior", "anne"), L("u_bobprior", "david"), L("u_bobprior", "robertjay"),
     L("u_bill", "peter"),
+    // Alicen's side
+    L("u_edwardf", "harlan"),
+    L("u_arthurm", "darleen"),
+    L("u_fuchs", "lisa"), L("u_fuchs", "linda"), L("u_fuchs", "debra"), L("u_fuchs", "davef"), L("u_fuchs", "christine"),
+    L("u_lisa", "alicen"),
   ],
   manual: {},
 };

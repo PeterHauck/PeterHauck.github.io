@@ -193,6 +193,32 @@
     order.forEach((cls, g) => cls.forEach((c) => c.ids.forEach((id) => {
       layoutPos[id] = { x: c.x + c.offset[id], y: g * ROWH };
     })));
+    compactHorizontal();
+  }
+
+  // Collapse vertical corridors of empty space that span ALL generations — e.g.
+  // the gap between two large families joined only by one marriage. Preserves
+  // every relative position and vertical alignment; only removes dead space.
+  function compactHorizontal() {
+    const ids = Object.keys(layoutPos);
+    if (ids.length < 2) return;
+    const pad = COLW * 0.55, maxGap = COLW * 1.1;
+    const ivs = ids.map((id) => ({ l: layoutPos[id].x - pad, r: layoutPos[id].x + pad })).sort((a, b) => a.l - b.l);
+    const cuts = [];
+    let cur = { l: ivs[0].l, r: ivs[0].r };
+    for (let i = 1; i < ivs.length; i++) {
+      if (ivs[i].l > cur.r + 0.5) {
+        const gap = ivs[i].l - cur.r;
+        if (gap > maxGap) cuts.push({ x: cur.r, amount: gap - maxGap });
+        cur = { l: ivs[i].l, r: ivs[i].r };
+      } else if (ivs[i].r > cur.r) cur.r = ivs[i].r;
+    }
+    if (!cuts.length) return;
+    ids.forEach((id) => {
+      let s = 0;
+      for (const c of cuts) if (layoutPos[id].x > c.x) s += c.amount;
+      layoutPos[id].x -= s;
+    });
   }
 
   function buildClusters(ids, g, gen) {
