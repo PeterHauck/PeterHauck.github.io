@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Family Tree</title>
+  <meta name="description" content="A private, scrollable family genealogy chart." />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8C%B3%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+
+  <!-- Password gate (only shown when an encrypted family-data.js is present) -->
+  <div id="lock" hidden>
+    <div class="card">
+      <div class="tree-emoji">🌳</div>
+      <h1>Our Family Tree</h1>
+      <p>This page is private. Enter the family password to view it.</p>
+      <form id="lockForm">
+        <input type="password" id="lockPass" placeholder="Password" autocomplete="current-password" />
+        <div class="err" id="lockErr"></div>
+        <button class="btn primary wide" type="submit" style="margin-top:10px">Unlock</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="app">
+    <!-- Canvas -->
+    <div id="stage">
+      <svg id="svg" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <!-- shape clip paths, centered on each node's local origin -->
+          <clipPath id="clip-male"><rect x="-40" y="-40" width="80" height="80" rx="6"/></clipPath>
+          <clipPath id="clip-female"><circle cx="0" cy="0" r="41"/></clipPath>
+          <clipPath id="clip-unknown"><polygon points="0,-46 46,0 0,46 -46,0"/></clipPath>
+        </defs>
+        <g id="viewport">
+          <g id="links"></g>
+          <g id="nodes"></g>
+        </g>
+      </svg>
+
+      <div id="empty">
+        <div style="font-size:44px">🌳</div>
+        <h2>Start your family tree</h2>
+        <div class="hint" style="max-width:340px">Add people, connect them as couples, and attach children.
+          The chart arranges itself and scrolls in every direction.</div>
+        <div class="btn-row cta">
+          <button class="btn primary" id="emptyAdd">Add the first person</button>
+          <button class="btn" id="emptyDemo">Load example family</button>
+        </div>
+      </div>
+
+      <!-- floating toolbar -->
+      <div id="toolbar" class="floating">
+        <button id="tbAdd" title="Add person">＋</button>
+        <button id="tbUnion" title="Add couple / relationship">💍</button>
+        <button id="tbChild" title="Add child">👶</button>
+        <div class="sep"></div>
+        <button id="tbArrange" title="Auto-arrange">✦</button>
+        <button id="tbFit" title="Fit to screen">⤢</button>
+        <div class="sep"></div>
+        <button id="tbZoomOut" title="Zoom out">－</button>
+        <span class="zoomlabel" id="zoomLabel">100%</span>
+        <button id="tbZoomIn" title="Zoom in">＋</button>
+      </div>
+
+      <!-- legend -->
+      <div id="legend" class="floating">
+        <span class="toggle" id="legendToggle">–</span>
+        <h3>Legend</h3>
+        <div class="lgbody">
+          <div class="lg"><svg viewBox="-20 -14 40 28"><rect x="-11" y="-11" width="22" height="22" rx="3" fill="none" stroke="currentColor" stroke-width="2.5"/></svg> Male</div>
+          <div class="lg"><svg viewBox="-20 -14 40 28"><circle r="11" fill="none" stroke="currentColor" stroke-width="2.5"/></svg> Female</div>
+          <div class="lg"><svg viewBox="-20 -14 40 28"><polygon points="0,-12 12,0 0,12 -12,0" fill="none" stroke="currentColor" stroke-width="2.5"/></svg> Unknown</div>
+          <div class="lg"><svg viewBox="-20 -14 40 28"><circle r="11" fill="none" stroke="currentColor" stroke-width="2.5"/><line x1="-13" y1="13" x2="13" y2="-13" stroke="currentColor" stroke-width="2.5"/></svg> Deceased</div>
+          <div class="lg"><svg viewBox="-20 -14 40 28"><line x1="-16" y1="0" x2="16" y2="0" stroke="currentColor" stroke-width="2.5"/></svg> Couple</div>
+          <div class="lg"><svg viewBox="-20 -14 40 28"><line x1="-16" y1="0" x2="16" y2="0" stroke="currentColor" stroke-width="2.5"/><line x1="-4" y1="-8" x2="-10" y2="8" stroke="#b34747" stroke-width="2.5"/><line x1="4" y1="-8" x2="-2" y2="8" stroke="#b34747" stroke-width="2.5"/></svg> Divorced</div>
+          <div class="lg"><svg viewBox="-20 -14 40 28"><line x1="0" y1="-13" x2="0" y2="13" stroke="#2f7d5d" stroke-width="2.5" stroke-dasharray="5 4"/></svg> Adopted child</div>
+        </div>
+      </div>
+
+      <button id="panelToggle" class="floating" title="Show / hide editor">✎</button>
+    </div>
+
+    <!-- Editor panel -->
+    <aside id="panel">
+      <div class="panel-head">
+        <h1 id="treeTitle">Family Tree</h1>
+        <p id="treeSubtitle">Build & arrange your family</p>
+      </div>
+      <div class="panel-body">
+
+        <div class="section editor-only">
+          <h2>Add / edit person</h2>
+          <form id="personForm">
+            <input type="hidden" id="personId" />
+            <label class="field"><span>Full name</span>
+              <input type="text" id="pName" placeholder="e.g. Mary Hauck" required />
+            </label>
+            <div class="row2">
+              <label class="field"><span>Born</span><input type="number" id="pBirth" placeholder="1912" /></label>
+              <label class="field"><span>Died (if applicable)</span><input type="number" id="pDeath" placeholder="—" /></label>
+            </div>
+            <label class="field"><span>Represented as</span></label>
+            <div class="sex-toggle" id="sexToggle">
+              <button type="button" data-sex="male" class="active">
+                <svg viewBox="-20 -20 40 40"><rect x="-15" y="-15" width="30" height="30" rx="4"/></svg>Male</button>
+              <button type="button" data-sex="female">
+                <svg viewBox="-20 -20 40 40"><circle r="15"/></svg>Female</button>
+              <button type="button" data-sex="unknown">
+                <svg viewBox="-20 -20 40 40"><polygon points="0,-17 17,0 0,17 -17,0"/></svg>Unknown</button>
+            </div>
+            <div style="margin:12px 0">
+              <div class="photo-drop" id="photoDrop">Click to upload a photo<br/><span class="hint">(cropped to the person's shape)</span>
+                <img class="photo-preview" id="photoPreview" hidden />
+              </div>
+              <input type="file" id="photoInput" accept="image/*" hidden />
+              <button type="button" class="btn danger" id="photoClear" hidden style="margin-top:6px">Remove photo</button>
+            </div>
+            <div class="btn-row">
+              <button type="submit" class="btn primary" id="personSubmit">Add person</button>
+              <button type="button" class="btn" id="personCancel" hidden>Cancel</button>
+              <button type="button" class="btn danger" id="personDelete" hidden>Delete</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="section editor-only">
+          <h2>Relationships</h2>
+          <div class="btn-row">
+            <button class="btn" id="addUnionBtn">💍 Add couple</button>
+            <button class="btn" id="addChildBtn">👶 Add child</button>
+          </div>
+          <p class="hint" style="margin-top:8px">A “couple” draws the marriage line. Mark it divorced, or add a
+            second couple for a remarriage. Children attach to a specific couple, so it’s always clear which
+            marriage they came from — and can be marked <em>adopted</em>.</p>
+        </div>
+
+        <div class="section">
+          <h2>People <span class="pill" id="peopleCount">0</span></h2>
+          <ul class="people-list" id="peopleList"></ul>
+        </div>
+
+        <div class="section editor-only">
+          <h2>Save & share</h2>
+          <div class="btn-row">
+            <button class="btn" id="exportBtn">⬇︎ Export file</button>
+            <button class="btn" id="importBtn">⬆︎ Import file</button>
+            <input type="file" id="importInput" accept=".json,application/json" hidden />
+          </div>
+          <div class="btn-row" style="margin-top:8px">
+            <button class="btn primary wide" id="publishBtn">🔒 Publish for family (password)</button>
+          </div>
+          <p class="hint" style="margin-top:8px">Your work auto-saves in this browser. “Publish” encrypts the whole
+            tree with a password and downloads <code>family-data.js</code> to commit alongside this page —
+            visitors then need the password to view.</p>
+          <div class="btn-row" style="margin-top:8px">
+            <button class="btn danger" id="resetBtn">Clear everything</button>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="family-data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
