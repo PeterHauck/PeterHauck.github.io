@@ -18,6 +18,7 @@
   const COLW = 168;   // horizontal spacing between two people
   const ROWH = 250;   // vertical spacing between generations
   const CLUSTER_GAP = COLW * 0.7; // min horizontal gap between unrelated family clusters
+  const BAND_GAP = COLW * 1.6;    // horizontal gap between separate bloodline families
   const HALF = 46;    // half the visual footprint of a shape
 
   /* ---------------------------------------------------------------- state */
@@ -153,27 +154,61 @@
     const unions = visibleUnions();
     const links = visibleLinks();
     const uById = {}; unions.forEach((u) => (uById[u.id] = u));
+    // GLOBAL generations — computed across everyone so every band's rows line up
+    // vertically (a grandparent is always on the same row, whichever family).
     const gen = computeGenerations(persons, unions, links, uById);
 
-    // adjacency to neighbouring generations
+    // Partition people into bloodline "families" — connected ONLY through
+    // parent↔child links, never through a marriage on its own. Each family is
+    // then laid out in its own horizontal band, so no unrelated family ever sits
+    // vertically above another (the Haucks are never stacked over the Oies /
+    // Delaneys / Fuchs). Marriages that join two families become bridges — a
+    // horizontal line reaching from one band to the next.
+    const comps = lineageComponents(persons, unions, links, uById);
+    const ordered = orderComponents(comps, unions);
+
+    layoutPos = {};
+    let cursor = 0;
+    ordered.forEach((ids) => {
+      const sub = layoutComponent(ids, persons, unions, links, uById, gen);
+      if (sub.minX === Infinity) return;
+      const shift = cursor - sub.minX;
+      ids.forEach((id) => {
+        if (!sub.pos[id]) return;
+        layoutPos[id] = { x: sub.pos[id].x + shift, y: sub.pos[id].y };
+      });
+      cursor += (sub.maxX - sub.minX) + BAND_GAP;
+    });
+  }
+
+  // Lay out ONE bloodline family (a set of person ids) on its own, using the
+  // GLOBAL generation map for vertical position so it aligns with every other
+  // band. Returns local x/y positions plus the band's min/max x.
+  function layoutComponent(idSet, persons, unions, links, uById, gen) {
+    const cPersons = persons.filter((p) => idSet.has(p.id));
+    if (!cPersons.length) return { pos: {}, minX: Infinity, maxX: -Infinity };
+    const cUnions = unions.filter((u) => idSet.has(u.a) && (u.b == null || idSet.has(u.b)));
+    const cLinks = links.filter((l) => { const u = uById[l.union]; return idSet.has(l.child) && u && idSet.has(u.a); });
+
+    // adjacency to neighbouring generations (within this family only)
     const childrenOf = {}, parentsOf = {};
-    persons.forEach((p) => { childrenOf[p.id] = []; parentsOf[p.id] = []; });
-    links.forEach((l) => {
+    cPersons.forEach((p) => { childrenOf[p.id] = []; parentsOf[p.id] = []; });
+    cLinks.forEach((l) => {
       const u = uById[l.union]; if (!u) return;
       [u.a, u.b].forEach((pid) => {
-        if (pid == null) return;
+        if (pid == null || !idSet.has(pid)) return;
         if (childrenOf[pid]) childrenOf[pid].push(l.child);
         if (parentsOf[l.child]) parentsOf[l.child].push(pid);
       });
     });
 
-    // group persons by generation
-    const maxGen = Math.max(...persons.map((p) => gen[p.id]));
+    // group persons by GLOBAL generation
+    const maxGen = Math.max(...cPersons.map((p) => gen[p.id]));
     const genList = [];
-    for (let g = 0; g <= maxGen; g++) genList[g] = persons.filter((p) => gen[p.id] === g).map((p) => p.id);
+    for (let g = 0; g <= maxGen; g++) genList[g] = cPersons.filter((p) => gen[p.id] === g).map((p) => p.id);
 
     // spouse clusters (chains of partners) inside each generation
-    const clustersByGen = genList.map((ids, g) => buildClusters(ids, g, gen, unions));
+    const clustersByGen = genList.map((ids, g) => buildClusters(ids || [], g, gen, cUnions));
 
     // order clusters within each generation via barycenter sweeps
     const order = clustersByGen.map((cl) => cl.slice()); // order[g] = [cluster,...]
@@ -197,8 +232,8 @@
     // under that couple, so half/step-sibling sets don't interleave (e.g. the
     // Hauck children stay together even though one married into another family).
     const primaryUnion = {};
-    links.forEach((l) => { if (l.type === "bio") primaryUnion[l.child] = l.union; });
-    links.forEach((l) => { if (!(l.child in primaryUnion)) primaryUnion[l.child] = l.union; });
+    cLinks.forEach((l) => { if (l.type === "bio") primaryUnion[l.child] = l.union; });
+    cLinks.forEach((l) => { if (!(l.child in primaryUnion)) primaryUnion[l.child] = l.union; });
     const clusterUnion = (c) => { for (const id of c.ids) if (primaryUnion[id]) return primaryUnion[id]; return null; };
     const unionPos = (uid) => {
       const u = uById[uid]; if (!u) return Infinity;
@@ -248,22 +283,82 @@
       });
     }
 
-    // write final positions
-    layoutPos = {};
+    // write this band's local positions, then squeeze out dead space inside it
+    const pos = {};
     order.forEach((cls, g) => cls.forEach((c) => c.ids.forEach((id) => {
-      layoutPos[id] = { x: c.x + c.offset[id], y: g * ROWH };
+      pos[id] = { x: c.x + c.offset[id], y: g * ROWH };
     })));
-    compactHorizontal();
+    compactPos(pos);
+    let minX = Infinity, maxX = -Infinity;
+    Object.keys(pos).forEach((id) => { minX = Math.min(minX, pos[id].x); maxX = Math.max(maxX, pos[id].x); });
+    return { pos, minX, maxX };
   }
 
-  // Collapse vertical corridors of empty space that span ALL generations — e.g.
-  // the gap between two large families joined only by one marriage. Preserves
+  // Partition everyone into bloodline families. Union-find over parent↔child
+  // links only — a marriage never merges two families. A person who is blood-
+  // connected to no one (e.g. a second husband with no children in the tree)
+  // is pulled into their spouse's family so they band together rather than
+  // floating off on their own.
+  function lineageComponents(persons, unions, links, uById) {
+    const parent = {}; persons.forEach((p) => (parent[p.id] = p.id));
+    const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+    const unite = (a, b) => { a = find(a); b = find(b); if (a !== b) parent[a] = b; };
+    const has = {}; persons.forEach((p) => (has[p.id] = true));
+    const degree = {}; persons.forEach((p) => (degree[p.id] = 0));
+    links.forEach((l) => {
+      const u = uById[l.union]; if (!u) return;
+      if (has[l.child]) degree[l.child]++;
+      [u.a, u.b].forEach((pid) => {
+        if (pid == null || !has[pid]) return;
+        degree[pid]++;
+        if (has[l.child]) unite(l.child, pid);
+      });
+    });
+    unions.forEach((u) => {
+      if (u.b == null) return;
+      if (has[u.a] && has[u.b]) {
+        if (degree[u.a] === 0) unite(u.a, u.b);
+        if (degree[u.b] === 0) unite(u.b, u.a);
+      }
+    });
+    const groups = {};
+    persons.forEach((p) => { const r = find(p.id); (groups[r] = groups[r] || new Set()).add(p.id); });
+    return Object.values(groups);
+  }
+
+  // Order the bands so families joined by a marriage sit side by side (the bridge
+  // stays short), starting from the largest family; unbridged families follow.
+  function orderComponents(comps, unions) {
+    const compOf = {};
+    comps.forEach((set, i) => set.forEach((id) => (compOf[id] = i)));
+    const adj = comps.map(() => new Set());
+    unions.forEach((u) => {
+      if (u.b == null) return;
+      const ca = compOf[u.a], cb = compOf[u.b];
+      if (ca != null && cb != null && ca !== cb) { adj[ca].add(cb); adj[cb].add(ca); }
+    });
+    const start = comps.map((_, i) => i).sort((a, b) => comps[b].size - comps[a].size);
+    const seen = new Set(), out = [];
+    start.forEach((s) => {
+      if (seen.has(s)) return;
+      const stack = [s];
+      while (stack.length) {
+        const c = stack.shift();
+        if (seen.has(c)) continue;
+        seen.add(c); out.push(comps[c]);
+        [...adj[c]].sort((a, b) => comps[b].size - comps[a].size).forEach((n) => { if (!seen.has(n)) stack.push(n); });
+      }
+    });
+    return out;
+  }
+
+  // Collapse vertical corridors of empty space that span a band — preserves
   // every relative position and vertical alignment; only removes dead space.
-  function compactHorizontal() {
-    const ids = Object.keys(layoutPos);
+  function compactPos(pos) {
+    const ids = Object.keys(pos);
     if (ids.length < 2) return;
     const pad = COLW * 0.55, maxGap = COLW * 1.1;
-    const ivs = ids.map((id) => ({ l: layoutPos[id].x - pad, r: layoutPos[id].x + pad })).sort((a, b) => a.l - b.l);
+    const ivs = ids.map((id) => ({ l: pos[id].x - pad, r: pos[id].x + pad })).sort((a, b) => a.l - b.l);
     const cuts = [];
     let cur = { l: ivs[0].l, r: ivs[0].r };
     for (let i = 1; i < ivs.length; i++) {
@@ -276,8 +371,8 @@
     if (!cuts.length) return;
     ids.forEach((id) => {
       let s = 0;
-      for (const c of cuts) if (layoutPos[id].x > c.x) s += c.amount;
-      layoutPos[id].x -= s;
+      for (const c of cuts) if (pos[id].x > c.x) s += c.amount;
+      pos[id].x -= s;
     });
   }
 
