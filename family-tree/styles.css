@@ -276,3 +276,48 @@ button.btn.danger { color: var(--divorce); }
 .doc-view iframe, .doc-view img { width: 100%; max-height: 60vh; border: 1px solid var(--panel-border); border-radius: 8px; display: block; }
 .doc-view .src { font-size: 12.5px; margin: 4px 0 12px; }
 .doc-view .src a { color: var(--accent-2); }
+
+/* remove the 300ms tap delay & double-tap zoom on controls */
+button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #panelToggle, #hiddenChip { touch-action: manipulation; }
+
+/* ---------- Mobile / small screens ---------- */
+@media (max-width: 720px) {
+  html, body { height: 100dvh; }
+  #app { height: 100dvh; }
+
+  /* panel slides in over the canvas instead of squeezing it */
+  #panel {
+    position: fixed; top: 0; right: 0; bottom: 0; height: 100%;
+    width: min(90vw, 380px); min-width: 0; z-index: 30;
+    transform: translateX(0); transition: transform .25s ease;
+    padding-top: env(safe-area-inset-top);
+  }
+  #panel.collapsed {
+    width: min(90vw, 380px); min-width: 0; overflow: hidden;
+    transform: translateX(100%); border: none;
+  }
+  .panel-body { padding-bottom: 80px; }
+
+  /* bigger, thumb-friendly controls */
+  #toolbar {
+    top: calc(10px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left));
+    padding: 5px; gap: 3px;
+  }
+  #toolbar button { width: 44px; height: 44px; font-size: 20px; }
+  #toolbar .zoomlabel { width: 38px; font-size: 12px; }
+  #panelToggle {
+    top: calc(10px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right));
+    width: 48px; height: 48px; font-size: 21px;
+  }
+  #hiddenChip { top: calc(10px + env(safe-area-inset-top)); }
+
+  /* legend is compact and starts collapsed on phones (tap to expand) */
+  #legend {
+    bottom: calc(10px + env(safe-area-inset-bottom)); left: calc(10px + env(safe-area-inset-left));
+    max-width: 200px; font-size: 11px; padding: 8px 10px;
+  }
+
+  .btn { padding: 11px 12px; }               /* larger tap targets in the panel */
+  .modal { padding: 18px; width: min(460px, 96vw); }
+  .modal-backdrop { padding: 10px; }
+}

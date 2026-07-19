@@ -614,7 +614,32 @@
 
   /* ============================================================ INTERACTION */
   let drag = null;
+  const pointers = new Map();   // every active touch/mouse pointer: id -> {x,y}
+  let pinch = null;             // two-finger zoom state
+  let lastTap = 0;              // for double-tap-to-zoom
+
+  function pinchInfo() {
+    const pts = [...pointers.values()];
+    const dx = pts[0].x - pts[1].x, dy = pts[0].y - pts[1].y;
+    return { dist: Math.hypot(dx, dy) || 1, mx: (pts[0].x + pts[1].x) / 2, my: (pts[0].y + pts[1].y) / 2 };
+  }
+  function startPinch() {
+    drag = null; stage.classList.remove("panning");
+    const r = stage.getBoundingClientRect();
+    const info = pinchInfo();
+    // remember the world point under the pinch centre so it stays put as we scale/pan
+    pinch = {
+      startDist: info.dist, startScale: view.scale,
+      worldX: (info.mx - r.left - view.tx) / view.scale,
+      worldY: (info.my - r.top - view.ty) / view.scale,
+    };
+  }
+
   svg.addEventListener("pointerdown", (e) => {
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { svg.setPointerCapture(e.pointerId); } catch (_) {}
+    if (pointers.size >= 2) { startPinch(); return; }
+
     const badge = e.target.closest && e.target.closest(".doc-badge");
     if (badge) { openDocsForPerson(badge.getAttribute("data-id")); return; }
     const personEl = e.target.closest && e.target.closest(".person");
@@ -630,9 +655,20 @@
       drag = { mode: "pan", startX: e.clientX, startY: e.clientY, tx: view.tx, ty: view.ty };
       stage.classList.add("panning");
     }
-    svg.setPointerCapture(e.pointerId);
   });
+
   svg.addEventListener("pointermove", (e) => {
+    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && pointers.size >= 2) {
+      const r = stage.getBoundingClientRect();
+      const info = pinchInfo();
+      const ns = Math.min(3, Math.max(0.12, pinch.startScale * (info.dist / pinch.startDist)));
+      view.scale = ns;
+      view.tx = (info.mx - r.left) - pinch.worldX * ns;
+      view.ty = (info.my - r.top) - pinch.worldY * ns;
+      applyView();
+      return;
+    }
     if (!drag) return;
     const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
     if (drag.mode === "pan") { view.tx = drag.tx + dx; view.ty = drag.ty + dy; applyView(); }
@@ -642,14 +678,30 @@
       render();
     }
   });
-  svg.addEventListener("pointerup", (e) => {
-    stage.classList.remove("panning");
-    if (drag && drag.mode === "node") {
-      if (!drag.moved) selectPerson(drag.id);
-      else save();
+
+  function endPointer(e) {
+    pointers.delete(e.pointerId);
+    try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
+    if (pointers.size < 2) pinch = null;
+    // lifting one finger of a pinch — keep panning smoothly with the finger left down
+    if (pointers.size === 1 && !drag) {
+      const pt = [...pointers.values()][0];
+      drag = { mode: "pan", startX: pt.x, startY: pt.y, tx: view.tx, ty: view.ty };
+      stage.classList.add("panning");
     }
-    drag = null;
-  });
+    if (pointers.size === 0) {
+      stage.classList.remove("panning");
+      if (drag && drag.mode === "node") { if (!drag.moved) selectPerson(drag.id); else save(); }
+      // double-tap anywhere on the canvas zooms in on that spot (touch only)
+      if (e.pointerType !== "mouse" && (!drag || (drag.mode === "pan"))) {
+        if (e.timeStamp - lastTap < 300) { zoomAt(1.6, e.clientX, e.clientY); lastTap = 0; }
+        else lastTap = e.timeStamp;
+      }
+      drag = null;
+    }
+  }
+  svg.addEventListener("pointerup", endPointer);
+  svg.addEventListener("pointercancel", endPointer);
   stage.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY); }, { passive: false });
 
   /* ============================================================ FORMS */
@@ -1299,6 +1351,12 @@
 
   /* ============================================================ BOOT */
   function boot() {
+    // On phones, start with a clean tree-first view: panel tucked away, legend
+    // collapsed. The ✎ button re-opens the editor / people list.
+    if (window.matchMedia && window.matchMedia("(max-width: 720px)").matches) {
+      $("#panel").classList.add("collapsed");
+      const l = $("#legend"); if (l) { l.classList.add("min"); const t = $("#legendToggle"); if (t) t.textContent = "+"; }
+    }
     autoLayout(); render(); syncTitle(); fitView();
   }
 
