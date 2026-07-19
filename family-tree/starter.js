@@ -4,10 +4,13 @@
  *
  * A few connections are best-guesses from the obituary and are noted below —
  * edit them to match what you know:
- *   • Peter is a child of Michael (Mike) Hauck. Peter's mother isn't in the
- *     obituaries yet — add her and connect her to Michael when you have her.
+ *   • Peter's parents are Michael (Mike) Hauck and Allison Boyd (divorced);
+ *     Michael has since married Jessica (Grams) Hauck. Peter's maternal line is
+ *     Allison → Mary (Eide) Boyd → Palmer Eide. Peter's sister is Lauren
+ *     (Hauck) Glover, married to Danny Glover (daughters Maisy & Willa).
  *   • Families are colour-coded (Hauck blue, Tania's Wheeldon side brown, Goos
- *     green, Fuchs teal, Miller gold); people who married in stay neutral.
+ *     green, Fuchs teal, Miller gold, Peter's mother's Boyd/Eide side crimson);
+ *     people who married in stay neutral.
  *   • Alicen (Peter's wife) is a daughter of Lisa Miller (Alicen's mother, now
  *     divorced from Lee Whiting) — connecting Alicen's maternal side (the Fuchs
  *     / Miller family). Her other 15 Fuchs grandchildren-cousins aren't added.
@@ -64,6 +67,24 @@ var DARLEEN_OBIT = `Fuchs, Darleen G., age 77, formerly of Ramsey, passed away p
 Survived by children, Lisa Whiting (Lee), Linda Oie (Tim), Debra Delaney (Bill), David Fox (Karla) and Christine Drasher (Tom); grandchildren, Melissa (Alex), Sarah (Tyler), Justin (Amanda), Alysha, Emily, Matthew, Jonathan, Alicen, Jake, Laura, Cassandra, Hannah, Mitchell, Kaylee, Madelynn and Alexandra; great-grandchildren, Branden, Brynn, Adley, Camryn and Christian; siblings, Marvel Gorham, Inez Quist, Doris Springer, Kenneth Miller and Robert Miller; and many nieces, nephews, family and friends.
 
 Funeral service 12 noon Tuesday, June 7 at St. John Lutheran Church, 9231 Viking Blvd., Nowthen. Visitation one hour prior to service at church. Private interment. Memorials preferred to the MS Society. Washburn-McReavy Funeral Chapels, Coon Rapids Chapel.`;
+
+var PALMER_OBIT = `Artist, scholar Eide dies at 85 — Sioux Falls.
+
+Palmer Eide, 85, 201 W. 33rd, died Thursday, Aug. 29, in Sioux Valley Hospital.
+
+Dr. Eide was born July 5, 1906, in Sioux Falls. He graduated from Augustana Academy and received his Bachelor of Arts from Augustana College. He attended the Art Institute in Chicago, Ill., Harvard University, Yale University and Cranbrook Academy of Art.
+
+In 1931, he was art instructor at Augustana College and retired in 1971 as professor of art and chairman of the art department. He was visiting Fulbright professor of industrial design at the National College of Art in Lahore, Pakistan, from 1964 to 1965. He was visiting sculptor at Northern Arizona University from 1979 to 1981.
+
+Honors and recognitions he received throughout his lifetime include: from Art Students' League, Art Institute; American Institute of Architects scholarship to Harvard; fellowship, Yale University; Who's Who in American Art; Augustana College Alumni Achievement Award, 1962; honorary doctor of fine arts degree, St. Olaf College, 1968; and the Biennial Governor's Award in the Arts, 1976. His works and art were widely published and exhibited, including at the Chicago Art Institute and the Walker Art Gallery, Minneapolis.
+
+He married Esther Hockenstad on Sept. 1, 1934, in Sioux Falls. She died in 1978. He married Marie Bresee on Nov. 19, 1980, in Sioux Falls.
+
+Survivors include his wife; three sons: Peter, Bullhead City, Ariz.; James Berdahl, Houston, Texas; and Alan Berdahl, Hills, Minn.; one daughter, Mrs. Bruce (Mary) Boyd, Sioux Falls; eight grandchildren; and two great-grandchildren.
+
+Services will be at 1:30 p.m. Monday in First Lutheran Church in Sioux Falls with burial in West Nidaros Cemetery, rural Crooks. Memorials may be directed to Palmer Eide Art Scholarship at Augustana College.
+
+— Argus Leader (Sioux Falls, SD), via Newspapers.com. (Palmer Eide, July 5, 1906 – Aug. 29, 1991.)`;
 
 function P(id, name, sex, opts) {
   opts = opts || {};
@@ -132,6 +153,21 @@ window.FAMILY_TREE_STARTER = {
     // Grandson
     P("peter", "Peter Hauck", "male"),
 
+    // ---- Peter's mother's side (Boyd / Eide) ----
+    P("allison", "Allison Boyd", "female"),        // Peter's mother (divorced from Michael)
+    P("bruceBoyd", "Bruce Boyd", "male"),          // Allison's father
+    P("maryBoyd", "Mary (Eide) Boyd", "female"),   // Allison's mother
+    P("palmer", "Palmer Eide", "male", { birth: 1906, death: 1991, deceased: true,
+      docs: [{ id: "obit_palmer", title: "Obituary — Argus Leader (Newspapers.com)", url: "", capturedAt: "2026-07-19", kind: "text", content: PALMER_OBIT }] }),
+    P("esther", "Esther (Hockenstad) Eide", "female", { death: 1978, deceased: true }), // Mary's mother
+    // Michael's current wife
+    P("jessica", "Jessica (Grams) Hauck", "female"),
+    // ---- Peter's sister and her family (Glover) ----
+    P("lauren", "Lauren (Hauck) Glover", "female"),
+    P("danny", "Daniel “Danny” Glover", "male"),
+    P("maisy", "Maisy Glover", "female"),
+    P("willa", "Willa Glover", "female"),
+
     // ---- Alicen's side (Peter's wife) ----
     P("alicen", "Alicen Hauck", "female"),
     // Alicen's maternal grandparents (Fuchs) and their parents
@@ -169,11 +205,16 @@ window.FAMILY_TREE_STARTER = {
     U("u_rhonda", "rhonda", "marvin"),
     U("u_marcine", "marcine", "alvin"),
     U("u_bill", "bill", "kristi"),
-    U("u_michael", "michael", null),
+    U("u_michaelAllison", "michael", "allison", "divorced"),
+    U("u_michaelJessica", "michael", "jessica"),
     U("u_peggyM", "peggyM", "todd"),
     U("u_anne", "anne", "dennis"),
     U("u_david", "david", "norma"),
     U("u_robertjay", "robertjay", "marilyn"),
+    // Peter's mother's side (Boyd / Eide) and sister's family (Glover)
+    U("u_maryBoyd", "bruceBoyd", "maryBoyd"),
+    U("u_palmer", "palmer", "esther"),
+    U("u_lauren", "danny", "lauren"),
     // Alicen's side
     U("u_peteralicen", "peter", "alicen"),
     U("u_edwardf", "edwardf", "alicef"),
@@ -193,7 +234,11 @@ window.FAMILY_TREE_STARTER = {
     L("u_valprior", "teresa"), L("u_valprior", "barney"), L("u_valprior", "fritz"), L("u_valprior", "marian"),
     L("u_hauck", "michael"), L("u_hauck", "bill"), L("u_hauck", "peggyM"),
     L("u_bobprior", "anne"), L("u_bobprior", "david"), L("u_bobprior", "robertjay"),
-    L("u_michael", "peter"),
+    L("u_michaelAllison", "peter"), L("u_michaelAllison", "lauren"),
+    // Peter's mother's side (Boyd / Eide) and sister's family (Glover)
+    L("u_palmer", "maryBoyd"),
+    L("u_maryBoyd", "allison"),
+    L("u_lauren", "maisy"), L("u_lauren", "willa"),
     // Alicen's side
     L("u_edwardf", "harlan"),
     L("u_arthurm", "darleen"),
@@ -208,10 +253,11 @@ window.FAMILY_TREE_STARTER = {
 (function () {
   var groups = {
     "#9e6b3f": ["cecil", "elvera", "dick", "tania", "audrey", "peggyH", "rhonda", "marcine", "don"], // Tania's Wheeldon/Reiners side (brown)
-    "#2f6fb0": ["valentine", "maryk", "wm", "jerry", "jamesm", "donna", "joann", "janice", "cynthia", "teresa", "barney", "fritz", "marian", "michael", "bill", "peggyM", "peter"], // Hauck (blue)
+    "#2f6fb0": ["valentine", "maryk", "wm", "jerry", "jamesm", "donna", "joann", "janice", "cynthia", "teresa", "barney", "fritz", "marian", "michael", "bill", "peggyM", "peter", "lauren"], // Hauck (blue)
     "#3f8f5a": ["bob", "anne", "david", "robertjay"], // Goos (green)
     "#2a9d9d": ["edwardf", "alicef", "harlan", "lisa", "linda", "debra", "davef", "christine", "alicen"], // Fuchs (teal)
     "#bf8b30": ["arthurm", "myrtlem", "darleen"], // Miller (gold)
+    "#b5495b": ["palmer", "esther", "maryBoyd", "allison"], // Peter's mother's side, Boyd / Eide (crimson)
   };
   var byId = {};
   window.FAMILY_TREE_STARTER.persons.forEach(function (p) { byId[p.id] = p; });

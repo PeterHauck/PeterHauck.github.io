@@ -29,7 +29,7 @@
   let pendingPhoto = null;   // dataURL staged in the person form
   let formSex = "male";
   let formColor = "";
-  const FAMILY_COLORS = ["#2f6fb0", "#9e6b3f", "#3f8f5a", "#2a9d9d", "#bf8b30", "#8a4f80"];
+  const FAMILY_COLORS = ["#2f6fb0", "#9e6b3f", "#3f8f5a", "#2a9d9d", "#bf8b30", "#b5495b", "#8a4f80"];
 
   function blankState() {
     return { title: "Family Tree", subtitle: "", persons: [], unions: [], links: [], manual: {}, hidden: {} };
@@ -177,9 +177,9 @@
     const cUnions = unions.filter((u) => idSet.has(u.a) && (u.b == null || idSet.has(u.b)));
     const cLinks = links.filter((l) => { const u = uById[l.union]; return idSet.has(l.child) && u && idSet.has(u.a); });
 
-    // which bloodline family each person belongs to (contiguity grouping)
+    // which surname/descent family each person belongs to (contiguity grouping)
     const familyId = {};
-    lineageComponents(cPersons, cUnions, cLinks, uById).forEach((set, i) => set.forEach((id) => (familyId[id] = i)));
+    descentFamilies(cPersons, cUnions, cLinks, uById).forEach((set, i) => set.forEach((id) => (familyId[id] = i)));
 
     // adjacency to neighbouring generations (within this family only)
     const childrenOf = {}, parentsOf = {};
@@ -243,18 +243,28 @@
     }
     // (3) family contiguity: keep every bloodline family together as one block,
     // ordered by the family's overall horizontal centre. This stops unrelated
-    // families from interleaving or sitting over one another, while the couples
-    // that join two families still land next to each other (their barycentres
-    // are adjacent), preserving the meet-in-the-middle convergence.
-    const clusterFam = (c) => { for (const id of c.ids) if (familyId[id] != null) return familyId[id]; return -1; };
+    // families from interleaving or sitting over one another. A couple that
+    // BRIDGES two families is keyed to the AVERAGE of the two families' centres,
+    // so it sorts to the boundary BETWEEN them — the two spouses end up at the
+    // adjacent ends of their family lines, with each family's siblings kept to
+    // their own side rather than squeezed between the couple.
+    const clusterFamKey = (c, famBary) => {
+      let sum = 0, n = 0; const seen = {};
+      for (const id of c.ids) {
+        const f = familyId[id];
+        if (f == null || seen[f] || !(f in famBary)) continue;
+        seen[f] = 1; sum += famBary[f]; n++;
+      }
+      return n ? sum / n : null;
+    };
     for (let pass = 0; pass < 4; pass++) {
       const acc = {}, cnt = {};
       for (const id in colIndex) { const f = familyId[id]; if (f == null) continue; acc[f] = (acc[f] || 0) + colIndex[id]; cnt[f] = (cnt[f] || 0) + 1; }
       const famBary = {}; for (const f in acc) famBary[f] = acc[f] / cnt[f];
       for (let g = 0; g <= maxGen; g++) {
         order[g].forEach((c, i) => {
-          const f = clusterFam(c);
-          c._famB = f in famBary ? famBary[f] : i;
+          const k = clusterFamKey(c, famBary);
+          c._famB = k != null ? k : i;
           c._inB = c.ids[0] in colIndex ? colIndex[c.ids[0]] : i;
         });
         order[g] = stableSort(order[g], (a, b) => (a._famB - b._famB) || (a._inB - b._inB));
@@ -331,6 +341,44 @@
         if (degree[u.a] === 0) unite(u.a, u.b);
         if (degree[u.b] === 0) unite(u.b, u.a);
       }
+    });
+    const groups = {};
+    persons.forEach((p) => { const r = find(p.id); (groups[r] = groups[r] || new Set()).add(p.id); });
+    return Object.values(groups);
+  }
+
+  // Partition everyone into surname/descent families for layout grouping. Unlike
+  // lineageComponents, a marriage does NOT merge two families and a child follows
+  // only ONE parent up the tree — so each surname line stays its own block (Eide,
+  // Boyd, Fuchs, Miller, Hauck…). Blocks meet their in-laws at the marriage that
+  // joins them, which is what gives the "one family on each side, converging in
+  // the middle" shape at every level. A person who married in (no parents in the
+  // tree) joins their spouse's family.
+  function descentFamilies(persons, unions, links, uById) {
+    const has = {}; persons.forEach((p) => (has[p.id] = true));
+    // each child's birth union (prefer a biological link over an adoptive one)
+    const bioUnion = {};
+    links.forEach((l) => { if (l.type !== "adopted" && !(l.child in bioUnion)) bioUnion[l.child] = l.union; });
+    links.forEach((l) => { if (!(l.child in bioUnion)) bioUnion[l.child] = l.union; });
+    const hasParents = (id) => id in bioUnion && !!uById[bioUnion[id]];
+    // the single parent a child inherits its family from: prefer a parent who is
+    // themselves rooted in the tree (continues a lineage), else the first parent.
+    const primaryParent = {};
+    persons.forEach((p) => {
+      const u = uById[bioUnion[p.id]]; if (!u) return;
+      const cand = [u.a, u.b].filter((x) => x != null && has[x]);
+      if (!cand.length) return;
+      primaryParent[p.id] = cand.find((x) => hasParents(x)) || cand[0];
+    });
+    const parent = {}; persons.forEach((p) => (parent[p.id] = p.id));
+    const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+    const unite = (a, b) => { a = find(a); b = find(b); if (a !== b) parent[a] = b; };
+    persons.forEach((p) => { if (primaryParent[p.id] != null) unite(p.id, primaryParent[p.id]); });
+    // married-in people (no parents in the tree) join their spouse's family
+    unions.forEach((u) => {
+      if (u.b == null || !has[u.a] || !has[u.b]) return;
+      if (!hasParents(u.a)) unite(u.a, u.b);
+      if (!hasParents(u.b)) unite(u.b, u.a);
     });
     const groups = {};
     persons.forEach((p) => { const r = find(p.id); (groups[r] = groups[r] || new Set()).add(p.id); });
