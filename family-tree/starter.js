@@ -6,10 +6,11 @@
  * edit them to match what you know:
  *   • Peter is placed as a child of Bill & Kristi Hauck (both of Sioux Falls).
  *     If Peter's parent is Michael instead, just move him.
- *   • William E. Hauck (first husband) isn't marked deceased — the 2012
- *     obituary doesn't say. Mark him if appropriate.
- *   • Step relationships (Reiners/Straatmeyer side) are modeled from the
- *     obituary's wording; adjust half/step details as needed.
+ *   • Tania & William Hauck are shown divorced (both remarried in 1988 per
+ *     his memorial); his profile carries the Find a Grave memorial text.
+ *   • Step/half relationships (Reiners/Straatmeyer and the Hauck half-siblings
+ *     via Valentine's earlier marriage) are modeled from the sources' wording;
+ *     adjust as needed.
  *
  * Once you edit anything, your work saves in this browser and this starter
  * stops loading. To reload it fresh, use "Clear everything" in the editor. */
@@ -31,6 +32,24 @@ Tania was preceded in death by her mother and father, Cecil and Elvera Wheeldon,
 Official Obituary of Tania Goos — December 22, 1933 – November 25, 2012.
 Spitzer-Miller Funeral Home, 1111 South Main Street, Aberdeen, SD 57401 · (605) 225-8223.`;
 
+var WM_MEMORIAL = `William E. "Bill" Hauck — Birth: 23 Jun 1934, Aberdeen, Brown County, South Dakota. Death: 23 May 1991 (aged 56), Sioux Falls, Minnehaha County, South Dakota. Burial: Saint Johns Lutheran Church Cemetery, Aberdeen, SD. Find a Grave Memorial ID 120694670.
+
+MINA — The funeral for William "Bill" E. Hauck, 56, of Mina and a former Aberdeen mayor and businessman, will be at 11 a.m. Monday at St. Paul's Lutheran Church, 214 Seventh Ave. S.W. The Rev. Ronald Laue will officiate. Visitation will be from 3 p.m. to 9 p.m. Sunday at Miller-Huebl Funeral Home, 1111 S. Main St., and one hour prior to the service Monday at the church. He died Thursday, May 23, 1991, of natural causes at Sioux Valley Hospital in Sioux Falls.
+
+William E. Hauck was born June 23, 1934, to Valentine F. and Mary K. (Kessler) Hauck at Aberdeen. He graduated from Central High School in 1952. He was an outstanding athlete and was the state 100 yard dash champion. He served in the Naval Cadets from 1952 to 1954. In 1958 he received a business administration degree from the University of South Dakota in Vermillion. He was named a Little All-American for his achievements as a halfback on the USD football team. Following college, he was a salesman for Pfizer Pharmaceutical for five years.
+
+He married Tania J. Wheeldon on Dec. 26, 1962, in Sioux Falls. He returned to USD, where he received a juris doctorate degree in 1966. Following law school, he worked as a trust officer at the National Bank of South Dakota in Sioux Falls. He returned to Aberdeen, where he began a private law practice and entered politics. He was elected to the Brown County Commission in 1968 and served as mayor of Aberdeen from 1969 to 1972. During his term as mayor, he initiated the sales tax that widened Dakota Street and reopened Wylie Park. He also was instrumental in developing Aberdeen's Industrial Park. He sold real estate for Harley Hoffman Realty until 1972. He was appointed by Gov. Richard Kneip as director of South Dakota Job Service. In 1978 he moved to Denton, Texas, where he started developing Super 8 Motels. In 1981 he returned to South Dakota. He remained active in motel development and became a partial owner of Idea Development Inc.
+
+He married Evelyn Lester Orr on Oct. 21, 1988, in Sioux Falls. He was an avid hunter, fisherman and owned interests in pheasant and goose farms. He was a member of Pheasants Forever, Sigma Alpha Epsilon Fraternity, USD Alumni Association and USD Letter Club.
+
+Survivors include his wife of Mina; his mother of Aberdeen; two sons, Michael Hauck of Sioux Falls, and Bill Hauck Jr. of Aberdeen; two stepsons, Nolan Orr and Robert Orr, both of Aberdeen; one daughter, Peggy Hauck, of Aberdeen; three stepdaughters, Mrs. Ben (Susan) Michaud of Atlanta, Ga., Kerry Orr of Albuquerque, N.M., and Angie Persing of Sioux Falls; one brother, Jerry A. Hauck of Sioux Falls; two half brothers, Barney Hauck of Sioux Falls and Fritz Hauck of Omaha, Neb.; four sisters, Mrs. Bill (Donna) Izlar of Atlanta, Mrs. Eugene (Joann) Edison of Kansas City, Mo., Mrs. Jack (Janice) Schuver, and Mrs. Terry (Cynthia) Slattery, both of Sioux Falls; two half sisters, Mrs. John (Teresa) Ressa of Spokane, Wa., and Mrs. Bob (Marian) Unkrur of Tacoma, Wa.; and one granddaughter.
+
+He was preceded in death by his father, one brother and one half brother.
+
+— Aberdeen (SD) American News, Sunday, May 26, 1991, Page 2B.
+
+Family (Find a Grave): Parents — Valentine Felix Hauck (1894–1974), Mary A. Kessler Hauck (1906–1994). Spouse — Evelyn M. "Evie" Lester Orr Hauck (1932–2013, m. 1988). Siblings — Teresa Elma Hauck Ressa (1924–1999), Donna Hauck Izlar (1930–2019), James Michael Hauck (1944–1987). Half siblings — Sgt Bernard J. Hauck (1920–2008), Francis Joseph "Fritz" Hauck (1923–2015).`;
+
 function P(id, name, sex, opts) {
   opts = opts || {};
   return { id, name, sex, birth: opts.birth || null, death: opts.death || null, deceased: !!opts.deceased, photo: null, docs: opts.docs || [] };
@@ -46,6 +65,9 @@ window.FAMILY_TREE_STARTER = {
     P("cecil", "Cecil Wheeldon", "male", { deceased: true }),
     P("elvera", "Elvera (Larson) Wheeldon", "female", { deceased: true }),
     P("dick", "Dick H. Reiners", "male", { deceased: true }),
+    // William's parents (Peter's paternal great-grandparents)
+    P("valentine", "Valentine F. Hauck", "male", { birth: 1894, death: 1974, deceased: true }),
+    P("maryk", "Mary A. (Kessler) Hauck", "female", { birth: 1906, death: 1994, deceased: true }),
     // Tania
     P("tania", "Tania Goos", "female", {
       birth: 1933, death: 2012,
@@ -61,7 +83,11 @@ window.FAMILY_TREE_STARTER = {
     P("alvin", "Alvin Straatmeyer", "male"),
     P("don", "Don Reiners", "male"),
     // Tania's husbands
-    P("wm", "William E. Hauck", "male"),
+    P("wm", "William E. “Bill” Hauck", "male", {
+      birth: 1934, death: 1991, deceased: true,
+      docs: [{ id: "mem_wm", title: "Find a Grave — William E. “Bill” Hauck", url: "https://www.findagrave.com/memorial/120694670", capturedAt: "2026-07-19", kind: "text", content: WM_MEMORIAL }],
+    }),
+    P("evelyn", "Evelyn “Evie” (Lester) Orr Hauck", "female", { birth: 1932, death: 2013, deceased: true }),
     P("bob", "Robert S. “Bob” Goos", "male"),
     // Tania's children (Hauck)
     P("michael", "Michael Hauck", "male"),
@@ -76,6 +102,18 @@ window.FAMILY_TREE_STARTER = {
     P("norma", "Norma Goos", "female"),
     P("robertjay", "Robert Jay Goos", "male"),
     P("marilyn", "Marilyn Goos", "female"),
+    // William's siblings (children of Valentine & Mary)
+    P("jerry", "Jerry A. Hauck", "male"),
+    P("jamesm", "James Michael Hauck", "male", { birth: 1944, death: 1987, deceased: true }),
+    P("donna", "Donna (Hauck) Izlar", "female", { birth: 1930, death: 2019, deceased: true }),
+    P("joann", "Joann (Hauck) Edison", "female"),
+    P("janice", "Janice (Hauck) Schuver", "female"),
+    P("cynthia", "Cynthia (Hauck) Slattery", "female"),
+    // William's half-siblings (Valentine's children from an earlier marriage)
+    P("teresa", "Teresa (Hauck) Ressa", "female", { birth: 1924, death: 1999, deceased: true }),
+    P("barney", "Bernard “Barney” J. Hauck", "male", { birth: 1920, death: 2008, deceased: true }),
+    P("fritz", "Francis “Fritz” Hauck", "male", { birth: 1923, death: 2015, deceased: true }),
+    P("marian", "Marian (Hauck) Unkrur", "female"),
     // Grandson
     P("peter", "Peter Hauck", "male"),
   ],
@@ -83,7 +121,10 @@ window.FAMILY_TREE_STARTER = {
     U("u_wheeldon", "cecil", "elvera"),
     U("u_reiners", "elvera", "dick"),
     U("u_dickprior", "dick", null),
-    U("u_hauck", "tania", "wm"),
+    U("u_haugp", "valentine", "maryk"),
+    U("u_valprior", "valentine", null),
+    U("u_hauck", "tania", "wm", "divorced"),
+    U("u_wmEvelyn", "wm", "evelyn"),
     U("u_goos", "tania", "bob"),
     U("u_bobprior", "bob", null),
     U("u_peggyH", "peggyH", "si"),
@@ -99,6 +140,8 @@ window.FAMILY_TREE_STARTER = {
     L("u_wheeldon", "tania"), L("u_wheeldon", "peggyH"), L("u_wheeldon", "rhonda"),
     L("u_reiners", "audrey"),
     L("u_dickprior", "don"), L("u_dickprior", "marcine"),
+    L("u_haugp", "wm"), L("u_haugp", "jerry"), L("u_haugp", "jamesm"), L("u_haugp", "donna"), L("u_haugp", "joann"), L("u_haugp", "janice"), L("u_haugp", "cynthia"),
+    L("u_valprior", "teresa"), L("u_valprior", "barney"), L("u_valprior", "fritz"), L("u_valprior", "marian"),
     L("u_hauck", "michael"), L("u_hauck", "bill"), L("u_hauck", "peggyM"),
     L("u_bobprior", "anne"), L("u_bobprior", "david"), L("u_bobprior", "robertjay"),
     L("u_bill", "peter"),
