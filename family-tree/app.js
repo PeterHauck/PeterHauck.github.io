@@ -18,6 +18,8 @@
   const COLW = 168;   // horizontal spacing between two people
   const ROWH = 250;   // vertical spacing between generations
   const CLUSTER_GAP = COLW * 0.7; // min horizontal gap between unrelated family clusters
+  const FAM_GAP = COLW * 0.7;     // extra breathing room between different surname families
+  const SIDE_GAP = COLW * 1.4;    // extra breathing room between the two sides (each spouse's relatives)
   const HALF = 46;    // half the visual footprint of a shape
 
   /* ---------------------------------------------------------------- state */
@@ -306,12 +308,23 @@
     }));
     reindex();
 
-    // assign x coordinates, cluster granularity, refined toward neighbours
+    // assign x coordinates, cluster granularity, refined toward neighbours.
+    // Favour clarity over compactness: leave extra space between different
+    // surname families, and more between the two sides, so each group reads as
+    // its own cluster with clear whitespace around it.
     const memberX = (c, id) => c.x + c.offset[id];
+    const cFam = (c) => { for (const id of c.ids) if (familyId[id] != null) return familyId[id]; return -1; };
+    const cComp = (c) => { for (const id of c.ids) if (componentId[id] != null) return componentId[id]; return -1; };
+    const gapBetween = (a, b) => {
+      if (!a) return CLUSTER_GAP;
+      if (cComp(a) !== cComp(b)) return CLUSTER_GAP + SIDE_GAP;
+      if (cFam(a) !== cFam(b)) return CLUSTER_GAP + FAM_GAP;
+      return CLUSTER_GAP;
+    };
     const assignCoords = () => {
       order.forEach((cls) => {
-        let x = 0;
-        cls.forEach((c) => { c.x = x; x += c.width + CLUSTER_GAP; });
+        let x = 0, prev = null;
+        cls.forEach((c) => { x += prev ? gapBetween(prev, c) - CLUSTER_GAP : 0; c.x = x; x += c.width + CLUSTER_GAP; prev = c; });
       });
       for (let pass = 0; pass < 14; pass++) {
         const down = pass % 2 === 0;
@@ -330,11 +343,12 @@
             c._desired = cnt ? sum / cnt : c.x;
           });
           // resolve left-to-right so clusters never overlap, but honour desired
-          let prevRight = -Infinity;
+          let prevRight = -Infinity, prevC = null;
           order[g].forEach((c) => {
+            const gap = gapBetween(prevC, c);
             let nx = c._desired;
-            if (nx < prevRight + CLUSTER_GAP) nx = prevRight + CLUSTER_GAP;
-            c.x = nx; prevRight = c.x + c.width;
+            if (nx < prevRight + gap) nx = prevRight + gap;
+            c.x = nx; prevRight = c.x + c.width; prevC = c;
           });
         });
       }
