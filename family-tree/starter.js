@@ -4,7 +4,7 @@
  *
  * A few connections are best-guesses from the obituary and are noted below —
  * edit them to match what you know:
- *   • Peter's parents are Michael (Mike) Hauck and Allison Boyd (divorced);
+ *   • Peter's parents are Michael “Mike” Hauck and Allison Boyd (divorced);
  *     Michael has since married Jessica (Grams) Hauck. Peter's maternal line is
  *     Allison → Mary (Eide) Boyd → Palmer Eide. Peter's sister is Lauren
  *     (Hauck) Glover, married to Danny Glover (daughters Maisy & Willa).
@@ -97,7 +97,7 @@ window.FAMILY_TREE_STARTER = {
   // Bump this whenever the tree data below changes. On load, a higher version
   // here beats an older copy saved in the browser, so updates always show and a
   // stale local copy can't get "stuck".
-  version: 3,
+  version: 4,
   title: "The Hauck / Goos Family",
   subtitle: "Started from Tania Goos's obituary",
   persons: [
@@ -109,17 +109,17 @@ window.FAMILY_TREE_STARTER = {
     P("valentine", "Valentine F. Hauck", "male", { birth: 1894, death: 1974, deceased: true }),
     P("maryk", "Mary A. (Kessler) Hauck", "female", { birth: 1906, death: 1994, deceased: true }),
     // Tania
-    P("tania", "Tania Goos", "female", {
+    P("tania", "Tania (Wheeldon) Goos", "female", {
       birth: 1933, death: 2012,
       docs: [{ id: "obit_tania", title: "Obituary — Spitzer-Miller Funeral Home", url: "https://www.spitzerfuneralhome.com/obituaries/Tania-Goos?obId=173128", capturedAt: "2026-07-19", kind: "text", content: TANIA_OBIT }],
     }),
     // Tania's siblings
     P("audrey", "Audrey Reiners", "female", { deceased: true }),
-    P("peggyH", "Peggy Herrmann", "female"),
+    P("peggyH", "Peggy (Wheeldon) Herrmann", "female"),
     P("si", "Si Nieber", "male"),
-    P("rhonda", "Rhonda Buckneburg", "female"),
+    P("rhonda", "Rhonda (Wheeldon) Buckneburg", "female"),
     P("marvin", "Marvin Buckneburg", "male"),
-    P("marcine", "Marcine Straatmeyer", "female"),
+    P("marcine", "Marcine (Reiners) Straatmeyer", "female"),
     P("alvin", "Alvin Straatmeyer", "male"),
     P("don", "Don Reiners", "male"),
     // Tania's husbands
@@ -130,10 +130,10 @@ window.FAMILY_TREE_STARTER = {
     P("evelyn", "Evelyn “Evie” (Lester) Orr Hauck", "female", { birth: 1932, death: 2013, deceased: true }),
     P("bob", "Robert S. “Bob” Goos", "male"),
     // Tania's children (Hauck)
-    P("michael", "Michael (Mike) Hauck", "male"),
+    P("michael", "Michael “Mike” Hauck", "male"),
     P("bill", "Bill Hauck", "male"),
     P("kristi", "Kristi Hauck", "female"),
-    P("peggyM", "Peggy McCaghy", "female"),
+    P("peggyM", "Peggy (Hauck) McCaghy", "female"),
     P("todd", "Todd McCaghy", "male"),
     // Bob's children (Tania's step-children)
     P("anne", "Anne Dow", "female"),
@@ -167,7 +167,7 @@ window.FAMILY_TREE_STARTER = {
     // Allison's brother (Peter's uncle) and his family
     P("aaron", "Aaron Boyd", "male"),
     P("shannon", "Shannon Boyd", "female"),
-    P("josie", "Josephine (Josie) Boyd", "female"),
+    P("josie", "Josephine “Josie” Boyd", "female"),
     P("palmerBoyd", "Palmer Boyd", "male"),
     // Michael's current wife
     P("jessica", "Jessica (Grams) Hauck", "female"),
@@ -195,13 +195,13 @@ window.FAMILY_TREE_STARTER = {
     // Harlan & Darleen's children (Alicen's mother + aunts/uncle)
     P("lisa", "Lisa Miller", "female"),
     P("lee", "Lee Whiting", "male"),
-    P("linda", "Linda Oie", "female"),
+    P("linda", "Linda (Fuchs) Oie", "female"),
     P("timo", "Tim Oie", "male"),
-    P("debra", "Debra Delaney", "female"),
+    P("debra", "Debra (Fuchs) Delaney", "female"),
     P("billd", "Bill Delaney", "male"),
     P("davef", "David “Dave” Fox", "male"),
     P("karla", "Karla Fox", "female"),
-    P("christine", "Christine Drasher", "female"),
+    P("christine", "Christine (Fuchs) Drasher", "female"),
     P("tomd", "Tom Drasher", "male"),
   ],
   unions: [

@@ -31,6 +31,8 @@
   let rearrange = false;     // "Rearrange" mode — people only move while this is on
   let selection = new Set(); // ids selected by the marquee box (for group moves)
   let marquee = null;        // {x0,y0,x1,y1} world-coords while dragging a select box
+  let undoStack = [];        // snapshots for Cmd/Ctrl+Z
+  let redoStack = [];
   let view = { tx: 0, ty: 0, scale: 1 };
   let pendingPhoto = null;   // dataURL staged in the person form
   let formSex = "male";
@@ -737,17 +739,10 @@
     const cstyle = famColor ? "stroke:" + famColor + ";stroke-width:2.8" : null;
 
     const childTops = kids.map((k) => ({ x: posOf(k.p.id).x, top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
-    // Drop the descent from the point on the marriage line closest to the
-    // children's centre (not always the couple's geometric midpoint) so the line
-    // heads toward the kids instead of straight down over whoever happens to sit
-    // below the middle of the couple — which otherwise reads as a false parent
-    // link to that person.
-    let dropX = midX;
-    if (pb) {
-      const kidsCenter = childTops.reduce((s, c) => s + c.x, 0) / childTops.length;
-      const lo = Math.min(A.x, B.x) + HALF, hi = Math.max(A.x, B.x) - HALF;
-      dropX = hi >= lo ? Math.max(lo, Math.min(hi, kidsCenter)) : midX;
-    }
+    // The descent always drops from the CENTRE of the marriage line (midway
+    // between husband and wife) and goes straight down; the horizontal bus then
+    // carries across to the children.
+    const dropX = midX;
     // Place the sibling bus in the clear band BELOW the parents' name labels and
     // ABOVE the children. Each overlapping bus gets its own level (see
     // computeBusLevels) so no two buses run along the same line.
@@ -909,7 +904,7 @@
         if (!selection.has(id)) { selection = new Set([id]); render(); }
         const starts = {};
         selection.forEach((pid) => { const p = posOf(pid); starts[pid] = { x: p.x, y: p.y }; });
-        drag = { mode: "group", id, startX: e.clientX, startY: e.clientY, starts, moved: false };
+        drag = { mode: "group", id, startX: e.clientX, startY: e.clientY, starts, moved: false, pre: snapshot() };
       } else {
         const w = toWorld(e.clientX, e.clientY);
         drag = { mode: "marquee", startX: e.clientX, startY: e.clientY, moved: false };
@@ -966,7 +961,7 @@
     }
     if (pointers.size === 0) {
       stage.classList.remove("panning");
-      if (drag && drag.mode === "group") { if (drag.moved) save(); else if (drag.id) selectPerson(drag.id); }
+      if (drag && drag.mode === "group") { if (drag.moved) { pushUndo(drag.pre); save(); } else if (drag.id) selectPerson(drag.id); }
       else if (drag && drag.mode === "marquee") {
         if (drag.moved && marquee) {
           const x0 = Math.min(marquee.x0, marquee.x1), x1 = Math.max(marquee.x0, marquee.x1);
@@ -1031,6 +1026,7 @@
     // then swap: this person's block slides right by the gap, the sibling's left.
     const a = [...familyBlock(selectedId)].map((pid) => ({ pid, p: posOf(pid) }));
     const b = [...familyBlock(other)].map((pid) => ({ pid, p: posOf(pid) }));
+    pushUndo();
     a.forEach(({ pid, p }) => (state.manual[pid] = { x: p.x + delta, y: p.y }));
     b.forEach(({ pid, p }) => (state.manual[pid] = { x: p.x - delta, y: p.y }));
     save(); render();
@@ -1554,8 +1550,60 @@
   function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(exportObject())); } catch (e) { console.warn("save failed", e); } }
   function hasLocalData() { try { const s = localStorage.getItem(STORE_KEY); return s && JSON.parse(s).persons && JSON.parse(s).persons.length; } catch (e) { return false; } }
   function loadLocal() { try { const s = localStorage.getItem(STORE_KEY); if (s) loadObject(JSON.parse(s)); } catch (e) { console.warn(e); } }
+  // When a newer starter replaces the saved copy, keep the user's personal
+  // arrangement from that old copy: dragged positions, hidden people, and the
+  // focus centre — for people who still exist. Everything else comes fresh.
+  function carryOverLocalPrefs() {
+    let old = null;
+    try { const s = localStorage.getItem(STORE_KEY); if (s) old = JSON.parse(s); } catch (e) {}
+    if (!old) return;
+    const ids = new Set(state.persons.map((p) => p.id));
+    if (old.manual && typeof old.manual === "object") {
+      const m = {}; for (const id in old.manual) if (ids.has(id)) m[id] = old.manual[id];
+      state.manual = m;
+    }
+    if (old.hidden && typeof old.hidden === "object") {
+      const h = {}; for (const id in old.hidden) if (ids.has(id) && old.hidden[id]) h[id] = true;
+      state.hidden = h;
+    }
+    if (Array.isArray(old.focus)) {
+      const f = old.focus.filter((id) => ids.has(id));
+      if (f.length) state.focus = f;
+    }
+  }
 
   function relayoutAndSave() { autoLayout(); render(); save(); syncTitle(); }
+
+  /* -------- undo / redo (Cmd/Ctrl+Z) -------- */
+  function snapshot() { return JSON.stringify(exportObject()); }
+  // Record the state BEFORE a change so it can be undone. Pass the pre-change
+  // snapshot if you captured it earlier (e.g. before a drag), else it snapshots now.
+  function pushUndo(pre) { undoStack.push(pre != null ? pre : snapshot()); if (undoStack.length > 80) undoStack.shift(); redoStack = []; }
+  function restoreSnapshot(s) {
+    try { loadObject(JSON.parse(s)); } catch (e) { return false; }
+    selection = new Set(); marquee = null; updateMarquee();
+    autoLayout(); render(); save(); syncTitle(); updateHiddenChip();
+    return true;
+  }
+  function undo() {
+    if (!undoStack.length) { toast("Nothing to undo"); return; }
+    const cur = snapshot();
+    if (restoreSnapshot(undoStack.pop())) { redoStack.push(cur); toast("Undone"); }
+  }
+  function redo() {
+    if (!redoStack.length) { toast("Nothing to redo"); return; }
+    const cur = snapshot();
+    if (restoreSnapshot(redoStack.pop())) { undoStack.push(cur); toast("Redone"); }
+  }
+  document.addEventListener("keydown", (e) => {
+    const mod = e.metaKey || e.ctrlKey;
+    if (!mod) return;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return; // let text fields keep their own undo
+    const k = e.key.toLowerCase();
+    if (k === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
+    else if ((k === "z" && e.shiftKey) || k === "y") { e.preventDefault(); redo(); }
+  });
 
   /* ============================================================ MISC UI */
   function toast(msg) {
@@ -1579,7 +1627,7 @@
   $("#tbAdd").onclick = () => { resetPersonForm(); $("#pName").focus(); ensurePanel(); };
   $("#tbUnion").onclick = openUnionModal;
   $("#tbChild").onclick = openChildModal;
-  $("#tbArrange").onclick = () => { state.manual = {}; selection = new Set(); relayoutAndSave(); fitView(); toast("Auto-arranged"); };
+  $("#tbArrange").onclick = () => { pushUndo(); state.manual = {}; selection = new Set(); relayoutAndSave(); fitView(); toast("Auto-arranged"); };
   $("#tbFit").onclick = fitView;
   $("#tbRearrange").onclick = () => setRearrange(!rearrange);
   $("#sibLeftBtn").onclick = () => shiftSibling(-1);
@@ -1729,7 +1777,15 @@
     const starter = window.FAMILY_TREE_STARTER;
     const starterV = (starter && typeof starter === "object" && starter.version) || 0;
     if (hasLocalData() && savedVersion() >= starterV) loadLocal();
-    else if (starter && typeof starter === "object") loadObject(starter);
+    else if (starter && typeof starter === "object") {
+      const hadLocal = hasLocalData();
+      loadObject(starter);
+      // A newer built-in tree just replaced the saved copy so name/data fixes
+      // land — but carry over the user's own arrangements (dragged positions,
+      // what they've hidden, where the view is centred) from the old local copy
+      // so their rearranging isn't wiped by the update.
+      if (hadLocal) { carryOverLocalPrefs(); save(); }
+    }
     else if (hasLocalData()) loadLocal();
     boot();
   }
