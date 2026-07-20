@@ -170,8 +170,22 @@ button.btn.danger { color: var(--divorce); }
   background: transparent; cursor: pointer; font-size: 16px; display:flex;align-items:center;justify-content:center;
 }
 #toolbar button:hover { background: var(--paper); border-color: var(--panel-border); }
+#toolbar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 #toolbar .sep { width:1px; height:22px; background: var(--panel-border); margin:0 2px; }
 #toolbar .zoomlabel { font-size:12px; color:var(--muted); width:44px; text-align:center; }
+
+/* Rearrange mode: marquee box, multi-selection highlight */
+#stage.rearranging { cursor: crosshair; }
+#stage.rearranging .person { cursor: move; }
+#marquee {
+  position: absolute; z-index: 3; pointer-events: none;
+  border: 1.5px solid var(--accent); border-radius: 3px;
+  background: rgba(47, 111, 176, .14);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.person.multi .shape { stroke: var(--accent) !important; stroke-width: 4.5; }
+.person.multi .label { fill: var(--accent); }
+.readonly #tbRearrange, .readonly #tbAdd, .readonly #tbUnion, .readonly #tbChild, .readonly #tbArrange { display: none; }
 
 #legend {
   bottom: 14px; left: 14px; background: var(--panel);
