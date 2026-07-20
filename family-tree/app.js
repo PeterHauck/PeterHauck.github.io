@@ -23,6 +23,7 @@
   /* ---------------------------------------------------------------- state */
   let state = blankState();
   let layoutPos = {};        // computed positions {id:{x,y}}
+  let busLevels = {};        // per-union descent-bus vertical level (avoid overlap)
   let selectedId = null;
   let readonly = false;
   let view = { tx: 0, ty: 0, scale: 1 };
@@ -487,6 +488,7 @@
     gLinks.textContent = "";
     emptyState.style.display = state.persons.length ? "none" : "flex";
 
+    busLevels = computeBusLevels();
     visibleUnions().forEach(renderUnion);
     visiblePersons().forEach(renderPerson);
     updatePeopleList();
@@ -566,6 +568,50 @@
     return "";
   }
 
+  // The x-range a couple's descent "bus" needs to span (drop point → children).
+  function busSpan(u) {
+    const pa = personById(u.a); if (!pa) return null;
+    const pb = u.b != null ? personById(u.b) : null;
+    const kids = childLinksOfUnion(u.id).map((l) => l.child).filter((c) => personById(c) && !isHidden(c));
+    if (!kids.length) return null;
+    const A = posOf(u.a), B = pb ? posOf(u.b) : null;
+    const midY = pb ? (A.y + B.y) / 2 : A.y;
+    const xs = kids.map((c) => posOf(c).x);
+    let dropX = pb ? (A.x + B.x) / 2 : A.x;
+    if (pb) {
+      const kc = xs.reduce((s, x) => s + x, 0) / xs.length;
+      const lo = Math.min(A.x, B.x) + HALF, hi = Math.max(A.x, B.x) - HALF;
+      dropX = hi >= lo ? Math.max(lo, Math.min(hi, kc)) : dropX;
+    }
+    return { midY, dropX, min: Math.min(dropX, ...xs), max: Math.max(dropX, ...xs) };
+  }
+
+  // Give each couple's descent bus a vertical level so two buses in the same
+  // generation whose spans overlap never share one horizontal line (which would
+  // read as two lines overlapping for a stretch). Greedy interval colouring,
+  // per generation; non-overlapping buses happily share level 0.
+  function computeBusLevels() {
+    const rows = {};
+    visibleUnions().forEach((u) => {
+      const s = busSpan(u); if (!s) return;
+      const key = Math.round(s.midY);
+      (rows[key] = rows[key] || []).push({ id: u.id, min: s.min, max: s.max });
+    });
+    const out = {};
+    Object.values(rows).forEach((arr) => {
+      arr.sort((a, b) => a.min - b.min);
+      const placed = [];
+      arr.forEach((iv) => {
+        const taken = new Set();
+        placed.forEach((p) => { if (p.max >= iv.min - COLW * 0.35 && p.min <= iv.max + COLW * 0.35) taken.add(p.level); });
+        let lvl = 0; while (taken.has(lvl)) lvl++;
+        out[iv.id] = lvl;
+        placed.push({ min: iv.min, max: iv.max, level: lvl });
+      });
+    });
+    return out;
+  }
+
   function renderUnion(u) {
     const pa = personById(u.a); if (!pa) return;
     const pb = u.b != null ? personById(u.b) : null;
@@ -607,10 +653,9 @@
       dropX = hi >= lo ? Math.max(lo, Math.min(hi, kidsCenter)) : midX;
     }
     // Place the sibling bus in the clear band BELOW the parents' name labels and
-    // ABOVE the children — so it never runs through anyone's name. A small
-    // stagger keeps same-generation unions from sharing one line.
-    const uIdx = state.unions.indexOf(u);
-    const busY = midY + 158 + (uIdx % 3) * 13;
+    // ABOVE the children. Each overlapping bus gets its own level (see
+    // computeBusLevels) so no two buses run along the same line.
+    const busY = midY + 120 + (busLevels[u.id] || 0) * 15;
     // vertical drop from union to bus
     gLinks.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
     // horizontal bus
