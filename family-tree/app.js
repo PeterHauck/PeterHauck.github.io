@@ -277,6 +277,24 @@
         reindex();
       }
     }
+    // (4) orient each couple so each partner sits toward their OWN parents. When
+    // two families meet at a marriage (e.g. Harlan Fuchs married Darleen Miller),
+    // this puts each spouse under their own side so the two descent lines drop
+    // straight down instead of crossing over each other.
+    order.forEach((cls) => cls.forEach((c) => {
+      if (c.ids.length !== 2) return;
+      const parentCol = (id) => {
+        const ps = parentsOf[id] || []; let s = 0, n = 0;
+        ps.forEach((pp) => { if (pp in colIndex) { s += colIndex[pp]; n++; } });
+        return n ? s / n : null;
+      };
+      const a = c.ids[0], b = c.ids[1];
+      const ka = parentCol(a), kb = parentCol(b);
+      if (ka == null || kb == null) return;   // only decide when both have parents shown
+      if (ka > kb) { c.ids = [b, a]; c.offset = { [b]: 0, [a]: COLW }; }
+      else { c.offset = { [a]: 0, [b]: COLW }; }
+    }));
+    reindex();
 
     // assign x coordinates, cluster granularity, refined toward neighbours
     order.forEach((cls) => {
