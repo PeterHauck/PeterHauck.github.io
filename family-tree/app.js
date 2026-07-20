@@ -242,39 +242,48 @@
         reindex();
       }
     }
-    // (3) family contiguity: keep every bloodline family together as one block,
-    // ordered by the family's overall horizontal centre. This stops unrelated
-    // families from interleaving or sitting over one another. A couple that
-    // bridges two families is anchored to the family of whichever partner has
-    // more siblings in the tree — so the couple stays next to that partner's
-    // brothers and sisters (e.g. Peter stays beside his sister rather than being
-    // pulled across to Alicen's side, with cousins slotting into the gap). The
-    // couple still lands at that family's edge, next to the family they married
-    // into, because the two spouses are drawn as one adjacent cluster.
+    // (3) contiguity, two levels:
+    //   • BLOOD SIDE (coarse): everyone reachable by blood from one person — so a
+    //     married couple's two whole sides never interleave (all of Peter's
+    //     relatives — his dad's Hauck line AND his mom's Boyd/Eide line — stay on
+    //     one side; all of Alicen's Fuchs/Miller relatives stay on the other).
+    //   • SURNAME family (fine): within a side, keep each surname line together.
+    // A couple that bridges two groups is anchored to whichever partner has more
+    // siblings, so it stays next to that partner's brothers and sisters and lands
+    // at the edge nearest the family they married into.
+    const componentId = {};
+    lineageComponents(cPersons, cUnions, cLinks, uById).forEach((set, i) => set.forEach((id) => (componentId[id] = i)));
     const unionKids = {};
     cLinks.forEach((l) => { unionKids[l.union] = (unionKids[l.union] || 0) + 1; });
     const sibCount = (id) => { const u = primaryUnion[id]; return u ? (unionKids[u] || 1) : 0; };
-    const clusterFamKey = (c, famBary) => {
+    // key a cluster by whichever member has the most siblings (its "home" group)
+    const anchorKey = (c, bary, groupOf) => {
       let best = null, bestScore = -1;
       for (const id of c.ids) {
-        const f = familyId[id];
-        if (f == null || !(f in famBary)) continue;
+        const g = groupOf[id];
+        if (g == null || !(g in bary)) continue;
         const s = sibCount(id);
-        if (s > bestScore) { bestScore = s; best = f; }
+        if (s > bestScore) { bestScore = s; best = g; }
       }
-      return best != null ? famBary[best] : null;
+      return best != null ? bary[best] : null;
+    };
+    const baryOf = (groupOf) => {
+      const acc = {}, cnt = {};
+      for (const id in colIndex) { const g = groupOf[id]; if (g == null) continue; acc[g] = (acc[g] || 0) + colIndex[id]; cnt[g] = (cnt[g] || 0) + 1; }
+      const bary = {}; for (const g in acc) bary[g] = acc[g] / cnt[g];
+      return bary;
     };
     for (let pass = 0; pass < 4; pass++) {
-      const acc = {}, cnt = {};
-      for (const id in colIndex) { const f = familyId[id]; if (f == null) continue; acc[f] = (acc[f] || 0) + colIndex[id]; cnt[f] = (cnt[f] || 0) + 1; }
-      const famBary = {}; for (const f in acc) famBary[f] = acc[f] / cnt[f];
+      const compBary = baryOf(componentId), famBary = baryOf(familyId);
       for (let g = 0; g <= maxGen; g++) {
         order[g].forEach((c, i) => {
-          const k = clusterFamKey(c, famBary);
-          c._famB = k != null ? k : i;
+          const ck = anchorKey(c, compBary, componentId);
+          const fk = anchorKey(c, famBary, familyId);
+          c._compB = ck != null ? ck : i;
+          c._famB = fk != null ? fk : i;
           c._inB = c.ids[0] in colIndex ? colIndex[c.ids[0]] : i;
         });
-        order[g] = stableSort(order[g], (a, b) => (a._famB - b._famB) || (a._inB - b._inB));
+        order[g] = stableSort(order[g], (a, b) => (a._compB - b._compB) || (a._famB - b._famB) || (a._inB - b._inB));
         reindex();
       }
     }
