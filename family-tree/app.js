@@ -307,36 +307,106 @@
     reindex();
 
     // assign x coordinates, cluster granularity, refined toward neighbours
-    order.forEach((cls) => {
-      let x = 0;
-      cls.forEach((c) => { c.x = x; x += c.width + CLUSTER_GAP; });
-    });
     const memberX = (c, id) => c.x + c.offset[id];
-    for (let pass = 0; pass < 14; pass++) {
-      const down = pass % 2 === 0;
-      const seq = down ? range(0, maxGen) : range(maxGen, 0, -1);
-      seq.forEach((g) => {
-        const adj = down ? parentsOf : childrenOf;
-        order[g].forEach((c) => {
-          let sum = 0, cnt = 0;
-          c.ids.forEach((id) => {
-            const nb = adj[id];
-            if (!nb || !nb.length) return;
-            let t = 0, m = 0;
-            nb.forEach((o) => { const oc = clusterOf(order, o); if (oc) { t += memberX(oc, o); m++; } });
-            if (m) { sum += t / m - c.offset[id]; cnt++; }
-          });
-          c._desired = cnt ? sum / cnt : c.x;
-        });
-        // resolve left-to-right so clusters never overlap, but honour desired
-        let prevRight = -Infinity;
-        order[g].forEach((c) => {
-          let nx = c._desired;
-          if (nx < prevRight + CLUSTER_GAP) nx = prevRight + CLUSTER_GAP;
-          c.x = nx; prevRight = c.x + c.width;
-        });
+    const assignCoords = () => {
+      order.forEach((cls) => {
+        let x = 0;
+        cls.forEach((c) => { c.x = x; x += c.width + CLUSTER_GAP; });
       });
+      for (let pass = 0; pass < 14; pass++) {
+        const down = pass % 2 === 0;
+        const seq = down ? range(0, maxGen) : range(maxGen, 0, -1);
+        seq.forEach((g) => {
+          const adj = down ? parentsOf : childrenOf;
+          order[g].forEach((c) => {
+            let sum = 0, cnt = 0;
+            c.ids.forEach((id) => {
+              const nb = adj[id];
+              if (!nb || !nb.length) return;
+              let t = 0, m = 0;
+              nb.forEach((o) => { const oc = clusterOf(order, o); if (oc) { t += memberX(oc, o); m++; } });
+              if (m) { sum += t / m - c.offset[id]; cnt++; }
+            });
+            c._desired = cnt ? sum / cnt : c.x;
+          });
+          // resolve left-to-right so clusters never overlap, but honour desired
+          let prevRight = -Infinity;
+          order[g].forEach((c) => {
+            let nx = c._desired;
+            if (nx < prevRight + CLUSTER_GAP) nx = prevRight + CLUSTER_GAP;
+            c.x = nx; prevRight = c.x + c.width;
+          });
+        });
+      }
+    };
+    assignCoords();
+
+    // (5) Second pass — reorder each SIBLING set so the sibling whose line
+    // continues toward a marriage that bridges two families (e.g. William, whose
+    // grandson Peter marries into Alicen's family) sits on the edge nearest that
+    // marriage, and childless collaterals fall back to the family's own side
+    // instead of crowding the boundary with the in-laws. Uses the first pass's
+    // real positions, then lays out once more.
+    const prelimX = {};
+    order.forEach((cls) => cls.forEach((c) => c.ids.forEach((id) => (prelimX[id] = c.x + c.offset[id]))));
+    // which OTHER family each spouse marries into, and where each family sits
+    const compCenter = {};
+    { const acc = {}, cnt = {}; for (const id in prelimX) { const c = componentId[id]; if (c == null) continue; acc[c] = (acc[c] || 0) + prelimX[id]; cnt[c] = (cnt[c] || 0) + 1; } for (const c in acc) compCenter[c] = acc[c] / cnt[c]; }
+    const mateComp = {};
+    cUnions.forEach((u) => {
+      if (u.b == null) return;
+      const ca = componentId[u.a], cb = componentId[u.b];
+      if (ca != null && cb != null && ca !== cb) { mateComp[u.a] = cb; mateComp[u.b] = ca; }
+    });
+    // reachOf(person) → where a marriage below them points (the in-law family's
+    // centre), summed over descendants. n>0 means "this line continues down to a
+    // marriage that joins another family."
+    const reachMemo = {};
+    const reachOf = (id) => {
+      if (id in reachMemo) return reachMemo[id];
+      let sum = 0, n = 0;
+      if (mateComp[id] != null && (mateComp[id] in compCenter)) { sum += compCenter[mateComp[id]]; n++; }
+      (childrenOf[id] || []).forEach((k) => { const r = reachOf(k); sum += r.sum; n += r.n; });
+      return reachMemo[id] = { sum, n };
+    };
+    const ownX = (c) => { let s = 0, m = 0; c.ids.forEach((id) => { if (id in prelimX) { s += prelimX[id]; m++; } }); return m ? s / m : 0; };
+    const clusterTarget = (c) => { let sum = 0, n = 0; c.ids.forEach((id) => { const r = reachOf(id); sum += r.sum; n += r.n; }); return n ? { v: sum / n, bridge: true } : { v: ownX(c), bridge: false }; };
+    // group a cluster with its surname family (by the member with most siblings)
+    const clusterFamAnchor = (c) => {
+      let best = null, bestScore = -1;
+      for (const id of c.ids) { const f = familyId[id]; if (f == null) continue; const s = sibCount(id); if (s > bestScore) { bestScore = s; best = f; } }
+      return best;
+    };
+    // Within each surname family at a generation, put the branch that continues
+    // toward the in-law family on the side facing that family, and the childless
+    // collaterals on the far side — so e.g. William's line faces Alicen's family
+    // while his siblings fall back onto Peter's side instead of crowding the
+    // boundary with the in-laws.
+    for (let g = 1; g <= maxGen; g++) {
+      const arr = order[g];
+      let i = 0;
+      while (i < arr.length) {
+        const f = clusterFamAnchor(arr[i]);
+        let j = i; while (j < arr.length && clusterFamAnchor(arr[j]) === f) j++;
+        if (f != null && j - i > 1) {
+          const run = arr.slice(i, j).map((c) => ({ c, t: clusterTarget(c), x: ownX(c) }));
+          const bridge = run.filter((r) => r.t.bridge), plain = run.filter((r) => !r.t.bridge);
+          bridge.sort((a, b) => a.x - b.x); plain.sort((a, b) => a.x - b.x);
+          let merged;
+          if (bridge.length && plain.length) {
+            const bt = bridge.reduce((s, r) => s + r.t.v, 0) / bridge.length;   // where the in-laws are
+            const fc = run.reduce((s, r) => s + r.x, 0) / run.length;           // this family's centre
+            merged = bt >= fc ? [...plain, ...bridge] : [...bridge, ...plain];  // continuing branch faces the in-laws
+          } else {
+            merged = run.sort((a, b) => a.x - b.x);
+          }
+          for (let k = i; k < j; k++) arr[k] = merged[k - i].c;
+        }
+        i = j;
+      }
     }
+    reindex();
+    assignCoords();
 
     // write this band's local positions, then squeeze out dead space inside it
     const pos = {};
