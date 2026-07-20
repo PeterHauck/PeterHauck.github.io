@@ -28,6 +28,9 @@
   let busLevels = {};        // per-union descent-bus vertical level (avoid overlap)
   let selectedId = null;
   let readonly = false;
+  let rearrange = false;     // "Rearrange" mode — people only move while this is on
+  let selection = new Set(); // ids selected by the marquee box (for group moves)
+  let marquee = null;        // {x0,y0,x1,y1} world-coords while dragging a select box
   let view = { tx: 0, ty: 0, scale: 1 };
   let pendingPhoto = null;   // dataURL staged in the person form
   let formSex = "male";
@@ -598,7 +601,7 @@
 
   function renderPerson(p) {
     const pos = posOf(p.id);
-    const g = el("g", { class: "person" + (p.id === selectedId ? " selected" : ""), transform: `translate(${pos.x},${pos.y})`, "data-id": p.id });
+    const g = el("g", { class: "person" + (p.id === selectedId ? " selected" : "") + (selection.has(p.id) ? " multi" : ""), transform: `translate(${pos.x},${pos.y})`, "data-id": p.id });
 
     const clip = { male: "clip-male", female: "clip-female", unknown: "clip-unknown" }[p.sex] || "clip-unknown";
     if (p.photo) {
@@ -875,27 +878,49 @@
     };
   }
 
+  function toWorld(clientX, clientY) {
+    const r = stage.getBoundingClientRect();
+    return { x: (clientX - r.left - view.tx) / view.scale, y: (clientY - r.top - view.ty) / view.scale };
+  }
+  function updateMarquee() {
+    const box = $("#marquee");
+    if (!marquee) { box.hidden = true; return; }
+    const x0 = Math.min(marquee.x0, marquee.x1), x1 = Math.max(marquee.x0, marquee.x1);
+    const y0 = Math.min(marquee.y0, marquee.y1), y1 = Math.max(marquee.y0, marquee.y1);
+    box.style.left = (x0 * view.scale + view.tx) + "px";
+    box.style.top = (y0 * view.scale + view.ty) + "px";
+    box.style.width = (x1 - x0) * view.scale + "px";
+    box.style.height = (y1 - y0) * view.scale + "px";
+    box.hidden = false;
+  }
+
   svg.addEventListener("pointerdown", (e) => {
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     try { svg.setPointerCapture(e.pointerId); } catch (_) {}
-    if (pointers.size >= 2) { startPinch(); return; }
+    if (pointers.size >= 2) { startPinch(); marquee = null; updateMarquee(); return; }
 
     const badge = e.target.closest && e.target.closest(".doc-badge");
     if (badge) { openDocsForPerson(badge.getAttribute("data-id")); return; }
     const personEl = e.target.closest && e.target.closest(".person");
-    const isTouch = e.pointerType !== "mouse";
-    if (personEl && !readonly && !isTouch) {
-      // desktop only: click-and-drag a person to fine-tune their position
-      const id = personEl.getAttribute("data-id");
-      const p = posOf(id);
-      drag = { mode: "node", id, startX: e.clientX, startY: e.clientY, ox: p.x, oy: p.y, moved: false };
-    } else {
-      // touch (or the read-only view): a finger on a person taps to select and
-      // otherwise pans — it never drags the person out of place.
-      drag = { mode: "pan", startX: e.clientX, startY: e.clientY, tx: view.tx, ty: view.ty, moved: false };
-      if (personEl) drag.tapId = personEl.getAttribute("data-id");
-      stage.classList.add("panning");
+
+    if (rearrange && !readonly) {
+      if (personEl) {
+        const id = personEl.getAttribute("data-id");
+        if (!selection.has(id)) { selection = new Set([id]); render(); }
+        const starts = {};
+        selection.forEach((pid) => { const p = posOf(pid); starts[pid] = { x: p.x, y: p.y }; });
+        drag = { mode: "group", id, startX: e.clientX, startY: e.clientY, starts, moved: false };
+      } else {
+        const w = toWorld(e.clientX, e.clientY);
+        drag = { mode: "marquee", startX: e.clientX, startY: e.clientY, moved: false };
+        marquee = { x0: w.x, y0: w.y, x1: w.x, y1: w.y }; updateMarquee();
+      }
+      return;
     }
+    // view mode: a click on a person taps to select; otherwise pan. Nothing moves.
+    drag = { mode: "pan", startX: e.clientX, startY: e.clientY, tx: view.tx, ty: view.ty, moved: false };
+    if (personEl) drag.tapId = personEl.getAttribute("data-id");
+    stage.classList.add("panning");
   });
 
   svg.addEventListener("pointermove", (e) => {
@@ -907,7 +932,7 @@
       view.scale = ns;
       view.tx = (info.mx - r.left) - pinch.worldX * ns;
       view.ty = (info.my - r.top) - pinch.worldY * ns;
-      applyView();
+      applyView(); updateMarquee();
       return;
     }
     if (!drag) return;
@@ -916,10 +941,16 @@
       if (Math.abs(dx) + Math.abs(dy) > 6) drag.moved = true;
       view.tx = drag.tx + dx; view.ty = drag.ty + dy; applyView();
     }
-    else if (drag.mode === "node") {
+    else if (drag.mode === "group") {
       if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
-      state.manual[drag.id] = { x: drag.ox + dx / view.scale, y: drag.oy + dy / view.scale };
+      const wdx = dx / view.scale, wdy = dy / view.scale;
+      for (const pid in drag.starts) state.manual[pid] = { x: drag.starts[pid].x + wdx, y: drag.starts[pid].y + wdy };
       render();
+    }
+    else if (drag.mode === "marquee") {
+      drag.moved = true;
+      const w = toWorld(e.clientX, e.clientY);
+      marquee.x1 = w.x; marquee.y1 = w.y; updateMarquee();
     }
   });
 
@@ -928,14 +959,24 @@
     try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
     if (pointers.size < 2) pinch = null;
     // lifting one finger of a pinch — keep panning smoothly with the finger left down
-    if (pointers.size === 1 && !drag) {
+    if (pointers.size === 1 && !drag && !rearrange) {
       const pt = [...pointers.values()][0];
       drag = { mode: "pan", startX: pt.x, startY: pt.y, tx: view.tx, ty: view.ty };
       stage.classList.add("panning");
     }
     if (pointers.size === 0) {
       stage.classList.remove("panning");
-      if (drag && drag.mode === "node") { if (!drag.moved) selectPerson(drag.id); else save(); }
+      if (drag && drag.mode === "group") { if (drag.moved) save(); else if (drag.id) selectPerson(drag.id); }
+      else if (drag && drag.mode === "marquee") {
+        if (drag.moved && marquee) {
+          const x0 = Math.min(marquee.x0, marquee.x1), x1 = Math.max(marquee.x0, marquee.x1);
+          const y0 = Math.min(marquee.y0, marquee.y1), y1 = Math.max(marquee.y0, marquee.y1);
+          selection = new Set();
+          visiblePersons().forEach((p) => { const q = posOf(p.id); if (q.x >= x0 && q.x <= x1 && q.y >= y0 && q.y <= y1) selection.add(p.id); });
+          if (selection.size) toast(selection.size + " selected — drag any of them to move the group");
+        } else { selection = new Set(); }
+        marquee = null; updateMarquee(); render();
+      }
       // a tap on a person (no real movement) selects them
       else if (drag && drag.mode === "pan" && drag.tapId && !drag.moved) { selectPerson(drag.tapId); }
       // double-tap on empty canvas zooms in on that spot (touch only)
@@ -948,6 +989,52 @@
   }
   svg.addEventListener("pointerup", endPointer);
   svg.addEventListener("pointercancel", endPointer);
+
+  // Toggle rearrange mode; slide a person (and their descendants) past a sibling.
+  function setRearrange(on) {
+    rearrange = on;
+    $("#tbRearrange").classList.toggle("active", rearrange);
+    stage.classList.toggle("rearranging", rearrange);
+    if (!rearrange) { selection = new Set(); marquee = null; updateMarquee(); render(); }
+    toast(rearrange ? "Rearrange mode ON — drag a person, or drag a box to select several. Nothing moves when it's off." : "Rearrange mode off");
+  }
+  // everyone in a person's block that should travel with them: the person, their
+  // spouse(s), and all descendants (with the descendants' spouses).
+  function familyBlock(id) {
+    const out = new Set(); const stack = [id];
+    while (stack.length) {
+      const cur = stack.pop();
+      if (out.has(cur)) continue;
+      out.add(cur);
+      unionsOfPerson(cur).forEach((u) => {
+        const spouse = u.a === cur ? u.b : u.a;
+        if (spouse != null && !out.has(spouse)) out.add(spouse);
+        childLinksOfUnion(u.id).forEach((l) => stack.push(l.child));
+      });
+    }
+    return out;
+  }
+  function shiftSibling(dir) {
+    if (!selectedId) return;
+    const plinks = parentLinksOfPerson(selectedId);
+    if (!plinks.length) { toast("This person has no siblings to shift past"); return; }
+    const union = (plinks.find((l) => l.type !== "adopted") || plinks[0]).union;
+    const sibs = childLinksOfUnion(union).map((l) => l.child).filter((c) => personById(c) && !isHidden(c));
+    if (sibs.length < 2) { toast("No siblings to shift past"); return; }
+    sibs.sort((a, b) => posOf(a).x - posOf(b).x);
+    const idx = sibs.indexOf(selectedId);
+    const nIdx = idx + (dir < 0 ? -1 : 1);
+    if (nIdx < 0 || nIdx >= sibs.length) { toast("Already at the " + (dir < 0 ? "left" : "right") + " end"); return; }
+    const other = sibs[nIdx];
+    const delta = posOf(other).x - posOf(selectedId).x;
+    // snapshot both blocks' current positions first (disjoint sibling subtrees),
+    // then swap: this person's block slides right by the gap, the sibling's left.
+    const a = [...familyBlock(selectedId)].map((pid) => ({ pid, p: posOf(pid) }));
+    const b = [...familyBlock(other)].map((pid) => ({ pid, p: posOf(pid) }));
+    a.forEach(({ pid, p }) => (state.manual[pid] = { x: p.x + delta, y: p.y }));
+    b.forEach(({ pid, p }) => (state.manual[pid] = { x: p.x - delta, y: p.y }));
+    save(); render();
+  }
   stage.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY); }, { passive: false });
 
   /* ============================================================ FORMS */
@@ -1492,8 +1579,11 @@
   $("#tbAdd").onclick = () => { resetPersonForm(); $("#pName").focus(); ensurePanel(); };
   $("#tbUnion").onclick = openUnionModal;
   $("#tbChild").onclick = openChildModal;
-  $("#tbArrange").onclick = () => { state.manual = {}; relayoutAndSave(); fitView(); toast("Auto-arranged"); };
+  $("#tbArrange").onclick = () => { state.manual = {}; selection = new Set(); relayoutAndSave(); fitView(); toast("Auto-arranged"); };
   $("#tbFit").onclick = fitView;
+  $("#tbRearrange").onclick = () => setRearrange(!rearrange);
+  $("#sibLeftBtn").onclick = () => shiftSibling(-1);
+  $("#sibRightBtn").onclick = () => shiftSibling(1);
   $("#tbZoomIn").onclick = () => zoomAt(1.2);
   $("#tbZoomOut").onclick = () => zoomAt(1 / 1.2);
   $("#addUnionBtn").onclick = openUnionModal;

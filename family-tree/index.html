@@ -64,6 +64,7 @@
         <button id="tbChild" title="Add child">👶</button>
         <div class="sep"></div>
         <button id="tbArrange" title="Auto-arrange">✦</button>
+        <button id="tbRearrange" title="Rearrange mode — drag people or box-select (nothing moves when off)">✥</button>
         <button id="tbFit" title="Fit to screen">⤢</button>
         <div class="sep"></div>
         <button id="tbZoomOut" title="Zoom out">－</button>
@@ -88,6 +89,7 @@
 
       <button id="panelToggle" class="floating" title="Show / hide editor">✎</button>
       <button id="hiddenChip" class="floating" hidden>Show all</button>
+      <div id="marquee" hidden></div>
     </div>
 
     <!-- Editor panel -->
@@ -138,6 +140,14 @@
               <ul class="docs-list" id="docsList"></ul>
               <button type="button" class="btn" id="addDocBtn">📄 Attach obituary / record</button>
               <p class="hint" id="docsHint" style="margin-top:6px"></p>
+            </div>
+            <div id="siblingRow" style="margin:2px 0 12px">
+              <label class="field"><span>Order among siblings</span></label>
+              <div class="btn-row">
+                <button type="button" class="btn" id="sibLeftBtn">◀ Move left</button>
+                <button type="button" class="btn" id="sibRightBtn">Move right ▶</button>
+              </div>
+              <p class="hint" style="margin-top:6px">Slides this person (and their spouse &amp; kids) left or right past the next brother or sister.</p>
             </div>
             <div id="visRow" style="margin:2px 0 12px">
               <label class="field"><span>View</span></label>
