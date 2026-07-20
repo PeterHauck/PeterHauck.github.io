@@ -595,16 +595,27 @@
     const cstyle = famColor ? "stroke:" + famColor + ";stroke-width:2.8" : null;
 
     const childTops = kids.map((k) => ({ x: posOf(k.p.id).x, top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
+    // Drop the descent from the point on the marriage line closest to the
+    // children's centre (not always the couple's geometric midpoint) so the line
+    // heads toward the kids instead of straight down over whoever happens to sit
+    // below the middle of the couple — which otherwise reads as a false parent
+    // link to that person.
+    let dropX = midX;
+    if (pb) {
+      const kidsCenter = childTops.reduce((s, c) => s + c.x, 0) / childTops.length;
+      const lo = Math.min(A.x, B.x) + HALF, hi = Math.max(A.x, B.x) - HALF;
+      dropX = hi >= lo ? Math.max(lo, Math.min(hi, kidsCenter)) : midX;
+    }
     // Place the sibling bus in the clear band BELOW the parents' name labels and
     // ABOVE the children — so it never runs through anyone's name. A small
     // stagger keeps same-generation unions from sharing one line.
     const uIdx = state.unions.indexOf(u);
     const busY = midY + 158 + (uIdx % 3) * 13;
     // vertical drop from union to bus
-    gLinks.appendChild(el("line", { class: "link", x1: midX, y1: dropTop, x2: midX, y2: busY, style: cstyle }));
+    gLinks.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
     // horizontal bus
-    const minX = Math.min(midX, ...childTops.map((c) => c.x));
-    const maxX = Math.max(midX, ...childTops.map((c) => c.x));
+    const minX = Math.min(dropX, ...childTops.map((c) => c.x));
+    const maxX = Math.max(dropX, ...childTops.map((c) => c.x));
     if (childTops.length > 1 || minX !== maxX)
       gLinks.appendChild(el("line", { class: "link", x1: minX, y1: busY, x2: maxX, y2: busY, style: cstyle }));
     // verticals to each child (dashed + green if adopted)
