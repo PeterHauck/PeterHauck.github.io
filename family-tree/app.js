@@ -1031,6 +1031,45 @@
     b.forEach(({ pid, p }) => (state.manual[pid] = { x: p.x - delta, y: p.y }));
     save(); render();
   }
+
+  // "Tidy up": line up people who already sit at roughly the same height so
+  // they share one clean horizontal line — WITHOUT disturbing anyone the user
+  // deliberately placed on a very different level. People are grouped into
+  // horizontal bands (each within BAND_T px of the band's running centre); any
+  // band with two or more people is snapped to that band's median height.
+  // Someone sitting far from everyone else forms a band of one and never moves.
+  function tidyUp() {
+    const BAND_T = 70;   // "roughly the same height" tolerance (px)
+    const pts = visiblePersons().map((p) => ({ id: p.id, x: posOf(p.id).x, y: posOf(p.id).y }));
+    if (pts.length < 2) { toast("Nothing to tidy yet"); return; }
+    pts.sort((a, b) => a.y - b.y);
+    // Cluster into bands by vertical proximity (a point joins the current band
+    // only while it stays within BAND_T of that band's mean — so a big jump
+    // starts a fresh band and dramatically-offset people stay on their own).
+    const bands = [];
+    let cur = null;
+    for (const pt of pts) {
+      if (cur && Math.abs(pt.y - cur.mean) <= BAND_T) {
+        cur.items.push(pt);
+        cur.mean = cur.items.reduce((s, i) => s + i.y, 0) / cur.items.length;
+      } else { cur = { items: [pt], mean: pt.y }; bands.push(cur); }
+    }
+    let moved = 0;
+    const pre = snapshot();
+    for (const band of bands) {
+      if (band.items.length < 2) continue;              // a lone person: leave alone
+      const ys = band.items.map((i) => i.y).sort((a, b) => a - b);
+      const n = ys.length;
+      const ty = n % 2 ? ys[(n - 1) / 2] : (ys[n / 2 - 1] + ys[n / 2]) / 2;  // median height
+      for (const it of band.items) {
+        if (Math.abs(it.y - ty) > 0.5) { state.manual[it.id] = { x: it.x, y: ty }; moved++; }
+      }
+    }
+    if (!moved) { toast("Everything's already lined up"); return; }
+    pushUndo(pre);
+    save(); render();
+    toast("Tidied up " + moved + " " + (moved === 1 ? "person" : "people") + " (Cmd+Z to undo)");
+  }
   stage.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY); }, { passive: false });
 
   /* ============================================================ FORMS */
@@ -1630,6 +1669,7 @@
   $("#tbArrange").onclick = () => { pushUndo(); state.manual = {}; selection = new Set(); relayoutAndSave(); fitView(); toast("Auto-arranged"); };
   $("#tbFit").onclick = fitView;
   $("#tbRearrange").onclick = () => setRearrange(!rearrange);
+  $("#tbTidy").onclick = tidyUp;
   $("#sibLeftBtn").onclick = () => shiftSibling(-1);
   $("#sibRightBtn").onclick = () => shiftSibling(1);
   $("#tbZoomIn").onclick = () => zoomAt(1.2);
@@ -1689,6 +1729,7 @@
     document.body.classList.add("readonly");
     $("#tbAdd").style.display = $("#tbUnion").style.display = $("#tbChild").style.display = "none";
     $("#tbArrange").style.display = "none";
+    const tidy = $("#tbTidy"); if (tidy) tidy.style.display = "none";
   }
 
   /* ============================================================ DEMO DATA
