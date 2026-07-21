@@ -1791,6 +1791,39 @@
     return res.json();
   }
 
+  // Retroactively scrape text out of every already-uploaded photo/PDF obituary
+  // that doesn't have a text copy yet, and store it on the record.
+  async function scrapeAllObits() {
+    if (readonly) return;
+    const targets = [];
+    state.persons.forEach((p) => (p.docs || []).forEach((d) => {
+      if (d && (d.kind === "image" || d.kind === "pdf") && d.content && !d.text) targets.push(d);
+    }));
+    if (!targets.length) { toast("No uploaded obituaries need scraping"); return; }
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
+    if (!pass) return;
+    try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
+    const btn = $("#scrapeAllBtn"); if (btn) btn.disabled = true;
+    let ok = 0;
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const d = targets[i];
+        if (btn) btn.textContent = "Scraping… (" + (i + 1) + " of " + targets.length + ")";
+        const m = /^data:([^;]+);base64,(.*)$/.exec(d.content || "");
+        if (!m) continue;
+        const t = await callTranscribe({ passcode: pass, file: { mediaType: m[1], data: m[2] } });
+        if (t && t.text) { d.text = t.text; ok++; save(); }   // persist as we go
+      }
+      toast("Scraped text for " + ok + " of " + targets.length + " obituar" + (targets.length === 1 ? "y" : "ies"));
+    } catch (e) {
+      toast((e.message || "Scraping stopped") + (ok ? " — got " + ok + " first" : ""));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "📝 Scrape text from uploaded obituaries"; }
+      render();
+    }
+  }
+
   async function callTranscribe(payload) {
     let res;
     try { res = await fetch("api/transcribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); }
@@ -2086,6 +2119,7 @@
   });
   $("#publishBtn").onclick = openPublishModal;
   $("#importObitBtn").onclick = openImportModal;
+  $("#scrapeAllBtn").onclick = scrapeAllObits;
   $("#tbImport").onclick = openImportModal;
   $("#addDocBtn").onclick = () => { const id = $("#personId").value; if (id) openAttachModal(id); };
   $("#obitPhotoBtn").onclick = () => { const id = $("#personId").value; if (id) usePhotoFromObit(personById(id)); };
