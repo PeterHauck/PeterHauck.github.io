@@ -94,6 +94,16 @@ export default async function handler(req, res) {
   try {
     const r = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (FamilyTree archiver)" } });
     if (!r.ok) { res.status(502).json({ error: "Couldn't fetch that page (status " + r.status + ")." }); return; }
+    // If the link IS an image (e.g. a portrait URL pasted directly), return it as-is.
+    const ctype = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    if (/^image\//.test(ctype) && !/svg/.test(ctype)) {
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (buf.length && buf.length <= 6 * 1024 * 1024) {
+        res.status(200).json({ title: "Photo", text: "", image: "data:" + ctype + ";base64," + buf.toString("base64") });
+        return;
+      }
+      res.status(422).json({ error: "That image is empty or too large." }); return;
+    }
     const html = await r.text();
     const text = htmlToText(html);
     // Also try to pull the portrait so the app can set it as the person's picture.

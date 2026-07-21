@@ -1195,6 +1195,7 @@
   /* photo upload with downscale */
   $("#photoDrop").onclick = () => $("#photoInput").click();
   $("#photoClear").onclick = () => { pendingPhoto = null; updatePhotoPreview(); };
+  $("#photoUrlBtn").onclick = () => setPhotoFromUrl($("#photoUrl").value);
   $("#photoInput").addEventListener("change", (e) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
@@ -1206,6 +1207,29 @@
     reader.readAsDataURL(file);
     e.target.value = "";
   });
+  // Load a photo from a pasted image link (or any page with a portrait) into the
+  // form's staged photo. The fetch runs server-side (Vercel), so it works on
+  // cross-origin images the browser itself couldn't read. Save to keep it.
+  async function setPhotoFromUrl(url) {
+    url = (url || "").trim();
+    if (!url) { toast("Paste an image link first"); return; }
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
+    if (!pass) return;
+    try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
+    const btn = $("#photoUrlBtn"); if (btn) btn.disabled = true;
+    toast("Fetching the photo…");
+    try {
+      const data = await callArchive({ passcode: pass, url });
+      if (data && data.image) {
+        const photo = await imageDataToPhoto(data.image);
+        if (photo) { pendingPhoto = photo; updatePhotoPreview(); toast("Photo loaded — click Save to keep it"); return; }
+      }
+      toast("No image found at that link");
+    } catch (e) {
+      toast(e.message || "Couldn’t fetch that image");
+    } finally { if (btn) btn.disabled = false; }
+  }
   function downscale(img, max) {
     let { width: w, height: h } = img;
     const scale = Math.min(1, max / Math.max(w, h));
