@@ -1806,6 +1806,10 @@
   $("#tbFit").onclick = fitView;
   $("#tbRearrange").onclick = () => setRearrange(!rearrange);
   $("#tbTidy").onclick = tidyUp;
+  $("#tbMenu").onclick = () => {
+    const tb = $("#toolbar"), collapsed = tb.classList.toggle("collapsed");
+    $("#tbMenu").classList.toggle("active", !collapsed);
+  };
   $("#sibLeftBtn").onclick = () => shiftSibling(-1);
   $("#sibRightBtn").onclick = () => shiftSibling(1);
   $("#tbZoomIn").onclick = () => zoomAt(1.2);
@@ -1923,6 +1927,7 @@
     if (window.matchMedia && window.matchMedia("(max-width: 720px)").matches) {
       $("#panel").classList.add("collapsed");
       const l = $("#legend"); if (l) { l.classList.add("min"); const t = $("#legendToggle"); if (t) t.textContent = "+"; }
+      $("#toolbar").classList.add("collapsed"); $("#tbMenu").classList.remove("active"); // tools tucked behind ☰
     }
     autoLayout(); render(); syncTitle(); setupTitleEditing();
     // One-time: turn any already-attached obituary photos into node pictures.
