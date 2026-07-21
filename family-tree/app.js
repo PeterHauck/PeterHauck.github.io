@@ -1446,46 +1446,26 @@
 
   function openAttachModal(personId) {
     const person = personById(personId); if (!person) return;
+    const obitTitle = person.name + "’s Obituary";
     const back = document.createElement("div");
     back.className = "modal-backdrop";
-    back.innerHTML = `<div class="modal"><h2>Attach obituary / record</h2>
-      <div class="hint">Saved with the tree so it stays even if the original goes offline. Paste the text or upload a file for a durable copy — a link alone can be archived later.</div>
-      <label class="field"><span>Title</span><input type="text" id="dTitle" placeholder="e.g. Obituary — Spitzer Funeral Home"/></label>
-      <label class="field"><span>Link (optional)</span><input type="text" id="dUrl" placeholder="https://…"/></label>
-      <div class="btn-row" style="justify-content:flex-start;margin:0 0 10px">
-        <button type="button" class="btn" id="dFetch">⬇︎ Fetch &amp; archive text from link</button>
-      </div>
-      <label class="field"><span>Paste the text (durable copy)</span><textarea id="dText" rows="6" placeholder="Paste the obituary text here…"></textarea></label>
-      <label class="field"><span>…or upload a PDF / photo / file</span><input type="file" id="dFile" accept="application/pdf,image/*,.txt,.html"/></label>
+    back.innerHTML = `<div class="modal"><h2>Attach ${escapeHtml(obitTitle)}</h2>
+      <div class="hint">Paste a link and I’ll fetch the text and keep a durable copy — so it stays even if the original goes offline. Or paste the text yourself, or upload a photo / PDF. A photo also becomes ${escapeHtml(person.name)}’s picture in the tree.</div>
+      <label class="field"><span>Link to the obituary</span><input type="text" id="dUrl" placeholder="https://…"/></label>
+      <label class="field"><span>…or paste the text</span><textarea id="dText" rows="5" placeholder="Paste the obituary text here…"></textarea></label>
+      <label class="field"><span>…or upload a photo / PDF</span><input type="file" id="dFile" accept="application/pdf,image/*,.txt,.html"/></label>
       <div class="err" id="dErr" style="color:var(--divorce);font-size:12.5px;min-height:16px"></div>
       <div class="hint" id="dStatus"></div>
-      <div class="btn-row"><button class="btn" data-cancel>Cancel</button><button class="btn primary" id="dSave">Save record</button></div></div>`;
+      <div class="btn-row"><button class="btn" data-cancel>Cancel</button><button class="btn primary" id="dSave">Save</button></div></div>`;
     document.body.appendChild(back);
     const close = () => back.remove();
     back.querySelector("[data-cancel]").onclick = close;
     back.addEventListener("click", (e) => { if (e.target === back) close(); });
     const err = back.querySelector("#dErr"), status = back.querySelector("#dStatus");
+    const saveBtn = back.querySelector("#dSave");
 
-    back.querySelector("#dFetch").onclick = async () => {
+    saveBtn.onclick = async () => {
       err.textContent = "";
-      const url = back.querySelector("#dUrl").value.trim();
-      if (!url) { err.textContent = "Enter a link first."; return; }
-      let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
-      if (!pass) pass = prompt("Import passcode (set as IMPORT_PASSCODE in Vercel):") || "";
-      if (!pass) return;
-      try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
-      status.textContent = "Fetching…";
-      try {
-        const data = await callArchive({ passcode: pass, url });
-        if (!back.querySelector("#dTitle").value.trim()) back.querySelector("#dTitle").value = data.title || "";
-        back.querySelector("#dText").value = data.text || "";
-        status.textContent = "Fetched — review and Save.";
-      } catch (e2) { err.textContent = e2.message; status.textContent = ""; }
-    };
-
-    back.querySelector("#dSave").onclick = async () => {
-      err.textContent = "";
-      const title = back.querySelector("#dTitle").value.trim();
       const url = back.querySelector("#dUrl").value.trim();
       const text = back.querySelector("#dText").value.trim();
       const file = back.querySelector("#dFile").files[0];
@@ -1496,15 +1476,61 @@
         else if (file.type.startsWith("image/")) { kind = "image"; content = "data:" + file.type + ";base64," + (await fileToBase64(file)); }
         else { kind = "text"; content = await file.text(); }
       } else if (text) { kind = "text"; content = text; }
-      else if (url) { kind = "link"; content = ""; }
-      else { err.textContent = "Add some text, a file, or a link."; return; }
+      else if (url) {
+        // A link on its own: automatically fetch and keep a durable text copy.
+        let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+        if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
+        if (pass) {
+          try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
+          saveBtn.disabled = true; status.textContent = "Fetching the obituary text…";
+          try {
+            const data = await callArchive({ passcode: pass, url });
+            if (data && data.text) { kind = "text"; content = data.text; }
+            else { kind = "link"; toast("Saved the link (no text found to archive)"); }
+          } catch (e2) {
+            // Couldn’t reach the archiver (e.g. on plain GitHub Pages) — keep the
+            // link so nothing is lost; the text can be archived from the Vercel site.
+            kind = "link"; content = ""; toast("Saved the link — text auto-fetch needs the Vercel site");
+          }
+          status.textContent = ""; saveBtn.disabled = false;
+        } else { kind = "link"; content = ""; toast("Saved the link"); }
+      } else { err.textContent = "Add a link, paste the text, or upload a file."; return; }
 
-      const doc = { id: uid(), title: title || (url ? hostOf(url) : "Record"), url, capturedAt: todayStr(), kind, content };
+      const doc = { id: uid(), title: obitTitle, url, capturedAt: todayStr(), kind, content };
       if (!person.docs) person.docs = [];
       person.docs.push(doc);
-      save(); render(); renderDocsForm(person);
-      close(); toast("Record attached");
+      // A photo obituary also becomes this person’s picture (unless they already have one).
+      let setPic = false;
+      if (kind === "image" && !person.photo) {
+        const photo = await imageDataToPhoto(content);
+        if (photo) { person.photo = photo; setPic = true; }
+      }
+      save(); render(); renderDocsForm(person); if (selectedId === person.id) fillPersonForm(person);
+      close(); toast(setPic ? "Obituary saved — also set as their picture" : "Obituary saved");
     };
+  }
+
+  // Load an image data-URL and return a downscaled JPEG suitable for a node picture.
+  function imageDataToPhoto(dataUrl) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => { try { resolve(downscale(img, 400)); } catch (e) { resolve(null); } };
+      img.onerror = () => resolve(null);
+      img.src = dataUrl;
+    });
+  }
+  // Retroactively give people a picture from any image obituary already attached
+  // (runs once per browser; new uploads set the picture at attach time).
+  async function migratePhotosFromObits() {
+    let changed = false;
+    for (const p of state.persons) {
+      if (p.photo || !Array.isArray(p.docs)) continue;
+      const imgDoc = p.docs.find((d) => d && d.kind === "image" && d.content);
+      if (!imgDoc) continue;
+      const photo = await imageDataToPhoto(imgDoc.content);
+      if (photo) { p.photo = photo; changed = true; }
+    }
+    return changed;
   }
 
   async function callArchive(payload) {
@@ -1570,13 +1596,14 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, hidden: state.hidden, focus: state.focus, version: state.version || 0 };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
       title: obj.title || "Family Tree", subtitle: obj.subtitle || "",
       persons: obj.persons || [], unions: obj.unions || [], links: obj.links || [], manual: obj.manual || {}, hidden: obj.hidden || {},
       focus: Array.isArray(obj.focus) ? obj.focus : [], version: obj.version || 0,
+      photoMigrated: !!obj.photoMigrated,
     });
   }
   function savedVersion() { try { const s = localStorage.getItem(STORE_KEY); return s ? (JSON.parse(s).version || 0) : 0; } catch (e) { return 0; } }
@@ -1589,14 +1616,18 @@
   function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(exportObject())); } catch (e) { console.warn("save failed", e); } }
   function hasLocalData() { try { const s = localStorage.getItem(STORE_KEY); return s && JSON.parse(s).persons && JSON.parse(s).persons.length; } catch (e) { return false; } }
   function loadLocal() { try { const s = localStorage.getItem(STORE_KEY); if (s) loadObject(JSON.parse(s)); } catch (e) { console.warn(e); } }
-  // When a newer starter replaces the saved copy, keep the user's personal
-  // arrangement from that old copy: dragged positions, hidden people, and the
-  // focus centre — for people who still exist. Everything else comes fresh.
+  // When a newer starter replaces the saved copy, keep everything the user made
+  // their own from that old copy — the tree's name, dragged positions, hidden
+  // people, the focus centre, any pictures / obituaries they added, and anyone
+  // they added themselves — so an update never wipes their work.
   function carryOverLocalPrefs() {
     let old = null;
     try { const s = localStorage.getItem(STORE_KEY); if (s) old = JSON.parse(s); } catch (e) {}
     if (!old) return;
     const ids = new Set(state.persons.map((p) => p.id));
+    // the tree's own name / subtitle (their rename wins over the built-in default)
+    if (typeof old.title === "string" && old.title.trim()) state.title = old.title;
+    if (typeof old.subtitle === "string") state.subtitle = old.subtitle;
     if (old.manual && typeof old.manual === "object") {
       const m = {}; for (const id in old.manual) if (ids.has(id)) m[id] = old.manual[id];
       state.manual = m;
@@ -1609,6 +1640,27 @@
       const f = old.focus.filter((id) => ids.has(id));
       if (f.length) state.focus = f;
     }
+    // pictures & attached records the user added to people who still exist
+    const oldById = {};
+    (old.persons || []).forEach((pp) => { if (pp && pp.id) oldById[pp.id] = pp; });
+    state.persons.forEach((pp) => {
+      const o = oldById[pp.id]; if (!o) return;
+      if (!pp.photo && o.photo) pp.photo = o.photo;
+      if (Array.isArray(o.docs) && o.docs.length) {
+        const have = new Set((pp.docs || []).map((d) => d && d.id));
+        const extra = o.docs.filter((d) => d && !have.has(d.id));
+        if (extra.length) pp.docs = (pp.docs || []).concat(extra);
+      }
+    });
+    // people the user added themselves (ids not in the built-in tree), plus the
+    // unions and links that connect them — added on top, never overwriting.
+    (old.persons || []).forEach((pp) => { if (pp && pp.id && !ids.has(pp.id)) { state.persons.push(pp); ids.add(pp.id); } });
+    const haveUnions = new Set(state.unions.map((u) => u.id));
+    (old.unions || []).forEach((u) => { if (u && u.id && !haveUnions.has(u.id)) { state.unions.push(u); haveUnions.add(u.id); } });
+    const linkKey = (l) => l.union + ">" + (l.child || "");
+    const haveLinks = new Set(state.links.map(linkKey));
+    (old.links || []).forEach((l) => { if (l && !haveLinks.has(linkKey(l))) { state.links.push(l); haveLinks.add(linkKey(l)); } });
+    if (old.photoMigrated) state.photoMigrated = true;
   }
 
   function relayoutAndSave() { autoLayout(); render(); save(); syncTitle(); }
@@ -1658,8 +1710,36 @@
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
   function syncTitle() {
     $("#treeTitle").textContent = state.title || "Family Tree";
-    $("#treeSubtitle").textContent = state.subtitle || (readonly ? "" : "Build & arrange your family");
+    $("#treeSubtitle").textContent = state.subtitle || "";
     document.title = state.title || "Family Tree";
+  }
+  // The heading and subtitle double as rename fields: click to edit, Enter or
+  // click-away to save, Esc to cancel. Off for read-only visitors.
+  function setupTitleEditing() {
+    [["#treeTitle", "title", "Name your family tree"], ["#treeSubtitle", "subtitle", "Add a subtitle (optional)"]].forEach(([sel, key, ph]) => {
+      const el = $(sel); if (!el || el.dataset.editBound) return;
+      el.dataset.editBound = "1";
+      el.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); el.blur(); }
+        else if (e.key === "Escape") { e.preventDefault(); syncTitle(); el.blur(); }
+      });
+      el.addEventListener("blur", () => {
+        const v = el.textContent.replace(/\s+/g, " ").trim();
+        if ((state[key] || "") === v) { syncTitle(); return; }
+        state[key] = v; save(); syncTitle();
+        toast(key === "title" ? "Renamed" : "Subtitle updated");
+      });
+      el.dataset.ph = ph;
+    });
+    applyTitleEditability();
+  }
+  function applyTitleEditability() {
+    ["#treeTitle", "#treeSubtitle"].forEach((sel) => {
+      const el = $(sel); if (!el) return;
+      el.setAttribute("contenteditable", readonly ? "false" : "true");
+      el.setAttribute("spellcheck", "false");
+      el.title = readonly ? "" : "Click to rename";
+    });
   }
 
   /* wire toolbar + buttons */
@@ -1730,6 +1810,7 @@
     $("#tbAdd").style.display = $("#tbUnion").style.display = $("#tbChild").style.display = "none";
     $("#tbArrange").style.display = "none";
     const tidy = $("#tbTidy"); if (tidy) tidy.style.display = "none";
+    applyTitleEditability();
   }
 
   /* ============================================================ DEMO DATA
@@ -1784,7 +1865,12 @@
       $("#panel").classList.add("collapsed");
       const l = $("#legend"); if (l) { l.classList.add("min"); const t = $("#legendToggle"); if (t) t.textContent = "+"; }
     }
-    autoLayout(); render(); syncTitle();
+    autoLayout(); render(); syncTitle(); setupTitleEditing();
+    // One-time: turn any already-attached obituary photos into node pictures.
+    if (!readonly && !state.photoMigrated) {
+      state.photoMigrated = true; save();
+      migratePhotosFromObits().then((changed) => { if (changed) { save(); render(); } });
+    }
     // Open centred on the chosen people (e.g. Peter & Alicen) if the tree names
     // any that are visible; otherwise fit the whole tree to the screen.
     const focus = (state.focus || []).filter((id) => personById(id) && !isHidden(id));

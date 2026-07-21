@@ -99,6 +99,20 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .panel-head h1 { margin: 0; font-size: 18px; letter-spacing: .2px; }
 .panel-head p { margin: 4px 0 0; font-size: 12.5px; color: var(--muted); }
+/* Title & subtitle double as inline rename fields */
+#treeTitle[contenteditable="true"], #treeSubtitle[contenteditable="true"] {
+  cursor: text; border-radius: 5px; outline: none;
+  transition: box-shadow .12s, background .12s;
+}
+#treeTitle[contenteditable="true"]:hover, #treeSubtitle[contenteditable="true"]:hover {
+  box-shadow: inset 0 0 0 1px var(--panel-border);
+}
+#treeTitle[contenteditable="true"]:focus, #treeSubtitle[contenteditable="true"]:focus {
+  box-shadow: inset 0 0 0 2px var(--accent, #2f6fb0); background: rgba(127,127,127,.06);
+}
+#treeTitle[contenteditable="true"]:empty::before, #treeSubtitle[contenteditable="true"]:empty::before {
+  content: attr(data-ph); color: var(--muted); opacity: .6; font-weight: normal;
+}
 .panel-body { padding: 14px 18px 40px; overflow-y: auto; flex: 1; }
 
 .section { margin-bottom: 22px; }

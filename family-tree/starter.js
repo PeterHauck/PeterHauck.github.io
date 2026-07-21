@@ -97,7 +97,7 @@ window.FAMILY_TREE_STARTER = {
   // Bump this whenever the tree data below changes. On load, a higher version
   // here beats an older copy saved in the browser, so updates always show and a
   // stale local copy can't get "stuck".
-  version: 4,
+  version: 5,
   title: "The Hauck / Goos Family",
   subtitle: "Started from Tania Goos's obituary",
   persons: [
@@ -203,6 +203,10 @@ window.FAMILY_TREE_STARTER = {
     P("karla", "Karla Fox", "female"),
     P("christine", "Christine (Fuchs) Drasher", "female"),
     P("tomd", "Tom Drasher", "male"),
+    // ---- Peter & Alicen's children ----
+    P("april", "April Hauck", "female", { birth: 2021 }),
+    P("henry", "Henry Hauck", "male", { birth: 2024 }),
+    P("penny", "Penny Hauck", "female", { birth: 2026 }),
   ],
   unions: [
     U("u_wheeldon", "cecil", "elvera"),
@@ -260,6 +264,8 @@ window.FAMILY_TREE_STARTER = {
     L("u_arthurm", "darleen"),
     L("u_fuchs", "lisa"), L("u_fuchs", "linda"), L("u_fuchs", "debra"), L("u_fuchs", "davef"), L("u_fuchs", "christine"),
     L("u_lisa", "alicen"),
+    // Peter & Alicen's children (birth order: April, Henry, Penny)
+    L("u_peteralicen", "april"), L("u_peteralicen", "henry"), L("u_peteralicen", "penny"),
   ],
   manual: {},
   // Open centred on Peter & Alicen.
@@ -278,7 +284,7 @@ window.FAMILY_TREE_STARTER = {
 (function () {
   var groups = {
     "#9e6b3f": ["cecil", "elvera", "dick", "tania", "audrey", "peggyH", "rhonda", "marcine", "don"], // Tania's Wheeldon/Reiners side (brown)
-    "#2f6fb0": ["valentine", "maryk", "wm", "jerry", "jamesm", "donna", "joann", "janice", "cynthia", "teresa", "barney", "fritz", "marian", "michael", "bill", "peggyM", "peter", "lauren", "tanner", "hunter", "jack"], // Hauck (blue)
+    "#2f6fb0": ["valentine", "maryk", "wm", "jerry", "jamesm", "donna", "joann", "janice", "cynthia", "teresa", "barney", "fritz", "marian", "michael", "bill", "peggyM", "peter", "lauren", "tanner", "hunter", "jack", "april", "henry", "penny"], // Hauck (blue)
     "#3f8f5a": ["bob", "anne", "david", "robertjay"], // Goos (green)
     "#2a9d9d": ["edwardf", "alicef", "harlan", "lisa", "linda", "debra", "davef", "christine", "alicen"], // Fuchs (teal)
     "#bf8b30": ["arthurm", "myrtlem", "darleen"], // Miller (gold)
