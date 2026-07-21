@@ -961,6 +961,14 @@
     if (rearrange && !readonly) {
       if (personEl) {
         const id = personEl.getAttribute("data-id");
+        // Shift-click toggles a person in/out of the group selection without
+        // moving anything — build up a set, then drag any of them to move all.
+        if (e.shiftKey) {
+          if (selection.has(id)) selection.delete(id); else selection.add(id);
+          render();
+          if (selection.size) toast(selection.size + " selected — drag any of them to move the group");
+          return;
+        }
         if (!selection.has(id)) { selection = new Set([id]); render(); }
         const starts = {};
         selection.forEach((pid) => { const p = posOf(pid); starts[pid] = { x: p.x, y: p.y }; });
