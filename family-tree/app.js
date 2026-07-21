@@ -590,6 +590,7 @@
     busLevels = computeBusLevels();
     visibleUnions().forEach(renderUnion);
     visiblePersons().forEach(renderPerson);
+    renderHiddenBadges();
     updatePeopleList();
     $("#peopleCount").textContent = state.persons.length;
     updateHiddenChip();
@@ -916,6 +917,8 @@
 
     const badge = e.target.closest && e.target.closest(".doc-badge");
     if (badge) { openDocsForPerson(badge.getAttribute("data-id")); return; }
+    const hb = e.target.closest && e.target.closest(".hidden-badge");
+    if (hb) { openHiddenPopup(hb.getAttribute("data-anchor")); return; }
     const personEl = e.target.closest && e.target.closest(".person");
 
     if (rearrange && !readonly) {
@@ -1879,6 +1882,60 @@
     const n = state.hidden ? Object.keys(state.hidden).length : 0;
     chip.hidden = n === 0;
     chip.textContent = "Show all (" + n + " hidden)";
+  }
+
+  // Group hidden people by the VISIBLE person their branch hangs off of, so each
+  // hidden branch can show one "eye-with-a-slash" marker next to that person.
+  function hiddenGroups() {
+    const hidden = state.persons.filter((p) => isHidden(p.id)).map((p) => p.id);
+    if (!hidden.length) return [];
+    const hiddenSet = new Set(hidden);
+    const vis = (id) => personById(id) && !isHidden(id);
+    const parentsOf = (id) => {
+      const out = [];
+      parentLinksOfPerson(id).forEach((l) => { const u = unionById(l.union); if (u) { if (u.a) out.push(u.a); if (u.b) out.push(u.b); } });
+      return out;
+    };
+    const spousesOf = (id) => state.unions.filter((u) => u.a === id || u.b === id).map((u) => (u.a === id ? u.b : u.a)).filter(Boolean);
+    const anchorFor = (start) => {
+      const seen = new Set(); const stack = [start];
+      while (stack.length) {
+        const cur = stack.pop(); if (seen.has(cur)) continue; seen.add(cur);
+        const pars = parentsOf(cur); for (const pa of pars) if (vis(pa)) return pa;
+        const sps = spousesOf(cur); for (const sp of sps) if (vis(sp)) return sp;
+        [...pars, ...sps].forEach((n) => { if (hiddenSet.has(n) && !seen.has(n)) stack.push(n); });
+      }
+      return null;
+    };
+    const byAnchor = {};
+    hidden.forEach((h) => { const a = anchorFor(h); if (a) (byAnchor[a] = byAnchor[a] || []).push(h); });
+    return Object.keys(byAnchor).map((a) => ({ anchor: a, hidden: byAnchor[a] }));
+  }
+
+  function renderHiddenBadges() {
+    hiddenGroups().forEach((grp) => {
+      const pos = posOf(grp.anchor);
+      const g = el("g", { class: "hidden-badge", "data-anchor": grp.anchor, transform: `translate(${pos.x + HALF + 14},${pos.y + HALF + 6})` });
+      g.appendChild(el("circle", { class: "hidden-badge-bg", r: 13, cx: 0, cy: 0 }));
+      // eye outline + pupil + slash
+      g.appendChild(el("path", { class: "hidden-badge-mark", d: "M-7 0 Q0 -5.5 7 0 Q0 5.5 -7 0 Z", fill: "none" }));
+      g.appendChild(el("circle", { class: "hidden-badge-pupil", cx: 0, cy: 0, r: 1.9 }));
+      g.appendChild(el("line", { class: "hidden-badge-slash", x1: -7.5, y1: 6.5, x2: 7.5, y2: -6.5 }));
+      g.appendChild(el("title", null, txt(grp.hidden.length + " hidden here — click to view")));
+      gNodes.appendChild(g);
+    });
+  }
+
+  function openHiddenPopup(anchorId) {
+    const grp = hiddenGroups().find((x) => x.anchor === anchorId);
+    if (!grp) return;
+    const anchor = personById(anchorId); if (!anchor) return;
+    const rows = grp.hidden.map((id) => { const p = personById(id); return p ? `<li>${escapeHtml(p.name)}</li>` : ""; }).join("");
+    openModal("Hidden family",
+      `Connected to <b>${escapeHtml(anchor.name)}</b> but hidden from the tree:`,
+      `<ul class="hidden-list">${rows}</ul>`,
+      () => { grp.hidden.forEach((id) => { if (state.hidden) delete state.hidden[id]; }); relayoutAndSave(); toast("Revealed " + grp.hidden.length + (grp.hidden.length === 1 ? " person" : " people")); },
+      "Show them on the tree");
   }
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
   function syncTitle() {

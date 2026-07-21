@@ -318,6 +318,18 @@ button.btn.danger { color: var(--divorce); }
 .person .doc-badge-mark { stroke: var(--muted); stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
 .person .doc-badge:hover .doc-badge-bg { fill: var(--accent); stroke: var(--accent); }
 .person .doc-badge:hover .doc-badge-mark { stroke: #fff; }
+
+/* hidden-branch marker: an eye with a slash, sitting next to the anchor person */
+.hidden-badge { cursor: pointer; }
+.hidden-badge-bg { fill: var(--panel); stroke: var(--panel-border); stroke-width: 1; }
+.hidden-badge-mark { stroke: var(--muted); stroke-width: 1.3; }
+.hidden-badge-pupil { fill: var(--muted); }
+.hidden-badge-slash { stroke: var(--muted); stroke-width: 1.6; stroke-linecap: round; }
+.hidden-badge:hover .hidden-badge-bg { fill: var(--accent); stroke: var(--accent); }
+.hidden-badge:hover .hidden-badge-mark, .hidden-badge:hover .hidden-badge-slash { stroke: #fff; }
+.hidden-badge:hover .hidden-badge-pupil { fill: #fff; }
+.hidden-list { list-style: none; margin: 4px 0 0; padding: 0; max-height: 240px; overflow-y: auto; }
+.hidden-list li { padding: 7px 10px; border: 1px solid var(--panel-border); border-radius: 8px; margin-bottom: 6px; font-size: 13.5px; }
 .attach-choice { display: flex; gap: 8px; margin-bottom: 10px; }
 .attach-choice button { flex: 1; padding: 7px; border-radius: 8px; border: 1px solid var(--panel-border); background: var(--paper); cursor: pointer; font-size: 12.5px; }
 .attach-choice button.active { border-color: var(--accent-2); box-shadow: inset 0 0 0 1px var(--accent-2); }
