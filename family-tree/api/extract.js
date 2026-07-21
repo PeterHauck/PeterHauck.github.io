@@ -157,9 +157,14 @@ export default async function handler(req, res) {
     .map((p) => `- ${p.name}${p.birth ? ` (b. ${p.birth})` : ""}${p.death ? `–${p.death}` : ""}`)
     .join("\n");
 
+  const subject = (body.subject || "").toString().trim();
+
   content.push({
     type: "text",
     text:
+      (subject
+        ? `This obituary is primarily about "${subject}", who is ALREADY in the tree. Use that EXACT name for them, connect the relatives to them, and do NOT create a duplicate of them.\n\n`
+        : "") +
       `People already in the tree (link to these by their exact name; don't duplicate them):\n${existing || "(none yet)"}\n\n` +
       (sourceText ? `Obituary / source text:\n"""\n${sourceText}\n"""\n\n` : "") +
       `Extract the family members and their relationships.`,

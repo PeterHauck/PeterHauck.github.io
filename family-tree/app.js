@@ -590,6 +590,7 @@
     busLevels = computeBusLevels();
     visibleUnions().forEach(renderUnion);
     visiblePersons().forEach(renderPerson);
+    renderHiddenBadges();
     updatePeopleList();
     $("#peopleCount").textContent = state.persons.length;
     updateHiddenChip();
@@ -612,15 +613,20 @@
     const g = el("g", { class: "person" + (p.id === selectedId ? " selected" : "") + (selection.has(p.id) ? " multi" : ""), transform: `translate(${pos.x},${pos.y})`, "data-id": p.id });
 
     const clip = { male: "clip-male", female: "clip-female", unknown: "clip-unknown" }[p.sex] || "clip-unknown";
+    const decd = isDeceased(p);
     if (p.photo) {
+      // For a photo, the deceased slash goes BEHIND the picture so it never
+      // crosses the face — only its tips peek out past the edges.
+      if (decd) g.appendChild(el("line", { class: "deceased", x1: -HALF - 9, y1: HALF + 9, x2: HALF + 9, y2: -HALF - 9 }));
       g.appendChild(el("image", { href: p.photo, x: -HALF, y: -HALF, width: HALF * 2, height: HALF * 2, preserveAspectRatio: "xMidYMid slice", "clip-path": `url(#${clip})` }));
     } else {
       g.appendChild(el("text", { class: "placeholder-emoji", x: 0, y: 2 }, txt("👤")));
     }
     // shape outline on top
     g.appendChild(shapeOutline(p.sex, !!p.photo, p.color));
-    // deceased slash
-    if (isDeceased(p)) g.appendChild(el("line", { class: "deceased", x1: -HALF, y1: HALF, x2: HALF, y2: -HALF }));
+    // deceased slash — drawn across the empty symbol (the classic mark) only when
+    // there's no photo; photo nodes get the behind-the-picture version above.
+    if (decd && !p.photo) g.appendChild(el("line", { class: "deceased", x1: -HALF, y1: HALF, x2: HALF, y2: -HALF }));
 
     // labels — with a paper-coloured backing so connectors pass BEHIND the text
     const lines = nameLines(p.name);
@@ -635,12 +641,15 @@
     lines.forEach((l, i) => g.appendChild(el("text", { class: "label", x: 0, y: HALF + 22 + i * 18 }, txt(l))));
     if (d) g.appendChild(el("text", { class: "dates", x: 0, y: HALF + 24 + nLines * 18 }, txt(d)));
 
-    // attached obituaries/records badge
+    // attached obituaries/records — a small, refined page badge (not an emoji)
     if (p.docs && p.docs.length) {
-      const badge = el("g", { class: "doc-badge", "data-id": p.id, transform: `translate(${HALF - 4},${-HALF + 2})` });
-      badge.appendChild(el("text", { x: 0, y: 0, "text-anchor": "middle" }, txt("📄")));
-      const tt = el("title", null, txt(p.docs.length + " attached record" + (p.docs.length > 1 ? "s" : "")));
-      badge.appendChild(tt);
+      const badge = el("g", { class: "doc-badge", "data-id": p.id, transform: `translate(${HALF - 5},${-HALF + 5})` });
+      badge.appendChild(el("circle", { class: "doc-badge-bg", r: 9, cx: 0, cy: 0 }));
+      // a minimal document glyph: a page with a folded corner and two text lines
+      badge.appendChild(el("path", { class: "doc-badge-mark", d: "M-3 -4.4 H1.4 L3 -2.8 V4.4 H-3 Z M1.2 -4.4 V-2.8 H3", fill: "none" }));
+      badge.appendChild(el("line", { class: "doc-badge-mark", x1: -1.4, y1: 0, x2: 1.4, y2: 0 }));
+      badge.appendChild(el("line", { class: "doc-badge-mark", x1: -1.4, y1: 2, x2: 1.4, y2: 2 }));
+      badge.appendChild(el("title", null, txt(p.docs.length + " attached record" + (p.docs.length > 1 ? "s" : ""))));
       g.appendChild(badge);
     }
 
@@ -722,28 +731,64 @@
     return out;
   }
 
+  // A little "+" button that appears on hover over a union's lines, to quickly
+  // add a child / sibling to that couple. Hidden until the union group is hovered
+  // (see CSS); clicks are caught in the pointerdown handler via the .add-plus class.
+  function addPlus(unionId, x, y, label) {
+    const g = el("g", { class: "add-plus", "data-union": unionId, transform: `translate(${x},${y})` });
+    g.appendChild(el("circle", { class: "add-plus-bg", r: 11, cx: 0, cy: 0 }));
+    g.appendChild(el("line", { class: "add-plus-mark", x1: -5, y1: 0, x2: 5, y2: 0 }));
+    g.appendChild(el("line", { class: "add-plus-mark", x1: 0, y1: -5, x2: 0, y2: 5 }));
+    g.appendChild(el("title", null, txt(label)));
+    return g;
+  }
+
+  // Quick-add a child to a union: drop in a blank person, link them, and open the
+  // form focused on the name so you just type and Save. Undoable.
+  function quickAddChild(unionId) {
+    if (readonly) return;
+    const u = unionById(unionId); if (!u) return;
+    pushUndo();
+    const np = addPerson({ name: "New person", sex: "unknown" });
+    addChild(u.id, np.id, "bio");
+    selectedId = np.id;
+    relayoutAndSave();
+    ensurePanel(); fillPersonForm(np);
+    const nameEl = $("#pName"); if (nameEl) { nameEl.focus(); nameEl.select(); }
+    toast("Added — type their name and Save");
+  }
+
   function renderUnion(u) {
     const pa = personById(u.a); if (!pa) return;
     const pb = u.b != null ? personById(u.b) : null;
     const A = posOf(u.a), B = pb ? posOf(u.b) : null;
     const kids = childLinksOfUnion(u.id).map((l) => ({ l, p: personById(l.child) })).filter((k) => k.p && !isHidden(k.p.id));
+    const gu = el("g", { class: "union", "data-union": u.id });   // group so hover reveals the +
 
     let midX, midY, dropTop;
     if (pb) {
       const y = (A.y + B.y) / 2;
       const left = A.x < B.x ? A : B, right = A.x < B.x ? B : A;
       const dashed = u.status === "partners";
-      gLinks.appendChild(el("line", { class: "link", x1: left.x + HALF - 6, y1: y, x2: right.x - HALF + 6, y2: y, "stroke-dasharray": dashed ? "6 5" : null }));
+      gu.appendChild(el("line", { class: "link", x1: left.x + HALF - 6, y1: y, x2: right.x - HALF + 6, y2: y, "stroke-dasharray": dashed ? "6 5" : null }));
       midX = (A.x + B.x) / 2; midY = y; dropTop = y;
       if (u.status === "divorced") {
-        // double-slash across the middle of the marriage line
-        [-7, 5].forEach((dx) => gLinks.appendChild(el("line", { class: "divorce-tick", x1: midX + dx + 5, y1: midY - 11, x2: midX + dx - 5, y2: midY + 11 })));
+        [-7, 5].forEach((dx) => gu.appendChild(el("line", { class: "divorce-tick", x1: midX + dx + 5, y1: midY - 11, x2: midX + dx - 5, y2: midY + 11 })));
       }
     } else {
       midX = A.x; midY = A.y; dropTop = A.y + HALF; // drop from the single parent's bottom
     }
 
-    if (!kids.length) return;
+    if (!kids.length) {
+      // Childless couple: a transparent stub below the couple makes a hover target,
+      // and the + adds their first child.
+      if (!readonly) {
+        gu.appendChild(el("line", { class: "hit", x1: midX, y1: dropTop, x2: midX, y2: dropTop + 40 }));
+        gu.appendChild(addPlus(u.id, midX, dropTop + 34, "Add a child"));
+      }
+      gLinks.appendChild(gu);
+      return;
+    }
 
     // Colour the descent lines by the children's family so each set of lines is
     // traceable at a glance instead of a grey tangle.
@@ -751,25 +796,24 @@
     const cstyle = famColor ? "stroke:" + famColor + ";stroke-width:2.8" : null;
 
     const childTops = kids.map((k) => ({ x: posOf(k.p.id).x, top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
-    // The descent always drops from the CENTRE of the marriage line (midway
-    // between husband and wife) and goes straight down; the horizontal bus then
-    // carries across to the children.
     const dropX = midX;
-    // Place the sibling bus in the clear band BELOW the parents' name labels and
-    // ABOVE the children. Each overlapping bus gets its own level (see
-    // computeBusLevels) so no two buses run along the same line.
     const busY = midY + 120 + (busLevels[u.id] || 0) * 15;
-    // vertical drop from union to bus
-    gLinks.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
-    // horizontal bus
+    gu.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
     const minX = Math.min(dropX, ...childTops.map((c) => c.x));
     const maxX = Math.max(dropX, ...childTops.map((c) => c.x));
     if (childTops.length > 1 || minX !== maxX)
-      gLinks.appendChild(el("line", { class: "link", x1: minX, y1: busY, x2: maxX, y2: busY, style: cstyle }));
-    // verticals to each child (dashed + green if adopted)
+      gu.appendChild(el("line", { class: "link", x1: minX, y1: busY, x2: maxX, y2: busY, style: cstyle }));
     childTops.forEach((c) => {
-      gLinks.appendChild(el("line", { class: "link" + (c.type === "adopted" ? " adopt" : ""), x1: c.x, y1: busY, x2: c.x, y2: c.top, style: c.type === "adopted" ? null : cstyle }));
+      gu.appendChild(el("line", { class: "link" + (c.type === "adopted" ? " adopt" : ""), x1: c.x, y1: busY, x2: c.x, y2: c.top, style: c.type === "adopted" ? null : cstyle }));
     });
+    // Hover targets (wide transparent lines over the drop + bus) and the + to add
+    // another child/sibling, off the right end of the sibling line.
+    if (!readonly) {
+      gu.appendChild(el("line", { class: "hit", x1: dropX, y1: dropTop, x2: dropX, y2: busY }));
+      gu.appendChild(el("line", { class: "hit", x1: minX, y1: busY, x2: maxX, y2: busY }));
+      gu.appendChild(addPlus(u.id, maxX + 26, busY, "Add a sibling / child"));
+    }
+    gLinks.appendChild(gu);
   }
 
   function txt(s) { return document.createTextNode(s); }
@@ -908,6 +952,10 @@
 
     const badge = e.target.closest && e.target.closest(".doc-badge");
     if (badge) { openDocsForPerson(badge.getAttribute("data-id")); return; }
+    const hb = e.target.closest && e.target.closest(".hidden-badge");
+    if (hb) { openHiddenPopup(hb.getAttribute("data-anchor")); return; }
+    const plus = e.target.closest && e.target.closest(".add-plus");
+    if (plus) { quickAddChild(plus.getAttribute("data-union")); return; }
     const personEl = e.target.closest && e.target.closest(".person");
 
     if (rearrange && !readonly) {
@@ -1435,6 +1483,10 @@
     back.className = "modal-backdrop";
     back.innerHTML = `<div class="modal"><h2>Add people from an obituary</h2>
       <div class="hint">Paste a link to an obituary — Claude reads it, checks who’s already in your tree, and adds only the new relatives, connected to the right people. You’ll see who it found before anything is added. (You can paste the text or a photo instead.)</div>
+      <label class="field"><span>This obituary is for</span><select id="imFor">
+        <option value="">A new person (or not sure)</option>
+        ${state.persons.slice().sort((a, b) => a.name.localeCompare(b.name)).map((pp) => `<option value="${pp.id}">${escapeHtml(pp.name)}</option>`).join("")}
+      </select></label>
       <label class="field"><span>Link to the obituary</span><input type="text" id="imUrl" placeholder="https://…"/></label>
       <label class="field"><span>…or paste the text</span><textarea id="imText" rows="5" placeholder="Paste the obituary here…"></textarea></label>
       <label class="field"><span>…or upload a PDF / photo</span><input type="file" id="imFile" accept="application/pdf,image/*"/></label>
@@ -1462,8 +1514,11 @@
       if (!pass) { passRow.hidden = false; err.textContent = "Enter the import passcode (one time — it’s remembered after)."; return; }
       try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
 
+      const forId = back.querySelector("#imFor").value;
+      const forPerson = forId ? personById(forId) : null;
       const payload = {
         passcode: pass, text, url,
+        subject: forPerson ? forPerson.name : "",   // the obituary is about this existing person
         existing: state.persons.map((p) => ({ name: p.name, birth: p.birth, death: p.death })),
       };
       if (fileEl.files[0]) {
@@ -1489,6 +1544,13 @@
         if (confirm(lines.join("\n"))) {
           pushUndo();
           mergeExtraction(data);
+          // If this obituary is for someone already in the tree, keep a copy of it
+          // on their profile too (text or link).
+          if (forPerson) {
+            forPerson.docs = forPerson.docs || [];
+            const kind = text ? "text" : "link";
+            forPerson.docs.push({ id: uid(), title: forPerson.name + "’s Obituary", url, capturedAt: todayStr(), kind, content: text || "" });
+          }
           relayoutAndSave(); fitView();
           toast(newNames.length ? ("Added " + newNames.length + " from the obituary (Cmd+Z to undo)") : "Connected people from the obituary");
           close();
@@ -1871,6 +1933,60 @@
     const n = state.hidden ? Object.keys(state.hidden).length : 0;
     chip.hidden = n === 0;
     chip.textContent = "Show all (" + n + " hidden)";
+  }
+
+  // Group hidden people by the VISIBLE person their branch hangs off of, so each
+  // hidden branch can show one "eye-with-a-slash" marker next to that person.
+  function hiddenGroups() {
+    const hidden = state.persons.filter((p) => isHidden(p.id)).map((p) => p.id);
+    if (!hidden.length) return [];
+    const hiddenSet = new Set(hidden);
+    const vis = (id) => personById(id) && !isHidden(id);
+    const parentsOf = (id) => {
+      const out = [];
+      parentLinksOfPerson(id).forEach((l) => { const u = unionById(l.union); if (u) { if (u.a) out.push(u.a); if (u.b) out.push(u.b); } });
+      return out;
+    };
+    const spousesOf = (id) => state.unions.filter((u) => u.a === id || u.b === id).map((u) => (u.a === id ? u.b : u.a)).filter(Boolean);
+    const anchorFor = (start) => {
+      const seen = new Set(); const stack = [start];
+      while (stack.length) {
+        const cur = stack.pop(); if (seen.has(cur)) continue; seen.add(cur);
+        const pars = parentsOf(cur); for (const pa of pars) if (vis(pa)) return pa;
+        const sps = spousesOf(cur); for (const sp of sps) if (vis(sp)) return sp;
+        [...pars, ...sps].forEach((n) => { if (hiddenSet.has(n) && !seen.has(n)) stack.push(n); });
+      }
+      return null;
+    };
+    const byAnchor = {};
+    hidden.forEach((h) => { const a = anchorFor(h); if (a) (byAnchor[a] = byAnchor[a] || []).push(h); });
+    return Object.keys(byAnchor).map((a) => ({ anchor: a, hidden: byAnchor[a] }));
+  }
+
+  function renderHiddenBadges() {
+    hiddenGroups().forEach((grp) => {
+      const pos = posOf(grp.anchor);
+      const g = el("g", { class: "hidden-badge", "data-anchor": grp.anchor, transform: `translate(${pos.x + HALF + 14},${pos.y + HALF + 6})` });
+      g.appendChild(el("circle", { class: "hidden-badge-bg", r: 13, cx: 0, cy: 0 }));
+      // eye outline + pupil + slash
+      g.appendChild(el("path", { class: "hidden-badge-mark", d: "M-7 0 Q0 -5.5 7 0 Q0 5.5 -7 0 Z", fill: "none" }));
+      g.appendChild(el("circle", { class: "hidden-badge-pupil", cx: 0, cy: 0, r: 1.9 }));
+      g.appendChild(el("line", { class: "hidden-badge-slash", x1: -7.5, y1: 6.5, x2: 7.5, y2: -6.5 }));
+      g.appendChild(el("title", null, txt(grp.hidden.length + " hidden here — click to view")));
+      gNodes.appendChild(g);
+    });
+  }
+
+  function openHiddenPopup(anchorId) {
+    const grp = hiddenGroups().find((x) => x.anchor === anchorId);
+    if (!grp) return;
+    const anchor = personById(anchorId); if (!anchor) return;
+    const rows = grp.hidden.map((id) => { const p = personById(id); return p ? `<li>${escapeHtml(p.name)}</li>` : ""; }).join("");
+    openModal("Hidden family",
+      `Connected to <b>${escapeHtml(anchor.name)}</b> but hidden from the tree:`,
+      `<ul class="hidden-list">${rows}</ul>`,
+      () => { grp.hidden.forEach((id) => { if (state.hidden) delete state.hidden[id]; }); relayoutAndSave(); toast("Revealed " + grp.hidden.length + (grp.hidden.length === 1 ? " person" : " people")); },
+      "Show them on the tree");
   }
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
   function syncTitle() {
