@@ -23,6 +23,37 @@ function decode(s) {
     .replace(/&gt;/gi, ">");
 }
 
+// Obituary pages almost always advertise the deceased's portrait as their
+// Open Graph / Twitter share image. Pull that URL out and resolve it to an
+// absolute address against the page it came from.
+function extractImageUrl(html, pageUrl) {
+  const pats = [
+    /<meta[^>]+property=["']og:image(?::secure_url|:url)?["'][^>]+content=["']([^"']+)["']/i,
+    /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image(?::secure_url|:url)?["']/i,
+    /<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i,
+    /<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i,
+  ];
+  for (const re of pats) {
+    const m = html.match(re);
+    if (m && m[1]) { try { return new URL(decode(m[1]).trim(), pageUrl).href; } catch (e) {} }
+  }
+  return "";
+}
+
+// Fetch the portrait server-side (browsers can't, cross-origin) and hand it
+// back as a data URL the app can store as the person's picture.
+async function fetchImageDataUrl(imgUrl) {
+  try {
+    const r = await fetch(imgUrl, { headers: { "user-agent": "Mozilla/5.0 (FamilyTree archiver)" } });
+    if (!r.ok) return "";
+    const type = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    if (!/^image\//.test(type) || /svg/.test(type)) return "";
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (!buf.length || buf.length > 6 * 1024 * 1024) return "";
+    return "data:" + type + ";base64," + buf.toString("base64");
+  } catch (e) { return ""; }
+}
+
 function htmlToText(html) {
   return decode(
     html
@@ -65,8 +96,12 @@ export default async function handler(req, res) {
     if (!r.ok) { res.status(502).json({ error: "Couldn't fetch that page (status " + r.status + ")." }); return; }
     const html = await r.text();
     const text = htmlToText(html);
-    if (!text) { res.status(422).json({ error: "That page had no readable text." }); return; }
-    res.status(200).json({ title: extractTitle(html) || "Saved page", text: text.slice(0, 40000) });
+    // Also try to pull the portrait so the app can set it as the person's picture.
+    let image = "";
+    const imgUrl = extractImageUrl(html, url);
+    if (imgUrl) image = await fetchImageDataUrl(imgUrl);
+    if (!text && !image) { res.status(422).json({ error: "That page had no readable text or photo." }); return; }
+    res.status(200).json({ title: extractTitle(html) || "Saved page", text: text.slice(0, 40000), image });
   } catch (err) {
     console.error("archive error", err);
     res.status(500).json({ error: (err && err.message) || "Fetch failed." });

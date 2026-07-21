@@ -1114,8 +1114,9 @@
 
   const docIcon = (k) => ({ link: "🔗", text: "📄", pdf: "📕", image: "🖼️" }[k] || "📄");
   function renderDocsForm(p) {
-    const list = $("#docsList"), addBtn = $("#addDocBtn"), hint = $("#docsHint");
+    const list = $("#docsList"), addBtn = $("#addDocBtn"), hint = $("#docsHint"), photoBtn = $("#obitPhotoBtn");
     list.innerHTML = "";
+    if (photoBtn) photoBtn.hidden = true;
     if (!p) {
       addBtn.disabled = true;
       hint.textContent = "Add this person first, then reopen them to attach an obituary or record.";
@@ -1123,6 +1124,13 @@
     }
     addBtn.disabled = false;
     const docs = p.docs || [];
+    // Offer to pull a picture out of an obituary when there's one to pull from
+    // (an uploaded photo, or a linked page we can fetch the portrait off).
+    if (photoBtn) {
+      const canPhoto = docs.some((d) => d && ((d.kind === "image" && d.content) || d.url));
+      photoBtn.hidden = !canPhoto;
+      photoBtn.textContent = p.photo ? "📷 Replace picture from obituary" : "📷 Use photo from obituary";
+    }
     if (!docs.length) hint.textContent = "Attach an obituary — paste the text, upload a PDF/photo, or save a link. Kept with the tree so it survives even if the original goes offline.";
     else hint.textContent = "";
     docs.forEach((doc) => {
@@ -1316,15 +1324,15 @@
     const saved = (function () { try { return localStorage.getItem("familyTree.importPass") || ""; } catch (e) { return ""; } })();
     const back = document.createElement("div");
     back.className = "modal-backdrop";
-    back.innerHTML = `<div class="modal"><h2>Import from an obituary</h2>
-      <div class="hint">Claude reads the source and proposes people & relationships. Review before it’s added. Nothing is saved until you confirm.</div>
-      <label class="field"><span>Import passcode</span><input type="password" id="imPass" placeholder="set in Vercel (IMPORT_PASSCODE)" value="${escapeHtml(saved)}"/></label>
-      <label class="field"><span>Paste obituary text</span><textarea id="imText" rows="6" placeholder="Paste the obituary here…"></textarea></label>
-      <label class="field"><span>…or a link to one</span><input type="text" id="imUrl" placeholder="https://…"/></label>
+    back.innerHTML = `<div class="modal"><h2>Add people from an obituary</h2>
+      <div class="hint">Paste a link to an obituary — Claude reads it, checks who’s already in your tree, and adds only the new relatives, connected to the right people. You’ll see who it found before anything is added. (You can paste the text or a photo instead.)</div>
+      <label class="field"><span>Link to the obituary</span><input type="text" id="imUrl" placeholder="https://…"/></label>
+      <label class="field"><span>…or paste the text</span><textarea id="imText" rows="5" placeholder="Paste the obituary here…"></textarea></label>
       <label class="field"><span>…or upload a PDF / photo</span><input type="file" id="imFile" accept="application/pdf,image/*"/></label>
+      <label class="field" id="imPassRow"${saved ? " hidden" : ""}><span>Import passcode</span><input type="password" id="imPass" placeholder="set in Vercel (IMPORT_PASSCODE)" value="${escapeHtml(saved)}"/></label>
       <div class="err" id="imErr" style="color:var(--divorce);font-size:12.5px;min-height:16px"></div>
       <div id="imStatus" class="hint"></div>
-      <div class="btn-row"><button class="btn" data-cancel>Cancel</button><button class="btn primary" id="imGo">Read & preview</button></div></div>`;
+      <div class="btn-row"><button class="btn" data-cancel>Cancel</button><button class="btn primary" id="imGo">Read &amp; add people</button></div></div>`;
     document.body.appendChild(back);
     const close = () => back.remove();
     back.querySelector("[data-cancel]").onclick = close;
@@ -1332,14 +1340,17 @@
     const err = back.querySelector("#imErr");
     const status = back.querySelector("#imStatus");
 
-    back.querySelector("#imGo").onclick = async () => {
+    const passRow = back.querySelector("#imPassRow");
+    const goBtn = back.querySelector("#imGo");
+    goBtn.onclick = async () => {
       err.textContent = "";
-      const pass = back.querySelector("#imPass").value.trim();
+      let pass = back.querySelector("#imPass").value.trim();
+      if (!pass) { try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {} }
       const text = back.querySelector("#imText").value.trim();
       const url = back.querySelector("#imUrl").value.trim();
       const fileEl = back.querySelector("#imFile");
-      if (!pass) { err.textContent = "Enter the import passcode."; return; }
-      if (!text && !url && !fileEl.files[0]) { err.textContent = "Add some text, a link, or a file."; return; }
+      if (!text && !url && !fileEl.files[0]) { err.textContent = "Add a link, paste the text, or upload a file."; return; }
+      if (!pass) { passRow.hidden = false; err.textContent = "Enter the import passcode (one time — it’s remembered after)."; return; }
       try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
 
       const payload = {
@@ -1352,24 +1363,35 @@
         payload.file = { mediaType: f.type, data: await fileToBase64(f) };
       }
 
-      status.textContent = "Reading with Claude… this can take a moment.";
-      back.querySelector("#imGo").disabled = true;
+      status.textContent = "Reading the obituary with Claude… this can take a moment.";
+      goBtn.disabled = true;
       try {
         const data = await callExtract(payload);
         const counts = countExtraction(data);
-        if (!counts.people && !counts.couples && !counts.children) { err.textContent = "Nothing usable was found in that source."; status.textContent = ""; back.querySelector("#imGo").disabled = false; return; }
-        if (confirm(`Add to the tree?\n\n• ${counts.people} people\n• ${counts.couples} couples\n• ${counts.children} parent–child links`)) {
+        if (!counts.people && !counts.couples && !counts.children) { err.textContent = "Nothing usable was found in that source."; status.textContent = ""; goBtn.disabled = false; return; }
+        // Show WHO will be added (new names) rather than just counts.
+        const existingNames = new Set(state.persons.map((p) => p.name.trim().toLowerCase()));
+        const newNames = (data.people || []).map((pp) => pp.name).filter((n) => n && !existingNames.has(n.trim().toLowerCase()));
+        const lines = [];
+        if (newNames.length) lines.push(`Add ${newNames.length} new ${newNames.length === 1 ? "person" : "people"}:`, ...newNames.map((n) => "  • " + n));
+        else lines.push("No new people — this will just connect people already in your tree.");
+        const links = counts.couples + counts.children;
+        if (links) lines.push("", `…and ${links} relationship link${links === 1 ? "" : "s"}.`);
+        if (confirm(lines.join("\n"))) {
+          pushUndo();
           mergeExtraction(data);
           relayoutAndSave(); fitView();
-          toast("Imported from obituary");
+          toast(newNames.length ? ("Added " + newNames.length + " from the obituary (Cmd+Z to undo)") : "Connected people from the obituary");
           close();
         } else {
-          status.textContent = ""; back.querySelector("#imGo").disabled = false;
+          status.textContent = ""; goBtn.disabled = false;
         }
       } catch (e2) {
-        err.textContent = e2.message || "Import failed.";
+        const msg = e2.message || "Import failed.";
+        if (/passcode/i.test(msg)) passRow.hidden = false;   // let them correct a wrong passcode
+        err.textContent = msg;
         status.textContent = "";
-        back.querySelector("#imGo").disabled = false;
+        goBtn.disabled = false;
       }
     };
   }
@@ -1469,7 +1491,7 @@
       const url = back.querySelector("#dUrl").value.trim();
       const text = back.querySelector("#dText").value.trim();
       const file = back.querySelector("#dFile").files[0];
-      let kind = "link", content = "";
+      let kind = "link", content = "", fetchedImage = "";
       if (file) {
         if (file.size > 8 * 1024 * 1024) { err.textContent = "File is too large (max 8 MB)."; return; }
         if (file.type === "application/pdf") { kind = "pdf"; content = "data:application/pdf;base64," + (await fileToBase64(file)); }
@@ -1487,10 +1509,11 @@
             const data = await callArchive({ passcode: pass, url });
             if (data && data.text) { kind = "text"; content = data.text; }
             else { kind = "link"; toast("Saved the link (no text found to archive)"); }
+            if (data && data.image) fetchedImage = data.image;   // portrait pulled from the page
           } catch (e2) {
             // Couldn’t reach the archiver (e.g. on plain GitHub Pages) — keep the
             // link so nothing is lost; the text can be archived from the Vercel site.
-            kind = "link"; content = ""; toast("Saved the link — text auto-fetch needs the Vercel site");
+            kind = "link"; content = ""; toast("Saved the link — auto-fetch needs the Vercel site");
           }
           status.textContent = ""; saveBtn.disabled = false;
         } else { kind = "link"; content = ""; toast("Saved the link"); }
@@ -1499,11 +1522,12 @@
       const doc = { id: uid(), title: obitTitle, url, capturedAt: todayStr(), kind, content };
       if (!person.docs) person.docs = [];
       person.docs.push(doc);
-      // A photo obituary also becomes this person’s picture (unless they already have one).
+      // A photo obituary — or a portrait pulled from a linked obituary page —
+      // also becomes this person’s picture (unless they already have one).
       let setPic = false;
-      if (kind === "image" && !person.photo) {
-        const photo = await imageDataToPhoto(content);
-        if (photo) { person.photo = photo; setPic = true; }
+      if (!person.photo) {
+        const src = kind === "image" ? content : fetchedImage;
+        if (src) { const photo = await imageDataToPhoto(src); if (photo) { person.photo = photo; setPic = true; } }
       }
       save(); render(); renderDocsForm(person); if (selectedId === person.id) fillPersonForm(person);
       close(); toast(setPic ? "Obituary saved — also set as their picture" : "Obituary saved");
@@ -1531,6 +1555,38 @@
       if (photo) { p.photo = photo; changed = true; }
     }
     return changed;
+  }
+
+  // Find a picture for one person from their obituary: use an uploaded photo
+  // obituary if there is one, otherwise fetch the portrait from a linked
+  // obituary page. Used by the "Use photo from obituary" button, so it works
+  // retroactively for obituaries that are already attached.
+  async function usePhotoFromObit(p) {
+    if (!p) return;
+    const docs = p.docs || [];
+    const imgDoc = docs.find((d) => d && d.kind === "image" && d.content);
+    if (imgDoc) {
+      const photo = await imageDataToPhoto(imgDoc.content);
+      if (photo) { p.photo = photo; save(); render(); if (selectedId === p.id) fillPersonForm(p); toast("Set their picture from the obituary"); return; }
+    }
+    const urlDoc = docs.find((d) => d && d.url);
+    if (!urlDoc) { toast("No photo found in the obituary"); return; }
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
+    if (!pass) return;
+    try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
+    const btn = $("#obitPhotoBtn"); if (btn) { btn.disabled = true; }
+    toast("Looking for a photo in the obituary…");
+    try {
+      const data = await callArchive({ passcode: pass, url: urlDoc.url });
+      if (data && data.image) {
+        const photo = await imageDataToPhoto(data.image);
+        if (photo) { p.photo = photo; save(); render(); if (selectedId === p.id) fillPersonForm(p); toast("Set their picture from the obituary"); return; }
+      }
+      toast("Couldn’t find a photo in that obituary");
+    } catch (e) {
+      toast(e.message || "Couldn’t reach the obituary page");
+    } finally { if (btn) btn.disabled = false; }
   }
 
   async function callArchive(payload) {
@@ -1766,7 +1822,9 @@
   });
   $("#publishBtn").onclick = openPublishModal;
   $("#importObitBtn").onclick = openImportModal;
+  $("#tbImport").onclick = openImportModal;
   $("#addDocBtn").onclick = () => { const id = $("#personId").value; if (id) openAttachModal(id); };
+  $("#obitPhotoBtn").onclick = () => { const id = $("#personId").value; if (id) usePhotoFromObit(personById(id)); };
   $("#hideAboveBtn").onclick = () => {
     const id = $("#personId").value; if (!id) return;
     const p = personById(id);
@@ -1808,6 +1866,7 @@
     readonly = true;
     document.body.classList.add("readonly");
     $("#tbAdd").style.display = $("#tbUnion").style.display = $("#tbChild").style.display = "none";
+    const imp = $("#tbImport"); if (imp) imp.style.display = "none";
     $("#tbArrange").style.display = "none";
     const tidy = $("#tbTidy"); if (tidy) tidy.style.display = "none";
     applyTitleEditability();
