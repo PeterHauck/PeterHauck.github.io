@@ -649,8 +649,14 @@
 
   function shapeOutline(sex, hasPhoto, color) {
     const fill = hasPhoto ? "none" : "var(--node-fill)";
-    const style = color ? "stroke:" + color + ";stroke-width:3.4" : null; // family colour; inline style beats the class rule
-    if (sex === "female") return el("circle", { class: "shape", r: 41, cx: 0, cy: 0, fill: hasPhoto ? "none" : fill, "fill-opacity": hasPhoto ? 0 : 1, style });
+    // Build an inline style: it beats the `.person .shape { fill: … }` CSS rule,
+    // which would otherwise paint the node fill OVER a photo and hide it. So for
+    // a photo node we force fill:none here, and it also carries the family colour.
+    const parts = [];
+    if (color) parts.push("stroke:" + color, "stroke-width:3.4");
+    if (hasPhoto) parts.push("fill:none");
+    const style = parts.length ? parts.join(";") : null;
+    if (sex === "female") return el("circle", { class: "shape", r: 41, cx: 0, cy: 0, fill, style });
     if (sex === "unknown") return el("polygon", { class: "shape", points: "0,-46 46,0 0,46 -46,0", fill, style });
     return el("rect", { class: "shape", x: -40, y: -40, width: 80, height: 80, rx: 6, fill, style });
   }
