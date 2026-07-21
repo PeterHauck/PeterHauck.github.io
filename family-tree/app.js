@@ -1483,6 +1483,10 @@
     back.className = "modal-backdrop";
     back.innerHTML = `<div class="modal"><h2>Add people from an obituary</h2>
       <div class="hint">Paste a link to an obituary — Claude reads it, checks who’s already in your tree, and adds only the new relatives, connected to the right people. You’ll see who it found before anything is added. (You can paste the text or a photo instead.)</div>
+      <label class="field"><span>This obituary is for</span><select id="imFor">
+        <option value="">A new person (or not sure)</option>
+        ${state.persons.slice().sort((a, b) => a.name.localeCompare(b.name)).map((pp) => `<option value="${pp.id}">${escapeHtml(pp.name)}</option>`).join("")}
+      </select></label>
       <label class="field"><span>Link to the obituary</span><input type="text" id="imUrl" placeholder="https://…"/></label>
       <label class="field"><span>…or paste the text</span><textarea id="imText" rows="5" placeholder="Paste the obituary here…"></textarea></label>
       <label class="field"><span>…or upload a PDF / photo</span><input type="file" id="imFile" accept="application/pdf,image/*"/></label>
@@ -1510,8 +1514,11 @@
       if (!pass) { passRow.hidden = false; err.textContent = "Enter the import passcode (one time — it’s remembered after)."; return; }
       try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
 
+      const forId = back.querySelector("#imFor").value;
+      const forPerson = forId ? personById(forId) : null;
       const payload = {
         passcode: pass, text, url,
+        subject: forPerson ? forPerson.name : "",   // the obituary is about this existing person
         existing: state.persons.map((p) => ({ name: p.name, birth: p.birth, death: p.death })),
       };
       if (fileEl.files[0]) {
@@ -1537,6 +1544,13 @@
         if (confirm(lines.join("\n"))) {
           pushUndo();
           mergeExtraction(data);
+          // If this obituary is for someone already in the tree, keep a copy of it
+          // on their profile too (text or link).
+          if (forPerson) {
+            forPerson.docs = forPerson.docs || [];
+            const kind = text ? "text" : "link";
+            forPerson.docs.push({ id: uid(), title: forPerson.name + "’s Obituary", url, capturedAt: todayStr(), kind, content: text || "" });
+          }
           relayoutAndSave(); fitView();
           toast(newNames.length ? ("Added " + newNames.length + " from the obituary (Cmd+Z to undo)") : "Connected people from the obituary");
           close();
