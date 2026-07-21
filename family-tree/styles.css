@@ -328,8 +328,17 @@ button.btn.danger { color: var(--divorce); }
 .hidden-badge:hover .hidden-badge-bg { fill: var(--accent); stroke: var(--accent); }
 .hidden-badge:hover .hidden-badge-mark, .hidden-badge:hover .hidden-badge-slash { stroke: #fff; }
 .hidden-badge:hover .hidden-badge-pupil { fill: #fff; }
-.hidden-list { list-style: none; margin: 4px 0 0; padding: 0; max-height: 240px; overflow-y: auto; }
-.hidden-list li { padding: 7px 10px; border: 1px solid var(--panel-border); border-radius: 8px; margin-bottom: 6px; font-size: 13.5px; }
+/* hidden-family mini tree (in the eye-slash pop-up) */
+.mini-modal { width: min(680px, 96vw); }
+.mini-wrap { margin: 6px 0 4px; }
+.mini-tree { width: 100%; height: min(48vh, 440px); display: block; background: var(--paper); border: 1px solid var(--panel-border); border-radius: 10px; }
+.mini-link { stroke: var(--line); stroke-width: 1.6; fill: none; }
+.mini-link.adopt { stroke: #2f7d5d; stroke-dasharray: 4 3; }
+.mini-shape { fill: var(--node-fill); stroke: var(--line); stroke-width: 2; }
+.mini-node.anchor .mini-shape { stroke: var(--accent); stroke-width: 3; }
+.mini-deceased { stroke: var(--line); stroke-width: 1.6; }
+.mini-label { font-size: 11px; text-anchor: middle; fill: var(--ink); font-weight: 600; dominant-baseline: hanging; }
+.mini-node.anchor .mini-label { fill: var(--accent); }
 
 /* hover-to-add "+" on a couple's lines */
 .union .hit { stroke: transparent; stroke-width: 20; fill: none; pointer-events: stroke; }
