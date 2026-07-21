@@ -350,6 +350,8 @@ button.btn.danger { color: var(--divorce); }
 .doc-view iframe, .doc-view img { width: 100%; max-height: 60vh; border: 1px solid var(--panel-border); border-radius: 8px; display: block; }
 .doc-view .src { font-size: 12.5px; margin: 4px 0 12px; }
 .doc-view .src a { color: var(--accent-2); }
+.doc-view img + .scraped-label, .doc-view iframe + .scraped-label { margin-top: 12px; }
+.doc-view .scraped-label { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 6px; }
 
 /* remove the 300ms tap delay & double-tap zoom on controls */
 button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #panelToggle, #hiddenChip { touch-action: manipulation; }
