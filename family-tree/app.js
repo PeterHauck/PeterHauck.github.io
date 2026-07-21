@@ -12,6 +12,7 @@
   "use strict";
 
   const SVGNS = "http://www.w3.org/2000/svg";
+  const XLINKNS = "http://www.w3.org/1999/xlink";
   const STORE_KEY = "familyTree.v1";
 
   /* ---- layout constants ---- */
@@ -596,7 +597,12 @@
 
   function el(tag, attrs, children) {
     const e = document.createElementNS(SVGNS, tag);
-    if (attrs) for (const k in attrs) if (attrs[k] != null) e.setAttribute(k, attrs[k]);
+    if (attrs) for (const k in attrs) if (attrs[k] != null) {
+      e.setAttribute(k, attrs[k]);
+      // iOS Safari won't load an <image> from a plain href — it needs the
+      // namespaced xlink:href too. Set both so photos render everywhere.
+      if (k === "href") e.setAttributeNS(XLINKNS, "xlink:href", attrs[k]);
+    }
     if (children) (Array.isArray(children) ? children : [children]).forEach((c) => c && e.appendChild(c));
     return e;
   }
@@ -1163,9 +1169,9 @@
     document.querySelectorAll("#colorRow .swatch").forEach((b) => b.classList.toggle("sel", (b.dataset.color || "") === formColor));
   }
   function updatePhotoPreview() {
-    const img = $("#photoPreview"), clr = $("#photoClear");
-    if (pendingPhoto) { img.src = pendingPhoto; img.hidden = false; clr.hidden = false; }
-    else { img.hidden = true; clr.hidden = true; }
+    const img = $("#photoPreview"), clr = $("#photoClear"), adj = $("#photoAdjustBtn");
+    if (pendingPhoto) { img.src = pendingPhoto; img.hidden = false; clr.hidden = false; if (adj) adj.hidden = false; }
+    else { img.hidden = true; clr.hidden = true; if (adj) adj.hidden = true; }
   }
 
   document.querySelectorAll("#sexToggle button").forEach((b) => (b.onclick = () => setSex(b.dataset.sex)));
@@ -1199,14 +1205,12 @@
   $("#photoInput").addEventListener("change", (e) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => { pendingPhoto = downscale(img, 400); updatePhotoPreview(); };
-      img.src = reader.result;
-    };
+    reader.onload = () => openPhotoAdjust(reader.result, (photo) => { pendingPhoto = photo; updatePhotoPreview(); });
+    reader.onerror = () => toast("Couldn’t read that file.");
     reader.readAsDataURL(file);
     e.target.value = "";
   });
+  $("#photoAdjustBtn").onclick = () => { if (pendingPhoto) openPhotoAdjust(pendingPhoto, (photo) => { pendingPhoto = photo; updatePhotoPreview(); }); };
   // Load a photo from a pasted image link (or any page with a portrait) into the
   // form's staged photo. The fetch runs server-side (Vercel), so it works on
   // cross-origin images the browser itself couldn't read. Save to keep it.
@@ -1222,8 +1226,8 @@
     try {
       const data = await callArchive({ passcode: pass, url });
       if (data && data.image) {
-        const photo = await imageDataToPhoto(data.image);
-        if (photo) { pendingPhoto = photo; updatePhotoPreview(); toast("Photo loaded — click Save to keep it"); return; }
+        openPhotoAdjust(data.image, (photo) => { pendingPhoto = photo; updatePhotoPreview(); toast("Photo loaded — click Save to keep it"); });
+        return;
       }
       toast("No image found at that link");
     } catch (e) {
@@ -1237,6 +1241,81 @@
     const c = document.createElement("canvas"); c.width = w; c.height = h;
     c.getContext("2d").drawImage(img, 0, 0, w, h);
     return c.toDataURL("image/jpeg", 0.82);
+  }
+
+  // Crop / zoom / reposition editor. Opens on an image (data URL), lets the user
+  // drag to move and pinch/slide to zoom within a square frame, and returns a
+  // clean square JPEG via onDone. Also surfaces a clear error if the image can't
+  // be read (e.g. an unsupported HEIC), instead of failing silently.
+  function openPhotoAdjust(src, onDone) {
+    const probe = new Image();
+    probe.onerror = () => toast("Couldn’t read that image — try a JPG or PNG (a screenshot of it works too).");
+    probe.onload = () => {
+      const V = 280, OUT = 400;
+      const natW = probe.naturalWidth, natH = probe.naturalHeight;
+      const minScale = V / Math.min(natW, natH);
+      let scale = minScale, ox = (V - natW * scale) / 2, oy = (V - natH * scale) / 2;
+
+      const back = document.createElement("div");
+      back.className = "modal-backdrop";
+      back.innerHTML = `<div class="modal"><h2>Adjust photo</h2>
+        <div class="hint">Drag to move, and pinch or use the slider to zoom. The circle shows what fills a round profile.</div>
+        <div class="pa-stage" id="paStage"><canvas id="paCanvas" width="${V}" height="${V}"></canvas><div class="pa-guide"></div></div>
+        <div class="pa-zoom"><span>−</span><input type="range" id="paZoom" min="1" max="4" step="0.01" value="1"><span>+</span></div>
+        <div class="btn-row"><button class="btn" data-cancel>Cancel</button><button class="btn primary" id="paOk">Use photo</button></div></div>`;
+      document.body.appendChild(back);
+      const close = () => back.remove();
+      back.querySelector("[data-cancel]").onclick = close;
+      back.addEventListener("click", (e) => { if (e.target === back) close(); });
+      const cv = back.querySelector("#paCanvas"), ctx = cv.getContext("2d");
+      const stage = back.querySelector("#paStage"), zoom = back.querySelector("#paZoom");
+
+      const clamp = () => {
+        const w = natW * scale, h = natH * scale;
+        ox = Math.min(0, Math.max(V - w, ox));
+        oy = Math.min(0, Math.max(V - h, oy));
+      };
+      const draw = () => { ctx.clearRect(0, 0, V, V); ctx.drawImage(probe, ox, oy, natW * scale, natH * scale); };
+      const setScaleAround = (ns, cx, cy) => {
+        ns = Math.max(minScale, Math.min(minScale * 4, ns));
+        const k = ns / scale; ox = cx - (cx - ox) * k; oy = cy - (cy - oy) * k; scale = ns; clamp(); draw();
+        zoom.value = (scale / minScale).toFixed(2);
+      };
+      clamp(); draw();
+
+      zoom.oninput = () => setScaleAround(minScale * parseFloat(zoom.value), V / 2, V / 2);
+
+      // pointer pan + pinch zoom (works with mouse and touch)
+      const pts = new Map();
+      const toLocal = (e) => { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) * (V / r.width), y: (e.clientY - r.top) * (V / r.height) }; };
+      let last = null, pinchDist = 0;
+      stage.addEventListener("pointerdown", (e) => { e.preventDefault(); stage.setPointerCapture(e.pointerId); pts.set(e.pointerId, toLocal(e)); if (pts.size === 1) last = toLocal(e); pinchDist = 0; });
+      stage.addEventListener("pointermove", (e) => {
+        if (!pts.has(e.pointerId)) return;
+        pts.set(e.pointerId, toLocal(e));
+        const arr = [...pts.values()];
+        if (arr.length >= 2) {
+          const mx = (arr[0].x + arr[1].x) / 2, my = (arr[0].y + arr[1].y) / 2;
+          const d = Math.hypot(arr[0].x - arr[1].x, arr[0].y - arr[1].y);
+          if (pinchDist) setScaleAround(scale * (d / pinchDist), mx, my);
+          pinchDist = d;
+        } else {
+          const p = toLocal(e); if (last) { ox += p.x - last.x; oy += p.y - last.y; clamp(); draw(); } last = p;
+        }
+      });
+      const end = (e) => { pts.delete(e.pointerId); if (pts.size < 2) pinchDist = 0; if (pts.size === 0) last = null; else last = [...pts.values()][0]; };
+      stage.addEventListener("pointerup", end);
+      stage.addEventListener("pointercancel", end);
+
+      back.querySelector("#paOk").onclick = () => {
+        const out = document.createElement("canvas"); out.width = out.height = OUT;
+        const f = OUT / V;
+        out.getContext("2d").drawImage(probe, ox * f, oy * f, natW * scale * f, natH * scale * f);
+        close();
+        onDone(out.toDataURL("image/jpeg", 0.85));
+      };
+    };
+    probe.src = src;
   }
 
   /* ============================================================ MODALS */
