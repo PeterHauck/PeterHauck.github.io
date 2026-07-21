@@ -731,28 +731,64 @@
     return out;
   }
 
+  // A little "+" button that appears on hover over a union's lines, to quickly
+  // add a child / sibling to that couple. Hidden until the union group is hovered
+  // (see CSS); clicks are caught in the pointerdown handler via the .add-plus class.
+  function addPlus(unionId, x, y, label) {
+    const g = el("g", { class: "add-plus", "data-union": unionId, transform: `translate(${x},${y})` });
+    g.appendChild(el("circle", { class: "add-plus-bg", r: 11, cx: 0, cy: 0 }));
+    g.appendChild(el("line", { class: "add-plus-mark", x1: -5, y1: 0, x2: 5, y2: 0 }));
+    g.appendChild(el("line", { class: "add-plus-mark", x1: 0, y1: -5, x2: 0, y2: 5 }));
+    g.appendChild(el("title", null, txt(label)));
+    return g;
+  }
+
+  // Quick-add a child to a union: drop in a blank person, link them, and open the
+  // form focused on the name so you just type and Save. Undoable.
+  function quickAddChild(unionId) {
+    if (readonly) return;
+    const u = unionById(unionId); if (!u) return;
+    pushUndo();
+    const np = addPerson({ name: "New person", sex: "unknown" });
+    addChild(u.id, np.id, "bio");
+    selectedId = np.id;
+    relayoutAndSave();
+    ensurePanel(); fillPersonForm(np);
+    const nameEl = $("#pName"); if (nameEl) { nameEl.focus(); nameEl.select(); }
+    toast("Added — type their name and Save");
+  }
+
   function renderUnion(u) {
     const pa = personById(u.a); if (!pa) return;
     const pb = u.b != null ? personById(u.b) : null;
     const A = posOf(u.a), B = pb ? posOf(u.b) : null;
     const kids = childLinksOfUnion(u.id).map((l) => ({ l, p: personById(l.child) })).filter((k) => k.p && !isHidden(k.p.id));
+    const gu = el("g", { class: "union", "data-union": u.id });   // group so hover reveals the +
 
     let midX, midY, dropTop;
     if (pb) {
       const y = (A.y + B.y) / 2;
       const left = A.x < B.x ? A : B, right = A.x < B.x ? B : A;
       const dashed = u.status === "partners";
-      gLinks.appendChild(el("line", { class: "link", x1: left.x + HALF - 6, y1: y, x2: right.x - HALF + 6, y2: y, "stroke-dasharray": dashed ? "6 5" : null }));
+      gu.appendChild(el("line", { class: "link", x1: left.x + HALF - 6, y1: y, x2: right.x - HALF + 6, y2: y, "stroke-dasharray": dashed ? "6 5" : null }));
       midX = (A.x + B.x) / 2; midY = y; dropTop = y;
       if (u.status === "divorced") {
-        // double-slash across the middle of the marriage line
-        [-7, 5].forEach((dx) => gLinks.appendChild(el("line", { class: "divorce-tick", x1: midX + dx + 5, y1: midY - 11, x2: midX + dx - 5, y2: midY + 11 })));
+        [-7, 5].forEach((dx) => gu.appendChild(el("line", { class: "divorce-tick", x1: midX + dx + 5, y1: midY - 11, x2: midX + dx - 5, y2: midY + 11 })));
       }
     } else {
       midX = A.x; midY = A.y; dropTop = A.y + HALF; // drop from the single parent's bottom
     }
 
-    if (!kids.length) return;
+    if (!kids.length) {
+      // Childless couple: a transparent stub below the couple makes a hover target,
+      // and the + adds their first child.
+      if (!readonly) {
+        gu.appendChild(el("line", { class: "hit", x1: midX, y1: dropTop, x2: midX, y2: dropTop + 40 }));
+        gu.appendChild(addPlus(u.id, midX, dropTop + 34, "Add a child"));
+      }
+      gLinks.appendChild(gu);
+      return;
+    }
 
     // Colour the descent lines by the children's family so each set of lines is
     // traceable at a glance instead of a grey tangle.
@@ -760,25 +796,24 @@
     const cstyle = famColor ? "stroke:" + famColor + ";stroke-width:2.8" : null;
 
     const childTops = kids.map((k) => ({ x: posOf(k.p.id).x, top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
-    // The descent always drops from the CENTRE of the marriage line (midway
-    // between husband and wife) and goes straight down; the horizontal bus then
-    // carries across to the children.
     const dropX = midX;
-    // Place the sibling bus in the clear band BELOW the parents' name labels and
-    // ABOVE the children. Each overlapping bus gets its own level (see
-    // computeBusLevels) so no two buses run along the same line.
     const busY = midY + 120 + (busLevels[u.id] || 0) * 15;
-    // vertical drop from union to bus
-    gLinks.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
-    // horizontal bus
+    gu.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
     const minX = Math.min(dropX, ...childTops.map((c) => c.x));
     const maxX = Math.max(dropX, ...childTops.map((c) => c.x));
     if (childTops.length > 1 || minX !== maxX)
-      gLinks.appendChild(el("line", { class: "link", x1: minX, y1: busY, x2: maxX, y2: busY, style: cstyle }));
-    // verticals to each child (dashed + green if adopted)
+      gu.appendChild(el("line", { class: "link", x1: minX, y1: busY, x2: maxX, y2: busY, style: cstyle }));
     childTops.forEach((c) => {
-      gLinks.appendChild(el("line", { class: "link" + (c.type === "adopted" ? " adopt" : ""), x1: c.x, y1: busY, x2: c.x, y2: c.top, style: c.type === "adopted" ? null : cstyle }));
+      gu.appendChild(el("line", { class: "link" + (c.type === "adopted" ? " adopt" : ""), x1: c.x, y1: busY, x2: c.x, y2: c.top, style: c.type === "adopted" ? null : cstyle }));
     });
+    // Hover targets (wide transparent lines over the drop + bus) and the + to add
+    // another child/sibling, off the right end of the sibling line.
+    if (!readonly) {
+      gu.appendChild(el("line", { class: "hit", x1: dropX, y1: dropTop, x2: dropX, y2: busY }));
+      gu.appendChild(el("line", { class: "hit", x1: minX, y1: busY, x2: maxX, y2: busY }));
+      gu.appendChild(addPlus(u.id, maxX + 26, busY, "Add a sibling / child"));
+    }
+    gLinks.appendChild(gu);
   }
 
   function txt(s) { return document.createTextNode(s); }
@@ -919,6 +954,8 @@
     if (badge) { openDocsForPerson(badge.getAttribute("data-id")); return; }
     const hb = e.target.closest && e.target.closest(".hidden-badge");
     if (hb) { openHiddenPopup(hb.getAttribute("data-anchor")); return; }
+    const plus = e.target.closest && e.target.closest(".add-plus");
+    if (plus) { quickAddChild(plus.getAttribute("data-union")); return; }
     const personEl = e.target.closest && e.target.closest(".person");
 
     if (rearrange && !readonly) {
