@@ -97,7 +97,7 @@ window.FAMILY_TREE_STARTER = {
   // Bump this whenever the tree data below changes. On load, a higher version
   // here beats an older copy saved in the browser, so updates always show and a
   // stale local copy can't get "stuck".
-  version: 5,
+  version: 6,
   title: "The Hauck / Goos Family",
   subtitle: "Started from Tania Goos's obituary",
   persons: [
@@ -164,6 +164,13 @@ window.FAMILY_TREE_STARTER = {
     P("palmer", "Palmer Eide", "male", { birth: 1906, death: 1991, deceased: true,
       docs: [{ id: "obit_palmer", title: "Obituary — Argus Leader (Newspapers.com)", url: "", capturedAt: "2026-07-19", kind: "text", content: PALMER_OBIT }] }),
     P("esther", "Esther (Hockenstad) Eide", "female", { death: 1978, deceased: true }), // Mary's mother
+    // Esther's sister Pun & her husband Niels Berdahl (died in a car accident); their
+    // three sons — Peter, James & Alan — were then adopted by Palmer & Esther.
+    P("niels", "Niels Berdahl", "male", { deceased: true }),
+    P("pun", "Pun (Hockenstad) Berdahl", "female", { deceased: true }),
+    P("peterb", "Peter Berdahl", "male"),
+    P("jamesb", "James Berdahl", "male"),
+    P("alanb", "Alan Berdahl", "male"),
     // Allison's brother (Peter's uncle) and his family
     P("aaron", "Aaron Boyd", "male"),
     P("shannon", "Shannon Boyd", "female"),
@@ -231,6 +238,7 @@ window.FAMILY_TREE_STARTER = {
     // Peter's mother's side (Boyd / Eide) and sister's family (Glover)
     U("u_maryBoyd", "bruceBoyd", "maryBoyd"),
     U("u_palmer", "palmer", "esther"),
+    U("u_berdahl", "niels", "pun"),   // the boys' birth parents
     U("u_aaron", "aaron", "shannon", "divorced"),
     U("u_lauren", "danny", "lauren"),
     // Alicen's side
@@ -256,6 +264,9 @@ window.FAMILY_TREE_STARTER = {
     L("u_michaelAllison", "peter"), L("u_michaelAllison", "lauren"),
     // Peter's mother's side (Boyd / Eide) and sister's family (Glover)
     L("u_palmer", "maryBoyd"),
+    // Peter, James & Alan: birth children of Niels & Pun, adopted by Palmer & Esther
+    L("u_berdahl", "peterb"), L("u_berdahl", "jamesb"), L("u_berdahl", "alanb"),
+    L("u_palmer", "peterb", "adopted"), L("u_palmer", "jamesb", "adopted"), L("u_palmer", "alanb", "adopted"),
     L("u_maryBoyd", "allison"), L("u_maryBoyd", "aaron"),
     L("u_aaron", "josie"), L("u_aaron", "palmerBoyd"),
     L("u_lauren", "maisy"), L("u_lauren", "willa"),
@@ -288,7 +299,7 @@ window.FAMILY_TREE_STARTER = {
     "#3f8f5a": ["bob", "anne", "david", "robertjay"], // Goos (green)
     "#2a9d9d": ["edwardf", "alicef", "harlan", "lisa", "linda", "debra", "davef", "christine", "alicen"], // Fuchs (teal)
     "#bf8b30": ["arthurm", "myrtlem", "darleen"], // Miller (gold)
-    "#b5495b": ["palmer", "esther", "maryBoyd", "allison", "aaron", "josie", "palmerBoyd"], // Peter's mother's side, Boyd / Eide (crimson)
+    "#b5495b": ["palmer", "esther", "maryBoyd", "allison", "aaron", "josie", "palmerBoyd", "pun", "peterb", "jamesb", "alanb"], // Peter's mother's side, Boyd / Eide (crimson)
   };
   var byId = {};
   window.FAMILY_TREE_STARTER.persons.forEach(function (p) { byId[p.id] = p; });
