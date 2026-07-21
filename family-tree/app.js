@@ -1662,12 +1662,28 @@
       const url = back.querySelector("#dUrl").value.trim();
       const text = back.querySelector("#dText").value.trim();
       const file = back.querySelector("#dFile").files[0];
-      let kind = "link", content = "", fetchedImage = "";
+      let kind = "link", content = "", fetchedImage = "", scrapedText = "";
       if (file) {
         if (file.size > 8 * 1024 * 1024) { err.textContent = "File is too large (max 8 MB)."; return; }
-        if (file.type === "application/pdf") { kind = "pdf"; content = "data:application/pdf;base64," + (await fileToBase64(file)); }
-        else if (file.type.startsWith("image/")) { kind = "image"; content = "data:" + file.type + ";base64," + (await fileToBase64(file)); }
+        let fileB64 = "", fileMt = file.type;
+        if (file.type === "application/pdf") { kind = "pdf"; fileB64 = await fileToBase64(file); content = "data:application/pdf;base64," + fileB64; }
+        else if (file.type.startsWith("image/")) { kind = "image"; fileB64 = await fileToBase64(file); content = "data:" + file.type + ";base64," + fileB64; }
         else { kind = "text"; content = await file.text(); }
+        // Scrape the text out of a screenshot / PDF so there's a durable, searchable
+        // record even if the picture is later lost.
+        if (fileB64 && (kind === "image" || kind === "pdf")) {
+          let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+          if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
+          if (pass) {
+            try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
+            saveBtn.disabled = true; status.textContent = "Reading the text from the file…";
+            try {
+              const t = await callTranscribe({ passcode: pass, file: { mediaType: fileMt, data: fileB64 } });
+              if (t && t.text) scrapedText = t.text;
+            } catch (e2) { toast("Saved the file — couldn’t read its text here (" + (e2.message || "error") + ")"); }
+            status.textContent = ""; saveBtn.disabled = false;
+          }
+        }
       } else if (text) { kind = "text"; content = text; }
       else if (url) {
         // A link on its own: automatically fetch and keep a durable text copy.
@@ -1691,6 +1707,7 @@
       } else { err.textContent = "Add a link, paste the text, or upload a file."; return; }
 
       const doc = { id: uid(), title: obitTitle, url, capturedAt: todayStr(), kind, content };
+      if (scrapedText) doc.text = scrapedText;   // durable, searchable copy of a photo/PDF's text
       if (!person.docs) person.docs = [];
       person.docs.push(doc);
       // A photo obituary — or a portrait pulled from a linked obituary page —
@@ -1701,7 +1718,8 @@
         if (src) { const photo = await imageDataToPhoto(src); if (photo) { person.photo = photo; setPic = true; } }
       }
       save(); render(); renderDocsForm(person); if (selectedId === person.id) fillPersonForm(person);
-      close(); toast(setPic ? "Obituary saved — also set as their picture" : "Obituary saved");
+      close();
+      toast(scrapedText ? "Obituary saved — text scraped" + (setPic ? " & set as their picture" : "") : (setPic ? "Obituary saved — also set as their picture" : "Obituary saved"));
     };
   }
 
@@ -1773,6 +1791,19 @@
     return res.json();
   }
 
+  async function callTranscribe(payload) {
+    let res;
+    try { res = await fetch("api/transcribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); }
+    catch (e) { throw new Error("Couldn’t reach the text-scraping service."); }
+    if (!res.ok) {
+      let msg = "Text scraping failed (" + res.status + ").";
+      try { msg = (await res.json()).error || msg; } catch (e) {}
+      if (res.status === 404) msg = "Reading text from files needs the Vercel site.";
+      throw new Error(msg);
+    }
+    return res.json();
+  }
+
   function openDocsForPerson(id) {
     const p = personById(id); if (!p || !p.docs || !p.docs.length) return;
     selectPerson(id);
@@ -1799,6 +1830,10 @@
     else if (doc.kind === "pdf") bodyHtml = `<iframe src="${doc.content}"></iframe>`;
     else if (doc.kind === "image") bodyHtml = `<img src="${doc.content}" alt=""/>`;
     else bodyHtml = `<p class="hint">No archived copy is saved yet — open the original above, or edit this record to paste the text or upload a PDF for a permanent copy.</p>`;
+    // Text scraped from a screenshot / PDF — the durable, searchable copy.
+    if (doc.text && (doc.kind === "image" || doc.kind === "pdf")) {
+      bodyHtml += `<div class="scraped-label">Scraped text</div><pre>${escapeHtml(doc.text)}</pre>`;
+    }
     const srcLine = (doc.url ? `<a href="${escapeHtml(doc.url)}" target="_blank" rel="noopener">View original listing ↗</a> · ` : "") + "saved " + (doc.capturedAt || "");
     const back = document.createElement("div");
     back.className = "modal-backdrop";
