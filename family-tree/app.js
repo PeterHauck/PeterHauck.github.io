@@ -2053,16 +2053,108 @@
     });
   }
 
+  // Lay out a small subset (the anchor + its hidden people) into its own mini
+  // family tree: filter to the members, compute generations, then place each
+  // couple over the centre of their children.
+  function layoutMini(members) {
+    const set = new Set(members);
+    const persons = members.map(personById).filter(Boolean);
+    const unions = state.unions.filter((u) => set.has(u.a) && (u.b == null || set.has(u.b)));
+    const uById = {}; unions.forEach((u) => (uById[u.id] = u));
+    const links = state.links.filter((l) => set.has(l.child) && uById[l.union]);
+    const gen = computeGenerations(persons, unions, links, uById);
+    const minG = Math.min(...persons.map((p) => gen[p.id] || 0));
+    const genOf = (id) => (gen[id] || 0) - minG;
+    const spouseOf = (id) => { const u = unions.find((uu) => (uu.a === id || uu.b === id) && uu.b != null); return u ? (u.a === id ? u.b : u.a) : null; };
+    const childrenVia = (id) => { const us = unions.filter((u) => u.a === id || u.b === id).map((u) => u.id); return links.filter((l) => us.includes(l.union)).map((l) => l.child); };
+
+    const COLW = 118, ROWH = 118;
+    const x = {}; let cursor = 0; const placed = new Set();
+    function placePerson(id) {
+      if (placed.has(id)) return;
+      placed.add(id);
+      const sp = spouseOf(id); if (sp) placed.add(sp);
+      const kids = [...new Set([...childrenVia(id), ...(sp ? childrenVia(sp) : [])])].filter((c) => set.has(c) && !placed.has(c));
+      if (kids.length) {
+        kids.forEach(placePerson);
+        const cxs = kids.map((k) => x[k] || 0);
+        const center = (Math.min(...cxs) + Math.max(...cxs)) / 2;
+        if (sp) { x[id] = center - COLW / 2; x[sp] = center + COLW / 2; } else x[id] = center;
+      } else if (sp) { x[id] = cursor; x[sp] = cursor + COLW; cursor += COLW * 2 + 34; }
+      else { x[id] = cursor; cursor += COLW + 34; }
+    }
+    members.filter((id) => genOf(id) === 0).forEach(placePerson);
+    members.forEach((id) => { if (!placed.has(id)) placePerson(id); });
+    const pos = {}; members.forEach((id) => (pos[id] = { x: x[id] || 0, y: genOf(id) * ROWH }));
+    return { pos, unions, links, uById, persons, COLW };
+  }
+
+  function renderMiniTreeSVG(members, anchorId) {
+    const L = layoutMini(members);
+    const NS = 17;
+    const svg = el("svg", { class: "mini-tree" });
+    const gL = el("g"), gN = el("g"); svg.appendChild(gL); svg.appendChild(gN);
+    L.unions.forEach((u) => {
+      const A = L.pos[u.a], B = u.b != null ? L.pos[u.b] : null; if (!A) return;
+      let midX, midY, dropTop;
+      if (B) {
+        gL.appendChild(el("line", { class: "mini-link", x1: Math.min(A.x, B.x) + NS, y1: (A.y + B.y) / 2, x2: Math.max(A.x, B.x) - NS, y2: (A.y + B.y) / 2 }));
+        midX = (A.x + B.x) / 2; midY = (A.y + B.y) / 2; dropTop = midY;
+      } else { midX = A.x; midY = A.y; dropTop = A.y + NS; }
+      const kids = L.links.filter((l) => l.union === u.id).map((l) => l.child).filter((c) => L.pos[c]);
+      if (!kids.length) return;
+      const busY = (dropTop + Math.min(...kids.map((c) => L.pos[c].y))) / 2;
+      const kxs = kids.map((c) => L.pos[c].x);
+      gL.appendChild(el("line", { class: "mini-link", x1: midX, y1: dropTop, x2: midX, y2: busY }));
+      if (kids.length > 1) gL.appendChild(el("line", { class: "mini-link", x1: Math.min(...kxs), y1: busY, x2: Math.max(...kxs), y2: busY }));
+      kids.forEach((c) => {
+        const adopt = (L.links.find((l) => l.union === u.id && l.child === c) || {}).type === "adopted";
+        gL.appendChild(el("line", { class: "mini-link" + (adopt ? " adopt" : ""), x1: L.pos[c].x, y1: busY, x2: L.pos[c].x, y2: L.pos[c].y - NS }));
+      });
+    });
+    L.persons.forEach((p) => {
+      const q = L.pos[p.id]; if (!q) return;
+      const g = el("g", { class: "mini-node" + (p.id === anchorId ? " anchor" : ""), transform: `translate(${q.x},${q.y})` });
+      let shape;
+      if (p.sex === "female") shape = el("circle", { r: NS, cx: 0, cy: 0 });
+      else if (p.sex === "unknown") shape = el("polygon", { points: `0,${-NS} ${NS},0 0,${NS} ${-NS},0` });
+      else shape = el("rect", { x: -NS, y: -NS, width: NS * 2, height: NS * 2, rx: 4 });
+      shape.setAttribute("class", "mini-shape");
+      if (p.color) shape.setAttribute("style", "stroke:" + p.color);
+      g.appendChild(shape);
+      if (isDeceased(p)) g.appendChild(el("line", { class: "mini-deceased", x1: -NS, y1: NS, x2: NS, y2: -NS }));
+      g.appendChild(el("text", { class: "mini-label", x: 0, y: NS + 13 }, txt(p.name)));
+      gN.appendChild(g);
+    });
+    const xs = L.persons.map((p) => L.pos[p.id].x), ys = L.persons.map((p) => L.pos[p.id].y);
+    const pad = 46;
+    const minX = Math.min(...xs) - L.COLW / 2 - pad, maxX = Math.max(...xs) + L.COLW / 2 + pad;
+    const minY = Math.min(...ys) - NS - pad, maxY = Math.max(...ys) + NS + 30 + pad;
+    svg.setAttribute("viewBox", `${minX} ${minY} ${maxX - minX} ${maxY - minY}`);
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    return svg;
+  }
+
   function openHiddenPopup(anchorId) {
     const grp = hiddenGroups().find((x) => x.anchor === anchorId);
     if (!grp) return;
     const anchor = personById(anchorId); if (!anchor) return;
-    const rows = grp.hidden.map((id) => { const p = personById(id); return p ? `<li>${escapeHtml(p.name)}</li>` : ""; }).join("");
-    openModal("Hidden family",
-      `Connected to <b>${escapeHtml(anchor.name)}</b> but hidden from the tree:`,
-      `<ul class="hidden-list">${rows}</ul>`,
-      () => { grp.hidden.forEach((id) => { if (state.hidden) delete state.hidden[id]; }); relayoutAndSave(); toast("Revealed " + grp.hidden.length + (grp.hidden.length === 1 ? " person" : " people")); },
-      "Show them on the tree");
+    const members = [anchorId, ...grp.hidden];
+    const back = document.createElement("div");
+    back.className = "modal-backdrop";
+    back.innerHTML = `<div class="modal mini-modal"><h2>Hidden family</h2>
+      <div class="hint">Connected to <b>${escapeHtml(anchor.name)}</b> but hidden from the main tree:</div>
+      <div class="mini-wrap"></div>
+      <div class="btn-row"><button class="btn" data-cancel>Close</button><button class="btn primary" data-ok>Show them on the tree</button></div></div>`;
+    document.body.appendChild(back);
+    back.querySelector(".mini-wrap").appendChild(renderMiniTreeSVG(members, anchorId));
+    const close = () => back.remove();
+    back.querySelector("[data-cancel]").onclick = close;
+    back.addEventListener("click", (e) => { if (e.target === back) close(); });
+    back.querySelector("[data-ok]").onclick = () => {
+      grp.hidden.forEach((id) => { if (state.hidden) delete state.hidden[id]; });
+      relayoutAndSave(); toast("Revealed " + grp.hidden.length + (grp.hidden.length === 1 ? " person" : " people")); close();
+    };
   }
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
   function syncTitle() {
