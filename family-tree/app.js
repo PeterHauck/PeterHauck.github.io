@@ -612,15 +612,20 @@
     const g = el("g", { class: "person" + (p.id === selectedId ? " selected" : "") + (selection.has(p.id) ? " multi" : ""), transform: `translate(${pos.x},${pos.y})`, "data-id": p.id });
 
     const clip = { male: "clip-male", female: "clip-female", unknown: "clip-unknown" }[p.sex] || "clip-unknown";
+    const decd = isDeceased(p);
     if (p.photo) {
+      // For a photo, the deceased slash goes BEHIND the picture so it never
+      // crosses the face — only its tips peek out past the edges.
+      if (decd) g.appendChild(el("line", { class: "deceased", x1: -HALF - 9, y1: HALF + 9, x2: HALF + 9, y2: -HALF - 9 }));
       g.appendChild(el("image", { href: p.photo, x: -HALF, y: -HALF, width: HALF * 2, height: HALF * 2, preserveAspectRatio: "xMidYMid slice", "clip-path": `url(#${clip})` }));
     } else {
       g.appendChild(el("text", { class: "placeholder-emoji", x: 0, y: 2 }, txt("👤")));
     }
     // shape outline on top
     g.appendChild(shapeOutline(p.sex, !!p.photo, p.color));
-    // deceased slash
-    if (isDeceased(p)) g.appendChild(el("line", { class: "deceased", x1: -HALF, y1: HALF, x2: HALF, y2: -HALF }));
+    // deceased slash — drawn across the empty symbol (the classic mark) only when
+    // there's no photo; photo nodes get the behind-the-picture version above.
+    if (decd && !p.photo) g.appendChild(el("line", { class: "deceased", x1: -HALF, y1: HALF, x2: HALF, y2: -HALF }));
 
     // labels — with a paper-coloured backing so connectors pass BEHIND the text
     const lines = nameLines(p.name);
@@ -635,12 +640,15 @@
     lines.forEach((l, i) => g.appendChild(el("text", { class: "label", x: 0, y: HALF + 22 + i * 18 }, txt(l))));
     if (d) g.appendChild(el("text", { class: "dates", x: 0, y: HALF + 24 + nLines * 18 }, txt(d)));
 
-    // attached obituaries/records badge
+    // attached obituaries/records — a small, refined page badge (not an emoji)
     if (p.docs && p.docs.length) {
-      const badge = el("g", { class: "doc-badge", "data-id": p.id, transform: `translate(${HALF - 4},${-HALF + 2})` });
-      badge.appendChild(el("text", { x: 0, y: 0, "text-anchor": "middle" }, txt("📄")));
-      const tt = el("title", null, txt(p.docs.length + " attached record" + (p.docs.length > 1 ? "s" : "")));
-      badge.appendChild(tt);
+      const badge = el("g", { class: "doc-badge", "data-id": p.id, transform: `translate(${HALF - 5},${-HALF + 5})` });
+      badge.appendChild(el("circle", { class: "doc-badge-bg", r: 9, cx: 0, cy: 0 }));
+      // a minimal document glyph: a page with a folded corner and two text lines
+      badge.appendChild(el("path", { class: "doc-badge-mark", d: "M-3 -4.4 H1.4 L3 -2.8 V4.4 H-3 Z M1.2 -4.4 V-2.8 H3", fill: "none" }));
+      badge.appendChild(el("line", { class: "doc-badge-mark", x1: -1.4, y1: 0, x2: 1.4, y2: 0 }));
+      badge.appendChild(el("line", { class: "doc-badge-mark", x1: -1.4, y1: 2, x2: 1.4, y2: 2 }));
+      badge.appendChild(el("title", null, txt(p.docs.length + " attached record" + (p.docs.length > 1 ? "s" : ""))));
       g.appendChild(badge);
     }
 

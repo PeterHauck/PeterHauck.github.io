@@ -314,7 +314,10 @@ button.btn.danger { color: var(--divorce); }
 .docs-list li button { border: none; background: transparent; cursor: pointer; color: var(--accent-2); font-size: 13px; padding: 2px 4px; }
 .docs-list li button.rm { color: var(--divorce); }
 .person .doc-badge { cursor: pointer; }
-.person .doc-badge text { font-size: 22px; }
+.person .doc-badge-bg { fill: var(--paper); stroke: var(--panel-border); stroke-width: 1; }
+.person .doc-badge-mark { stroke: var(--muted); stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
+.person .doc-badge:hover .doc-badge-bg { fill: var(--accent); stroke: var(--accent); }
+.person .doc-badge:hover .doc-badge-mark { stroke: #fff; }
 .attach-choice { display: flex; gap: 8px; margin-bottom: 10px; }
 .attach-choice button { flex: 1; padding: 7px; border-radius: 8px; border: 1px solid var(--panel-border); background: var(--paper); cursor: pointer; font-size: 12.5px; }
 .attach-choice button.active { border-color: var(--accent-2); box-shadow: inset 0 0 0 1px var(--accent-2); }
