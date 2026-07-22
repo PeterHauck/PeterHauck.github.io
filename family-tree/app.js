@@ -2852,16 +2852,20 @@
         if (!res.ok) { let msg = "failed (" + res.status + ")"; try { msg = (await res.json()).error || msg; } catch (e) {} if (res.status === 404) msg = "needs the Vercel site + a Blob store"; throw new Error(msg); }
         return res;
       };
+      let done;
       if (payload.length <= CHUNK) {
-        await post({ action: "saveTree", payload });
+        done = await post({ action: "saveTree", payload });
       } else {
         const total = Math.ceil(payload.length / CHUNK);
         for (let i = 0; i < total; i++) {
           await post({ action: "putPart", index: i, chunk: payload.slice(i * CHUNK, (i + 1) * CHUNK) });
           setCloudStatus("saving");
         }
-        await post({ action: "commitTree", total });
+        done = await post({ action: "commitTree", total });
       }
+      // Record the cloud's write time so this device knows it's in sync and won't
+      // pull its own save back on the next load.
+      try { const j = await done.json(); if (j && j.savedAt) localStorage.setItem("familyTree.cloudSavedAt", String(j.savedAt)); } catch (e) {}
       setCloudStatus("saved");
       if (manual) toast("Saved to your site ✓");
     } catch (e) { setCloudStatus("error", e.message); if (manual) toast(e.message || "Cloud save failed"); }
@@ -2871,10 +2875,10 @@
     let res; try { res = await fetch("api/store?action=getTree"); } catch (e) { toast("Couldn’t reach your site"); return false; }
     if (res.status === 404) { toast("No cloud copy saved yet"); return false; }
     if (!res.ok) { toast("Cloud load failed (" + res.status + ")"); return false; }
-    let payload = "";
+    let payload = "", savedAt = 0;
     try {
       const j = await res.json();
-      payload = j.payload || "";
+      payload = j.payload || ""; savedAt = j.savedAt || 0;
       // A big tree comes back as a direct Blob URL — fetch it straight from storage.
       if (!payload && j.url) { try { payload = await (await fetch(j.url)).text(); } catch (e) {} }
     } catch (e) {}
@@ -2884,24 +2888,63 @@
     if (!fam) return false;
     try {
       const obj = await decryptState(fam, payload);
-      try { localStorage.setItem("familyTree.familyPass", fam); localStorage.setItem("familyTree.cloudOn", "1"); } catch (e) {}
+      try { localStorage.setItem("familyTree.familyPass", fam); localStorage.setItem("familyTree.cloudOn", "1"); if (savedAt) localStorage.setItem("familyTree.cloudSavedAt", String(savedAt)); } catch (e) {}
       loadObject(obj); relayoutAndSave(); fitView();
       toast("Loaded your latest tree from your site");
       return true;
     } catch (e) { toast("Wrong family password, or nothing to open"); return false; }
   }
-  // The encrypted tree to unlock on a fresh device: a committed family-data.js if
-  // present, else the cloud copy (so the family view works with no GitHub).
-  async function getPublishedPayload() {
-    if (typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20) return window.FAMILY_TREE_DATA;
+  // Freshness probe: when did the cloud tree last change? (metadata only)
+  async function cloudTreeInfo() {
+    try { const r = await fetch("api/store?action=treeInfo"); if (!r.ok) return null; return await r.json(); }
+    catch (e) { return null; }
+  }
+  // On boot, if the cloud copy is newer than what this device last synced, pull it
+  // in — this is what makes edits on one device show up on the others (e.g. your
+  // phone) instead of a stale browser copy sticking around. Returns true if it
+  // loaded fresh cloud data (or took over the unlock flow).
+  async function syncFromCloudIfNewer() {
+    let synced = 0; try { synced = +(localStorage.getItem("familyTree.cloudSavedAt") || 0); } catch (e) {}
+    const info = await cloudTreeInfo();
+    if (!info || !info.exists || !(info.savedAt > synced)) return false;   // cloud not newer (or unreachable)
+    const cp = await fetchCloudPayload();
+    if (!cp || !cp.payload) return false;
+    const savedAt = cp.savedAt || info.savedAt;
+    let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
+    if (fam) {
+      try {
+        const obj = await decryptState(fam, cp.payload);
+        loadObject(obj);
+        try { localStorage.setItem("familyTree.cloudSavedAt", String(savedAt)); } catch (e) {}
+        try { await idbSet(IDB.key, exportObject()); } catch (e) {}   // refresh the local cache (no re-upload)
+        return true;
+      } catch (e) { return false; }   // wrong stored password → fall back to local
+    }
+    // Newer cloud data but no password on this device: unlock it into the editor.
+    try { localStorage.setItem("familyTree.cloudSavedAt", String(savedAt)); } catch (e) {}
+    showLock(true, cp.payload);
+    return "lock";
+  }
+  // The live encrypted tree from the cloud (Vercel Blob) — where edits are saved —
+  // with its server write time. Null if the cloud isn't set up/reachable.
+  async function fetchCloudPayload() {
     try {
       const r = await fetch("api/store?action=getTree");
-      if (r.ok) {
-        const j = await r.json();
-        if (j && j.payload) return j.payload;
-        if (j && j.url) { try { return await (await fetch(j.url)).text(); } catch (e) {} }   // big tree: fetch directly from Blob
-      }
-    } catch (e) {}
+      if (!r.ok) return null;
+      const j = await r.json();
+      let payload = j.payload || "";
+      if (!payload && j.url) { try { payload = await (await fetch(j.url)).text(); } catch (e) {} }   // big tree: fetch directly from Blob
+      return payload ? { payload, savedAt: j.savedAt || 0 } : null;
+    } catch (e) { return null; }
+  }
+  // The encrypted tree to unlock on a fresh device. Prefer the LIVE cloud copy
+  // (that's where edits land); fall back to a committed family-data.js snapshot
+  // only when the cloud isn't set up/reachable — otherwise a stale committed file
+  // would keep overriding newer cloud edits.
+  async function getPublishedPayload() {
+    const cloud = await fetchCloudPayload();
+    if (cloud) return cloud.payload;
+    if (typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20) return window.FAMILY_TREE_DATA;
     return null;
   }
 
@@ -3327,6 +3370,10 @@
       decryptState(pw, data).then((obj) => {
         loadObject(obj);
         lock.hidden = true;
+        try { localStorage.setItem("familyTree.familyPass", pw); } catch (e) {}
+        // Mark this device as in sync with the cloud so it won't immediately
+        // re-pull the copy it just unlocked.
+        cloudTreeInfo().then((info) => { if (info && info.savedAt) { try { localStorage.setItem("familyTree.cloudSavedAt", String(info.savedAt)); } catch (e) {} } });
         if (intoEditor) { readonly = false; save(); }
         else enterReadonly();
         boot();
@@ -3417,6 +3464,17 @@
     await loadLocalData();   // pull the saved tree out of IndexedDB (roomy, no server)
     const params = new URLSearchParams(location.search);
     const wantEdit = params.has("edit");
+    // Cross-device sync: even when this browser has a local copy, check whether
+    // the cloud has a newer one (e.g. edits made on another device) and pull it in
+    // so the tree isn't a stale local snapshot. This is what makes updates show up
+    // on your phone.
+    if (hasLocalData()) {
+      try {
+        const r = await syncFromCloudIfNewer();
+        if (r === "lock") return;             // unlocking newer cloud data took over
+        if (r === true) { boot(); return; }   // loaded fresh cloud data
+      } catch (e) {}
+    }
     // The published tree can come from a committed family-data.js OR the cloud
     // copy (Vercel Blob) — so the family view and cross-device editing work with
     // no GitHub. Only look it up when this browser has no local copy.
