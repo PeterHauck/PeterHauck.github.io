@@ -97,7 +97,7 @@
 
   /* ================================================================ MODEL */
   function addPerson(data) {
-    const p = { id: uid(), name: data.name || "Unnamed", birth: num(data.birth), death: num(data.death), deceased: !!data.deceased, sex: data.sex || "unknown", color: data.color || null, photo: data.photo || null, docs: data.docs || [] };
+    const p = { id: uid(), name: data.name || "Unnamed", birth: num(data.birth), death: num(data.death), birthDate: data.birthDate || null, deathDate: data.deathDate || null, deceased: !!data.deceased, sex: data.sex || "unknown", color: data.color || null, photo: data.photo || null, docs: data.docs || [] };
     state.persons.push(p);
     return p;
   }
@@ -611,6 +611,13 @@
   function renderPerson(p) {
     const pos = posOf(p.id);
     const g = el("g", { class: "person" + (p.id === selectedId ? " selected" : "") + (selection.has(p.id) ? " multi" : ""), transform: `translate(${pos.x},${pos.y})`, "data-id": p.id });
+    // Hover tooltip carries the exact dates when known (the label stays year-only).
+    if (p.birthDate || p.deathDate) {
+      const tip = [p.name];
+      if (p.birthDate) tip.push("Born " + fmtDate(p.birthDate));
+      if (p.deathDate) tip.push("Died " + fmtDate(p.deathDate));
+      g.appendChild(el("title", null, txt(tip.join("\n"))));
+    }
 
     const clip = { male: "clip-male", female: "clip-female", unknown: "clip-unknown" }[p.sex] || "clip-unknown";
     const decd = isDeceased(p);
@@ -679,6 +686,12 @@
     return best < 0 ? [name] : [name.slice(0, best), name.slice(best + 1)];
   }
 
+  // "1906-07-05" → "July 5, 1906" (parsed by parts to avoid timezone drift).
+  function fmtDate(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ""); if (!m) return iso || "";
+    const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    return months[+m[2] - 1] + " " + (+m[3]) + ", " + m[1];
+  }
   function dateStr(p) {
     if (p.birth != null && p.death != null) return p.birth + "–" + p.death;
     if (p.birth != null) return "b. " + p.birth + (isDeceased(p) ? " · d." : "");
@@ -806,12 +819,16 @@
     childTops.forEach((c) => {
       gu.appendChild(el("line", { class: "link" + (c.type === "adopted" ? " adopt" : ""), x1: c.x, y1: busY, x2: c.x, y2: c.top, style: c.type === "adopted" ? null : cstyle }));
     });
-    // Hover targets (wide transparent lines over the drop + bus) and the + to add
-    // another child/sibling, off the right end of the sibling line.
+    // Hover targets (wide transparent lines over the whole descent) and a + to
+    // add another child, placed right BESIDE the last child — so even a lone
+    // child clearly shows where to add a sibling.
     if (!readonly) {
       gu.appendChild(el("line", { class: "hit", x1: dropX, y1: dropTop, x2: dropX, y2: busY }));
       gu.appendChild(el("line", { class: "hit", x1: minX, y1: busY, x2: maxX, y2: busY }));
-      gu.appendChild(addPlus(u.id, maxX + 26, busY, "Add a sibling / child"));
+      childTops.forEach((c) => gu.appendChild(el("line", { class: "hit", x1: c.x, y1: busY, x2: c.x, y2: c.top })));
+      const rightKid = kids.reduce((r, k) => (posOf(k.p.id).x > posOf(r.p.id).x ? k : r), kids[0]);
+      const rp = posOf(rightKid.p.id);
+      gu.appendChild(addPlus(u.id, rp.x + HALF + 22, rp.y, "Add another child / sibling"));
     }
     gLinks.appendChild(gu);
   }
@@ -1152,6 +1169,8 @@
     $("#pName").value = p.name;
     $("#pBirth").value = p.birth == null ? "" : p.birth;
     $("#pDeath").value = p.death == null ? "" : p.death;
+    $("#pBirthDate").value = p.birthDate || "";
+    $("#pDeathDate").value = p.deathDate || "";
     $("#pDeceased").checked = isDeceased(p);
     setSex(p.sex);
     setColor(p.color || "");
@@ -1241,10 +1260,14 @@
   $("#personForm").addEventListener("submit", (e) => {
     e.preventDefault();
     const id = $("#personId").value;
-    const data = { name: $("#pName").value.trim() || "Unnamed", birth: $("#pBirth").value, death: $("#pDeath").value, deceased: $("#pDeceased").checked, sex: formSex, color: formColor, photo: pendingPhoto };
+    const birthDate = $("#pBirthDate").value || null, deathDate = $("#pDeathDate").value || null;
+    // A full date wins over the year box, so the tree year always matches the exact date.
+    const birthYear = birthDate ? birthDate.slice(0, 4) : $("#pBirth").value;
+    const deathYear = deathDate ? deathDate.slice(0, 4) : $("#pDeath").value;
+    const data = { name: $("#pName").value.trim() || "Unnamed", birth: birthYear, death: deathYear, birthDate, deathDate, deceased: $("#pDeceased").checked, sex: formSex, color: formColor, photo: pendingPhoto };
     if (id) {
       const p = personById(id);
-      Object.assign(p, { name: data.name, birth: num(data.birth), death: num(data.death), deceased: data.deceased, sex: data.sex, color: data.color || null, photo: data.photo });
+      Object.assign(p, { name: data.name, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate, deathDate: data.deathDate, deceased: data.deceased, sex: data.sex, color: data.color || null, photo: data.photo });
     } else {
       const p = addPerson(data); selectedId = p.id;
     }
@@ -1252,6 +1275,9 @@
     relayoutAndSave();
     toast("Saved");
   });
+  // Entering a full date fills in (and keeps in sync) the year that shows on the tree.
+  $("#pBirthDate").addEventListener("change", () => { const v = $("#pBirthDate").value; if (v) $("#pBirth").value = v.slice(0, 4); });
+  $("#pDeathDate").addEventListener("change", () => { const v = $("#pDeathDate").value; if (v) { $("#pDeath").value = v.slice(0, 4); $("#pDeceased").checked = true; } });
   $("#personCancel").onclick = resetPersonForm;
   $("#personDelete").onclick = () => {
     const id = $("#personId").value; if (!id) return;
@@ -1949,6 +1975,8 @@
     state.persons.forEach((pp) => {
       const o = oldById[pp.id]; if (!o) return;
       if (!pp.photo && o.photo) pp.photo = o.photo;
+      if (!pp.birthDate && o.birthDate) pp.birthDate = o.birthDate;   // exact dates the user filled in
+      if (!pp.deathDate && o.deathDate) pp.deathDate = o.deathDate;
       if (Array.isArray(o.docs) && o.docs.length) {
         const have = new Set((pp.docs || []).map((d) => d && d.id));
         const extra = o.docs.filter((d) => d && !have.has(d.id));
