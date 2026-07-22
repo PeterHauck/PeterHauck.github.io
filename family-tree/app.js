@@ -1983,9 +1983,17 @@
             const ranked = newIds.map((id) => ({ id, i: at(id) })).filter((x) => x.i >= 0).sort((a, b) => a.i - b.i);
             subj = personById((ranked[0] || { id: newIds[0] }).id);
           }
-          // Client-side date backstop: parse the pasted text and fill the subject's
-          // exact dates, so dates land even if the server didn't return them.
-          if (subj && text) applyObitDates(subj, parseObitDates(text));
+          // Date backstop: if the extract didn't return the subject's exact dates,
+          // read them precisely with the AI date-reader (handles the PDF/photo and
+          // noisy prose correctly). Falls back to a rough text scan if it's offline.
+          if (subj && (!subj.birthDate || !subj.deathDate)) {
+            const src = text ? { text } : (payload.file ? { file: payload.file } : (url ? { url } : null));
+            if (src) {
+              status.textContent = "Reading " + subj.name + "’s dates…";
+              try { applyObitDates(subj, await callDates(Object.assign({ passcode: pass, name: subj.name }, src))); }
+              catch (e2) { if (e2.offline && text) applyObitDates(subj, parseObitDates(text)); }
+            }
+          }
           // An obituary means its subject has passed away.
           if (subj) subj.deceased = true;
           // If this obituary is for someone already in the tree, keep a copy of it
@@ -2301,19 +2309,66 @@
     if (p.death == null && r.deathYear && num(r.deathYear)) { p.death = num(r.deathYear); changed = true; }
     return changed;
   }
-  // Retroactively fill in exact birth/death dates from every saved obituary —
-  // parsed right here in the browser (no server, no passcode, no API cost).
-  // Only fills gaps; never overwrites a date you've entered.
-  function backfillDatesFromObits() {
+  // The best source we can hand the AI date-reader for a person: their obituary
+  // text if we have it, else the raw PDF/image file, else a link to fetch.
+  function obitSourceOf(p) {
+    const docs = (p.docs || []).filter(Boolean);
+    const text = obitTextOf(p);
+    if (text) return { text };
+    for (const d of docs) {
+      const m = /^data:([^;]+);base64,(.*)$/.exec(d.content || "");
+      if ((d.kind === "pdf" || d.kind === "image") && m) return { file: { mediaType: m[1], data: m[2] } };
+    }
+    const link = docs.find((d) => d.url);
+    if (link) return { url: link.url };
+    return null;
+  }
+  async function callDates(payload) {
+    let res;
+    try { res = await fetch("api/dates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); }
+    catch (e) { const err = new Error("offline"); err.offline = true; throw err; }
+    if (res.status === 404) { const err = new Error("no-server"); err.offline = true; throw err; }
+    if (!res.ok) { let msg = "Reading dates failed (" + res.status + ")."; try { msg = (await res.json()).error || msg; } catch (e) {} throw new Error(msg); }
+    return res.json();
+  }
+
+  // Read exact birth/death dates from every saved obituary and fill the gaps.
+  // Uses the AI reader (api/dates) so it works on PDFs, photos and links too —
+  // and correctly tells whose date is whose in a noisy obituary. Falls back to a
+  // rough in-browser text parse only if the AI service can't be reached.
+  async function backfillDatesFromObits() {
     if (readonly) return;
-    const targets = state.persons.filter((p) => (!p.birthDate || !p.deathDate || p.birth == null || p.death == null) && obitTextOf(p));
-    if (!targets.length) { toast("No saved obituaries with text to read dates from"); return; }
-    let filled = 0;
-    targets.forEach((p) => { if (applyObitDates(p, parseObitDates(obitTextOf(p)))) filled++; });
-    if (filled) save();
-    const cur = personById(selectedId); if (cur) fillPersonForm(cur);
-    render();
-    toast(filled ? ("Filled dates for " + filled + " " + (filled === 1 ? "person" : "people") + " from their obituaries") : "No new dates found in the saved obituaries");
+    const targets = state.persons.filter((p) => (!p.birthDate || !p.deathDate || p.birth == null || p.death == null) && obitSourceOf(p));
+    if (!targets.length) { toast("No saved obituaries to read dates from"); return; }
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
+    if (!pass) return;
+    try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
+    const btn = $("#backfillDatesBtn"); if (btn) btn.disabled = true;
+    let filled = 0, offline = false, errMsg = "";
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const p = targets[i];
+        if (btn) btn.textContent = "Reading obituaries… (" + (i + 1) + " of " + targets.length + ")";
+        const src = obitSourceOf(p);
+        let r = null;
+        try { r = await callDates(Object.assign({ passcode: pass, name: p.name }, src)); }
+        catch (e) {
+          if (e.offline) { offline = true; const t = obitTextOf(p); if (t) r = parseObitDates(t); }   // graceful degrade
+          else if (/passcode/i.test(e.message || "")) throw e;
+          else { errMsg = e.message; continue; }
+        }
+        if (r && applyObitDates(p, r)) { filled++; save(); }
+      }
+      const tail = offline ? " (AI reader offline — used a rough text scan; PDFs/links skipped)" : "";
+      toast(filled ? ("Filled dates for " + filled + " " + (filled === 1 ? "person" : "people") + tail) : ("No new dates found" + (errMsg ? " — " + errMsg : tail)));
+    } catch (e) {
+      toast((e.message || "Stopped") + (filled ? " — filled " + filled + " first" : ""));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "📅 Fill dates from saved obituaries"; }
+      const cur = personById(selectedId); if (cur) fillPersonForm(cur);
+      render();
+    }
   }
 
   async function callTranscribe(payload) {
