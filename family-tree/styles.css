@@ -239,16 +239,20 @@ button.btn.danger { color: var(--divorce); }
 .person.multi .label { fill: var(--accent); }
 .readonly #tbRearrange, .readonly #tbImport, .readonly #tbTidy { display: none; }
 
+/* horizontal legend strip at the bottom-right (opposite the ☰ people menu, which
+   opens down the left — so they never overlap) */
 #legend {
-  bottom: 14px; left: 14px; background: var(--panel);
-  border: 1px solid var(--panel-border); border-radius: 10px; padding: 10px 12px;
-  box-shadow: var(--shadow); font-size: 12px; max-width: 250px;
+  bottom: 14px; right: 14px; left: auto; background: var(--panel);
+  border: 1px solid var(--panel-border); border-radius: 10px; padding: 7px 14px;
+  box-shadow: var(--shadow); font-size: 12px; max-width: calc(100vw - 28px);
+  display: flex; align-items: center; flex-wrap: wrap; gap: 5px 16px; justify-content: flex-end;
 }
-#legend h3 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing:.6px; color: var(--muted); }
-#legend .lg { display:flex; align-items:center; gap:8px; margin-bottom:5px; }
-#legend svg { width: 34px; height: 22px; flex:0 0 34px; }
+#legend h3 { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing:.6px; color: var(--muted); }
+#legend .lgbody { display: contents; }             /* items flow in the same horizontal row */
+#legend .lg { display:flex; align-items:center; gap:6px; margin:0; white-space:nowrap; }
+#legend svg { width: 30px; height: 20px; flex:0 0 30px; }
 #legend.min .lgbody { display:none; }
-#legend .toggle { cursor:pointer; float:right; color:var(--muted); }
+#legend .toggle { cursor:pointer; color:var(--muted); order: 99; }
 
 #panelToggle {
   top: 14px; right: 14px; width: 40px; height: 40px; border-radius: 10px;
@@ -478,8 +482,9 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 
   /* legend is compact and starts collapsed on phones (tap to expand) */
   #legend {
-    bottom: calc(10px + env(safe-area-inset-bottom)); left: calc(10px + env(safe-area-inset-left));
-    max-width: 200px; font-size: 11px; padding: 8px 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom));
+    right: calc(10px + env(safe-area-inset-right)); left: auto;
+    max-width: calc(100vw - 20px); font-size: 11px; padding: 6px 10px;
   }
 
   .btn { padding: 11px 12px; }               /* larger tap targets in the panel */
