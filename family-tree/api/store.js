@@ -63,8 +63,14 @@ export default async function handler(req, res) {
   // Try a public blob first (stable, directly-fetchable URL); if this store only
   // allows private blobs, fall back to private. The tree is read back through
   // this function, so a private tree blob is fine.
+  // Vercel Blob serves files through a CDN that caches aggressively: an
+  // overwritten blob can keep serving its OLD bytes for up to 30 days at the
+  // same URL. Every read of a mutable blob must bust that cache with a unique
+  // query param, or devices keep downloading an ancient copy (which then fails
+  // to decrypt with the current password — the "stale phone" bug).
+  const fresh = (u) => u + (u.includes("?") ? "&" : "?") + "ts=" + Date.now();
   async function putBlob(pathname, body, contentType) {
-    const base = { token, addRandomSuffix: false, contentType, allowOverwrite: true };
+    const base = { token, addRandomSuffix: false, contentType, allowOverwrite: true, cacheControlMaxAge: 60 };
     try { return await put(pathname, body, { ...base, access: "public" }); }
     catch (ePub) { try { return await put(pathname, body, { ...base, access: "private" }); } catch (ePriv) { throw ePub; } }
   }
@@ -76,7 +82,7 @@ export default async function handler(req, res) {
   // Comments live in one small JSON blob, read/written only through this function
   // (never exposed as a public URL) so they aren't world-readable.
   async function readComments() {
-    try { const { blobs } = await list({ prefix: COMMENTS, token }); const b = blobs.find((x) => x.pathname === COMMENTS); if (!b) return {}; const r = await fetch(b.downloadUrl || b.url); return JSON.parse((await r.text()) || "{}") || {}; }
+    try { const { blobs } = await list({ prefix: COMMENTS, token }); const b = blobs.find((x) => x.pathname === COMMENTS); if (!b) return {}; const r = await fetch(fresh(b.downloadUrl || b.url)); return JSON.parse((await r.text()) || "{}") || {}; }
     catch (e) { return {}; }
   }
   // Store comments PRIVATE where the store allows it (they're only ever read back
@@ -117,7 +123,7 @@ export default async function handler(req, res) {
       const { blobs } = await list({ prefix: TREE, token });
       const b = blobs.find((x) => x.pathname === TREE);
       if (!b) { res.status(404).json({ error: "No saved tree in the cloud yet." }); return; }
-      const r = await fetch(b.downloadUrl || b.url);
+      const r = await fetch(fresh(b.downloadUrl || b.url));
       const text = await r.text();
       const start = Math.max(0, parseInt(req.query.start, 10) || 0);
       const len = Math.min(Math.max(1, parseInt(req.query.len, 10) || 3000000), 4000000);
@@ -135,11 +141,11 @@ export default async function handler(req, res) {
       res.setHeader("Cache-Control", "no-store");
       // A big tree would blow the function's ~4.5MB response limit. Tell the client
       // its size so it can read it back in slices through getTreePart (robust), and
-      // also hand over the direct blob URL as a fast path / fallback.
-      if ((b.size || 0) > 3.5 * 1024 * 1024) { res.status(200).json({ big: true, size: b.size || 0, url, savedAt }); return; }
-      const r = await fetch(url);
+      // also hand over the direct blob URL (cache-busted) as a fast path / fallback.
+      if ((b.size || 0) > 3.5 * 1024 * 1024) { res.status(200).json({ big: true, size: b.size || 0, url: fresh(url), savedAt }); return; }
+      const r = await fetch(fresh(url));
       const payload = await r.text();
-      res.status(200).json({ payload, url, savedAt });
+      res.status(200).json({ payload, url: fresh(url), savedAt });
       return;
     }
 
@@ -204,9 +210,14 @@ export default async function handler(req, res) {
         for (let i = 0; i < total; i++) {
           const part = byName["tree-parts/part-" + i];
           if (!part) { res.status(400).json({ error: "Missing part " + i + " — please try saving again." }); return; }
-          const r = await fetch(part.downloadUrl || part.url);
+          const r = await fetch(fresh(part.downloadUrl || part.url));
           combined += await r.text();
         }
+        // Integrity check: the stitched tree must be exactly as long as what the
+        // browser uploaded. Catches a stale CDN-cached part sneaking into the mix
+        // (which would corrupt the ciphertext and make it undecryptable).
+        const expected = parseInt(body.length, 10);
+        if (expected > 0 && combined.length !== expected) { res.status(409).json({ error: "The upload didn't reassemble cleanly — please try saving again." }); return; }
         await putBlob(TREE, combined, "text/plain");
         res.status(200).json({ ok: true, savedAt: await treeSavedAt() });
         return;
