@@ -2125,6 +2125,23 @@
     if (o.v === 2) pt = await gunzip(pt);   // v2 = gzip-compressed before encryption
     return JSON.parse(new TextDecoder().decode(pt));
   }
+  // Encrypt/decrypt a short piece of text with the same crypto as the tree.
+  // Used to wrap the family password under the shared viewer password, so a
+  // viewer password can open the tree without the owner's password ever being
+  // stored in the clear.
+  async function encryptText(password, text) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await deriveKey(password, salt);
+    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(text));
+    return JSON.stringify({ v: 1, salt: b64(salt), iv: b64(iv), ct: b64(ct) });
+  }
+  async function decryptText(password, payload) {
+    const o = JSON.parse(payload);
+    const key = await deriveKey(password, unb64(o.salt));
+    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(o.iv) }, key, unb64(o.ct));
+    return new TextDecoder().decode(pt);
+  }
 
   function openPublishModal() {
     if (!state.persons.length) return toast("Nothing to publish yet");
@@ -3063,6 +3080,12 @@
       // Record the cloud's write time so this device knows it's in sync and won't
       // pull its own save back on the next load.
       try { const j = await done.json(); if (j && j.savedAt) localStorage.setItem("familyTree.cloudSavedAt", String(j.savedAt)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
+      // Keep the shared viewer password working: wrap the family password under it
+      // and store the wrap (ciphertext) so viewers can unlock with their password.
+      try {
+        const vp = localStorage.getItem("familyTree.viewerPass") || "";
+        if (vp) { const wrap = await encryptText(vp, fam); await fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "saveViewerKey", passcode: pass, wrap }) }); }
+      } catch (e) {}
       setCloudStatus("saved");
       if (manual) toast("Saved to your site ✓");
     } catch (e) {
@@ -3616,13 +3639,15 @@
     r.onload = () => { try { loadObject(JSON.parse(r.result)); relayoutAndSave(); fitView(); toast("Imported"); } catch (err) { toast("Bad file"); } };
     r.readAsText(f); e.target.value = "";
   });
-  // Prefill the family-password box with whatever this device currently uses.
+  // Prefill the password boxes with whatever this device currently uses.
   { const fp = $("#cloudFamilyPass"); if (fp) { try { fp.value = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {} } }
+  { const vp = $("#cloudViewerPass"); if (vp) { try { vp.value = localStorage.getItem("familyTree.viewerPass") || ""; } catch (e) {} } }
   $("#cloudSaveBtn").onclick = () => {
     // If the family password box is filled, adopt it before saving — this is how
     // you re-lock the cloud copy with the correct password so other devices open it.
     const fp = $("#cloudFamilyPass"); const v = fp ? fp.value.trim() : "";
     if (v) { try { localStorage.setItem("familyTree.familyPass", v); } catch (e) {} }
+    const vp = $("#cloudViewerPass"); if (vp) { try { localStorage.setItem("familyTree.viewerPass", vp.value.trim()); } catch (e) {} }
     cloudSaveTree(true);
   };
   $("#cloudLoadBtn").onclick = () => { if (confirm("Replace what's in this browser with the latest copy saved on your site?")) cloudLoadTree(); };
@@ -3659,34 +3684,63 @@
   $("#emptyDemo").onclick = () => { loadObject(demoData()); relayoutAndSave(); fitView(); toast("Loaded example family"); };
 
   /* ============================================================ LOCK SCREEN */
+  // The wrapped family password (ciphertext) for the shared viewer password.
+  async function fetchViewerWrap() {
+    try { const r = await fetch("api/store?action=viewerKey"); if (!r.ok) return null; const j = await r.json(); return j.wrap || null; }
+    catch (e) { return null; }
+  }
   function showLock(intoEditor, payload) {
-    // Try the entered password against EVERY copy we have — the live cloud copy
-    // and any committed family-data.js snapshot — and open whichever it unlocks.
-    // This keeps your password working even if one copy is newer, older, or was
-    // saved with different settings.
+    // Try a password against EVERY copy we have — the live cloud copy and any
+    // committed family-data.js snapshot — and open whichever it unlocks. A
+    // password may be the family password directly, or the shared viewer
+    // password (which unwraps the family password but only ever opens the
+    // read-only view).
     const committed = (typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20) ? window.FAMILY_TREE_DATA : null;
     const candidates = [];
     if (payload) candidates.push({ src: "cloud", data: payload });
     if (committed && committed !== payload) candidates.push({ src: "committed", data: committed });
-    if (!candidates.length && committed) candidates.push({ src: "committed", data: committed });
-    const lock = $("#lock"); lock.hidden = false;
+    async function tryUnlock(pw) {
+      if (!pw) return null;
+      for (const c of candidates) { try { return { obj: await decryptState(pw, c.data), from: c.src, viewer: false }; } catch (_) {} }
+      const wrap = await fetchViewerWrap();
+      if (wrap) {
+        try {
+          const fam = await decryptText(pw, wrap);
+          for (const c of candidates) { try { return { obj: await decryptState(fam, c.data), from: c.src, viewer: true }; } catch (_) {} }
+        } catch (_) {}
+      }
+      return null;
+    }
+    function finish(pw, r) {
+      loadObject(r.obj);
+      $("#lock").hidden = true;
+      // Remember the password that worked so this device opens without asking
+      // next time (fixes "asks me for my password every time" on the phone).
+      try { localStorage.setItem("familyTree.familyPass", pw); } catch (e) {}
+      // Only claim we're in sync with the cloud if the cloud copy is what opened.
+      if (!r.viewer && r.from === "cloud") cloudTreeInfo().then((info) => { if (info && info.savedAt) { try { localStorage.setItem("familyTree.cloudSavedAt", String(info.savedAt)); } catch (e) {} } });
+      // The viewer password NEVER opens the editor, even with ?edit in the URL.
+      if (intoEditor && !r.viewer) { readonly = false; save(); }
+      else enterReadonly();
+      boot();
+    }
     $("#lockForm").onsubmit = async (e) => {
       e.preventDefault();
       const pw = $("#lockPass").value;
       $("#lockErr").textContent = "";
-      let obj = null, from = null;
-      for (const c of candidates) { try { obj = await decryptState(pw, c.data); from = c.src; break; } catch (_) {} }
-      if (!obj) { $("#lockErr").textContent = "Wrong password — try again."; return; }
-      loadObject(obj);
-      lock.hidden = true;
-      try { localStorage.setItem("familyTree.familyPass", pw); } catch (e) {}
-      // Only claim we're in sync with the cloud if the cloud copy is what opened.
-      if (from === "cloud") cloudTreeInfo().then((info) => { if (info && info.savedAt) { try { localStorage.setItem("familyTree.cloudSavedAt", String(info.savedAt)); } catch (e) {} } });
-      if (intoEditor) { readonly = false; save(); }
-      else enterReadonly();
-      boot();
+      const r = await tryUnlock(pw);
+      if (!r) { $("#lockErr").textContent = "Wrong password — try again."; return; }
+      finish(pw, r);
     };
-    $("#lockPass").focus();
+    // Remembered password: unlock silently; only show the form if it's missing
+    // or no longer works.
+    (async () => {
+      let saved = ""; try { saved = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
+      const r = await tryUnlock(saved);
+      if (r) { finish(saved, r); return; }
+      const lock = $("#lock"); lock.hidden = false;
+      $("#lockPass").focus();
+    })();
   }
   function enterReadonly() {
     readonly = true;

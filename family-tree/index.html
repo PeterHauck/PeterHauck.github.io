@@ -13,6 +13,11 @@
   <script>document.write('<link rel="stylesheet" href="styles.css?v=' + Date.now() + '">');</script>
   <noscript><link rel="stylesheet" href="styles.css" /></noscript>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8C%B3%3C/text%3E%3C/svg%3E" />
+  <!-- Home-screen / installed-app icon: the same 🌳 as the favicon -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icon-180.png" />
+  <meta name="apple-mobile-web-app-title" content="Family Tree" />
+  <meta name="theme-color" content="#faf8f3" />
 </head>
 <body>
 
@@ -233,6 +238,8 @@
           <p class="hint" style="margin:0 0 8px">Your tree saves automatically in this browser (it holds photos &amp; PDFs — no size limit). Turn on cloud save to also keep a durable, encrypted copy on your own site, so it survives and opens on any device.</p>
           <label class="field" style="margin:0 0 8px"><span>Family password (used to lock the cloud copy)</span><input type="text" id="cloudFamilyPass" placeholder="DaHaucks" autocomplete="off" spellcheck="false" /></label>
           <p class="hint" style="margin:0 0 8px">This must match the password everyone uses to open the family view. If your cloud copy ever stops opening on other devices, set this and re-save to fix it.</p>
+          <label class="field" style="margin:0 0 8px"><span>Shared viewer password (optional)</span><input type="text" id="cloudViewerPass" placeholder="a password to give family" autocomplete="off" spellcheck="false" /></label>
+          <p class="hint" style="margin:0 0 8px">Give this one to family — it opens the tree <b>view-only</b>, and your main password stays private. It's set/updated each time you click Save. Leave blank for no viewer password.</p>
           <div class="btn-row">
             <button class="btn primary wide" id="cloudSaveBtn">☁︎ Save to my site now</button>
           </div>
