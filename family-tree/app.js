@@ -954,6 +954,18 @@
     return g;
   }
 
+  // When a child belongs to more than one parent couple (e.g. their birth parents
+  // AND the relatives who adopted them), fan the descent lines across the top of
+  // the shape so each is its own visible line — biological solid, adoptive dashed
+  // — instead of stacking on top of each other.
+  function childAttachX(childId, unionId, baseX) {
+    const uids = [...new Set(parentLinksOfPerson(childId).map((l) => l.union))]
+      .filter((uid) => { const u = unionById(uid); return u && !isHidden(u.a) && (u.b == null || !isHidden(u.b)); });
+    if (uids.length <= 1) return baseX;
+    const idx = Math.max(0, uids.indexOf(unionId));
+    return baseX + (idx - (uids.length - 1) / 2) * 18;   // spread the attach points
+  }
+
   function renderUnion(u) {
     const pa = personById(u.a); if (!pa) return;
     const pb = u.b != null ? personById(u.b) : null;
@@ -987,7 +999,7 @@
     const famColor = kids.map((k) => k.p.color).find(Boolean) || (pa && pa.color) || (pb && pb.color) || null;
     const cstyle = famColor ? "stroke:" + famColor + ";stroke-width:2.8" : null;
 
-    const childTops = kids.map((k) => ({ x: posOf(k.p.id).x, top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
+    const childTops = kids.map((k) => ({ x: childAttachX(k.p.id, u.id, posOf(k.p.id).x), top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
     const dropX = midX;
     const busY = midY + 120 + (busLevels[u.id] || 0) * 15;
     gu.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
