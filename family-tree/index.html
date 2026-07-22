@@ -59,20 +59,27 @@
 
       <!-- floating toolbar -->
       <div id="toolbar" class="floating">
-        <button id="tbMenu" title="Tools" aria-label="Show tools">☰</button>
-        <button id="tbAdd" title="Add person">＋</button>
-        <button id="tbUnion" title="Add couple / relationship">💍</button>
-        <button id="tbChild" title="Add child">👶</button>
+        <button id="tbMenu" title="People &amp; menu" aria-label="People and menu">☰</button>
         <button id="tbImport" title="Add people from an obituary (Claude reads it for you)">✨</button>
         <div class="sep"></div>
-        <button id="tbArrange" title="Auto-arrange">✦</button>
-        <button id="tbRearrange" title="Rearrange mode — drag people, box-select, or Shift-click to pick several, then drag to move them together (nothing moves when off)">✥</button>
+        <button id="tbRearrange" title="Move mode — drag people, box-select, or Shift-click to pick several, then drag to move them together (nothing moves when off)">✥</button>
         <button id="tbTidy" title="Tidy up — line up people who are on the same level (leaves anyone you put on a different line alone)">🧲</button>
         <button id="tbFit" title="Fit to screen">⤢</button>
         <div class="sep"></div>
         <button id="tbZoomOut" title="Zoom out">－</button>
         <span class="zoomlabel" id="zoomLabel">100%</span>
         <button id="tbZoomIn" title="Zoom in">＋</button>
+      </div>
+
+      <!-- people & menu (opened by ☰) -->
+      <div id="peopleMenu" class="floating" hidden>
+        <div class="pm-head"><h3>People <span class="pill" id="peopleCount">0</span></h3><button id="pmClose" class="pm-x" aria-label="Close">✕</button></div>
+        <input type="text" id="peopleFilter" placeholder="Search people…" autocomplete="off" />
+        <ul class="people-list" id="peopleList"></ul>
+        <div class="btn-row pm-actions">
+          <button class="btn" id="pmAdd">＋ Add person</button>
+          <button class="btn" id="pmArrange">✦ Auto-arrange</button>
+        </div>
       </div>
 
       <!-- legend -->
@@ -211,11 +218,6 @@
           <p class="hint" style="margin-top:6px">Reads every saved obituary — including uploaded photos &amp; PDFs and saved links — with Claude, and fills in each person’s exact birth &amp; death date where the obituary states it. Only fills blanks; never changes a date you’ve already entered. (Runs on the Vercel deployment.)</p>
           <button class="btn wide" id="migrateRecordsBtn" style="margin-top:10px">🗄️ Move records to the repo (smaller backups)</button>
           <p class="hint" style="margin-top:6px">Moves obituary PDFs &amp; photos out of the tree and into their own files in the repository, so the saved tree stays small and backs up no matter how many you add. New uploads do this automatically. (Needs GITHUB_TOKEN set on Vercel.)</p>
-        </div>
-
-        <div class="section">
-          <h2>People <span class="pill" id="peopleCount">0</span></h2>
-          <ul class="people-list" id="peopleList"></ul>
         </div>
 
         <div class="section editor-only">
