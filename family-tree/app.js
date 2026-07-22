@@ -2788,6 +2788,58 @@
     return groups;
   }
   function closeProfileCard() { const b = document.getElementById("profileCardBack"); if (b) b.remove(); }
+
+  /* -------- comments: anyone with view access can leave a named comment -------- */
+  function fmtCommentDate(at) { try { return new Date(at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }); } catch (e) { return ""; } }
+  async function loadComments(personId) {
+    try { const r = await fetch("api/store?action=comments&personId=" + encodeURIComponent(personId)); if (!r.ok) return []; const j = await r.json(); return Array.isArray(j.comments) ? j.comments : []; }
+    catch (e) { return null; }   // null = couldn't reach the server
+  }
+  async function deleteComment(personId, id, listEl) {
+    if (!confirm("Delete this comment?")) return;
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    try {
+      await fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "deleteComment", personId, id, passcode: pass }) });
+      renderComments(listEl, personId, await loadComments(personId));
+    } catch (e) { toast("Couldn’t delete"); }
+  }
+  function renderComments(listEl, personId, list) {
+    listEl.innerHTML = "";
+    if (list == null) { listEl.innerHTML = '<div class="pcard-subhint">Comments need the site to be online.</div>'; return; }
+    if (!list.length) { listEl.innerHTML = '<div class="pcard-subhint">No comments yet — be the first.</div>'; return; }
+    list.slice().sort((a, b) => (a.at || 0) - (b.at || 0)).forEach((c) => {
+      const row = document.createElement("div"); row.className = "pcard-comment";
+      const meta = document.createElement("div"); meta.className = "pcard-cmeta";
+      meta.innerHTML = "<b>" + escapeHtml(c.name || "Someone") + "</b> <span>" + escapeHtml(fmtCommentDate(c.at)) + "</span>";
+      const bodyEl = document.createElement("div"); bodyEl.className = "pcard-cbody"; bodyEl.textContent = c.text || "";
+      row.appendChild(meta); row.appendChild(bodyEl);
+      if (isOwner()) { const del = document.createElement("button"); del.className = "pcard-cdel"; del.textContent = "✕"; del.title = "Delete this comment"; del.onclick = () => deleteComment(personId, c.id, listEl); row.appendChild(del); }
+      listEl.appendChild(row);
+    });
+  }
+  function renderCommentComposer(personId, listEl) {
+    const box = document.createElement("div"); box.className = "pcard-comment-new";
+    let savedName = ""; try { savedName = localStorage.getItem("familyTree.commenterName") || ""; } catch (e) {}
+    const nameInput = document.createElement("input"); nameInput.className = "pcard-cname"; nameInput.placeholder = "Your name"; nameInput.value = savedName; nameInput.maxLength = 60;
+    const ta = document.createElement("textarea"); ta.className = "pcard-ctext"; ta.rows = 2; ta.placeholder = "Add a comment…"; ta.maxLength = 2000;
+    const post = document.createElement("button"); post.className = "btn primary small"; post.textContent = "Post comment";
+    post.onclick = async () => {
+      const nm = nameInput.value.trim(), tx = ta.value.trim();
+      if (!nm) { nameInput.focus(); toast("Add your name so others know who commented"); return; }
+      if (!tx) { ta.focus(); return; }
+      try { localStorage.setItem("familyTree.commenterName", nm); } catch (e) {}
+      post.disabled = true;
+      try {
+        const res = await fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "addComment", personId, name: nm, text: tx }) });
+        if (!res.ok) { let m = "Couldn’t post the comment."; try { m = (await res.json()).error || m; } catch (e) {} toast(m); post.disabled = false; return; }
+        ta.value = "";
+        renderComments(listEl, personId, await loadComments(personId));
+      } catch (e) { toast("Couldn’t reach the site to post"); }
+      post.disabled = false;
+    };
+    box.appendChild(nameInput); box.appendChild(ta); box.appendChild(post);
+    return box;
+  }
   function openProfileCard(id) {
     const p = personById(id); if (!p) return;
     closeProfileCard();
@@ -2844,6 +2896,15 @@
         savedMsg.textContent = "Saved ✓"; setTimeout(() => { savedMsg.textContent = ""; }, 2500);
       };
       bar.appendChild(savedMsg); bar.appendChild(saveBtn); s.appendChild(bar);
+    }
+    // Comments — anyone with view access can leave one (prompted for a name)
+    {
+      const s = section("Comments", "pcard-comments");
+      const listEl = document.createElement("div"); listEl.className = "pcard-comments-list";
+      listEl.innerHTML = '<div class="pcard-subhint">Loading…</div>';
+      s.appendChild(listEl);
+      s.appendChild(renderCommentComposer(id, listEl));
+      loadComments(id).then((list) => renderComments(listEl, id, list));
     }
     back.addEventListener("click", (e) => { if (e.target === back) closeProfileCard(); });
     document.body.appendChild(back);
