@@ -114,9 +114,16 @@
           <h2>Add / edit person</h2>
           <form id="personForm">
             <input type="hidden" id="personId" />
-            <label class="field"><span>Full name</span>
-              <input type="text" id="pName" placeholder="e.g. Mary Hauck" required />
-            </label>
+            <input type="hidden" id="pName" />
+            <div class="row2">
+              <label class="field"><span>First name</span><input type="text" id="pFirst" placeholder="Mary" required /></label>
+              <label class="field"><span>Middle name</span><input type="text" id="pMiddle" placeholder="Ann" /></label>
+            </div>
+            <label class="field"><span>Last name</span><input type="text" id="pLast" placeholder="Hauck" /></label>
+            <div class="row2">
+              <label class="field"><span>Nickname</span><input type="text" id="pNick" placeholder="shown in “quotes”" /></label>
+              <label class="field"><span>Maiden name</span><input type="text" id="pMaiden" placeholder="shown in (parens)" /></label>
+            </div>
             <div class="row2">
               <label class="field"><span>Born</span><input type="number" id="pBirth" placeholder="1912" /></label>
               <label class="field"><span>Died (if applicable)</span><input type="number" id="pDeath" placeholder="—" /></label>

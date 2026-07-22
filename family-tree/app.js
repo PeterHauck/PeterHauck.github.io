@@ -96,8 +96,55 @@
   const emptyState = $("#empty");
 
   /* ================================================================ MODEL */
+  // Name parts <-> the display string on the tree.
+  // Display order: First [Middle] ["Nickname"] [(Maiden)] Last.
+  function composeName(p) {
+    const bits = [];
+    if (p.first) bits.push(p.first);
+    if (p.middle) bits.push(p.middle);
+    if (p.nickname) bits.push('"' + p.nickname + '"');
+    if (p.maiden) bits.push("(" + p.maiden + ")");
+    if (p.last) bits.push(p.last);
+    return bits.join(" ").replace(/\s+/g, " ").trim();
+  }
+  // Split a written name into parts: pull a "nickname" and a (maiden), then take
+  // the first token as first name, the last token as last name, the rest middle.
+  function parseName(full) {
+    let s = String(full || "");
+    let nickname = "", maiden = "";
+    const nick = s.match(/["“”'‘’]([^"“”'‘’]+)["“”'‘’]/); if (nick) { nickname = nick[1].trim(); s = s.replace(nick[0], " "); }
+    const maid = s.match(/\(([^)]+)\)/); if (maid) { maiden = maid[1].trim(); s = s.replace(maid[0], " "); }
+    const toks = s.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+    const first = toks.shift() || "";
+    const last = toks.length ? toks.pop() : "";
+    const middle = toks.join(" ");
+    return { first, middle, last, nickname, maiden };
+  }
+  // Resolve a person's name parts + display name from either explicit parts or a
+  // plain `name` string.
+  function nameParts(d) {
+    const has = d.first || d.middle || d.last || d.nickname || d.maiden;
+    const parts = has
+      ? { first: d.first || "", middle: d.middle || "", last: d.last || "", nickname: d.nickname || "", maiden: d.maiden || "" }
+      : parseName(d.name || "");
+    parts.name = composeName(parts) || String(d.name || "").trim() || "Unnamed";
+    return parts;
+  }
+
+  // One-time: fill First/Middle/Last/Nickname/Maiden on people that only have a
+  // display name, by parsing quotes (nickname) and parentheses (maiden).
+  function splitNames() {
+    state.persons.forEach((p) => {
+      if (p.first === undefined && p.last === undefined) {
+        const np = parseName(p.name || "");
+        p.first = np.first; p.middle = np.middle; p.last = np.last; p.nickname = np.nickname; p.maiden = np.maiden;
+      }
+    });
+  }
+
   function addPerson(data) {
-    const p = { id: uid(), name: data.name || "Unnamed", birth: num(data.birth), death: num(data.death), birthDate: data.birthDate || null, deathDate: data.deathDate || null, deceased: !!data.deceased, sex: data.sex || "unknown", color: data.color || null, photo: data.photo || null, docs: data.docs || [] };
+    const np = nameParts(data);
+    const p = { id: uid(), name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate || null, deathDate: data.deathDate || null, deceased: !!data.deceased, sex: data.sex || "unknown", color: data.color || null, photo: data.photo || null, docs: data.docs || [] };
     state.persons.push(p);
     return p;
   }
@@ -886,7 +933,7 @@
     selectedId = np.id;
     relayoutAndSave();
     ensurePanel(); fillPersonForm(np);
-    const nameEl = $("#pName"); if (nameEl) { nameEl.focus(); nameEl.select(); }
+    const nameEl = $("#pFirst"); if (nameEl) { nameEl.focus(); nameEl.select(); }
     toast(msg || "Added — type their name and Save");
   }
 
@@ -1019,9 +1066,12 @@
   function updatePeopleList() {
     const ul = $("#peopleList"); if (!ul) return; ul.textContent = "";
     const q = (($("#peopleFilter") && $("#peopleFilter").value) || "").trim().toLowerCase();
+    // Default order: last name, then first name (then birth year).
+    const lastOf = (p) => (p.last != null ? p.last : parseName(p.name).last || p.name || "").toLowerCase();
+    const firstOf = (p) => (p.first != null ? p.first : parseName(p.name).first || "").toLowerCase();
     const sorted = state.persons.slice()
       .filter((p) => !q || p.name.toLowerCase().includes(q))
-      .sort((a, b) => (a.birth || 9999) - (b.birth || 9999) || a.name.localeCompare(b.name));
+      .sort((a, b) => lastOf(a).localeCompare(lastOf(b)) || firstOf(a).localeCompare(firstOf(b)) || (a.birth || 9999) - (b.birth || 9999));
     if (!sorted.length) {
       const li = document.createElement("li"); li.className = "pm-empty";
       li.textContent = q ? "No one matches “" + q + "”." : "No people yet.";
@@ -1359,7 +1409,14 @@
   }
   function fillPersonForm(p) {
     $("#personId").value = p.id;
-    $("#pName").value = p.name;
+    // Fall back to parsing the display name for any person not yet split into parts.
+    const np = (p.first !== undefined || p.last !== undefined || p.middle !== undefined) ? p : parseName(p.name);
+    $("#pFirst").value = np.first || "";
+    $("#pMiddle").value = np.middle || "";
+    $("#pLast").value = np.last || "";
+    $("#pNick").value = np.nickname || "";
+    $("#pMaiden").value = np.maiden || "";
+    $("#pName").value = p.name || "";
     $("#pBirth").value = p.birth == null ? "" : p.birth;
     $("#pDeath").value = p.death == null ? "" : p.death;
     $("#pBirthDate").value = p.birthDate || "";
@@ -1681,10 +1738,11 @@
     // A full date wins over the year box, so the tree year always matches the exact date.
     const birthYear = birthDate ? birthDate.slice(0, 4) : $("#pBirth").value;
     const deathYear = deathDate ? deathDate.slice(0, 4) : $("#pDeath").value;
-    const data = { name: $("#pName").value.trim() || "Unnamed", birth: birthYear, death: deathYear, birthDate, deathDate, deceased: $("#pDeceased").checked, sex: formSex, color: formColor, photo: pendingPhoto };
+    const np = nameParts({ first: $("#pFirst").value.trim(), middle: $("#pMiddle").value.trim(), last: $("#pLast").value.trim(), nickname: $("#pNick").value.trim(), maiden: $("#pMaiden").value.trim() });
+    const data = { name: np.name, birth: birthYear, death: deathYear, birthDate, deathDate, deceased: $("#pDeceased").checked, sex: formSex, color: formColor, photo: pendingPhoto };
     if (id) {
       const p = personById(id);
-      Object.assign(p, { name: data.name, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate, deathDate: data.deathDate, deceased: data.deceased, sex: data.sex, color: data.color || null, photo: data.photo });
+      Object.assign(p, { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate, deathDate: data.deathDate, deceased: data.deceased, sex: data.sex, color: data.color || null, photo: data.photo });
     } else {
       const p = addPerson(data); selectedId = p.id;
     }
@@ -2569,7 +2627,7 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
@@ -2577,6 +2635,7 @@
       persons: obj.persons || [], unions: obj.unions || [], links: obj.links || [], manual: obj.manual || {}, hidden: obj.hidden || {},
       focus: Array.isArray(obj.focus) ? obj.focus : [], version: obj.version || 0,
       photoMigrated: !!obj.photoMigrated,
+      namesSplit: !!obj.namesSplit,
     });
   }
   /* -------- local storage: IndexedDB (roomy — holds photos/PDFs), with a
@@ -3070,7 +3129,7 @@
   }
   $("#tbMenu").onclick = () => togglePeopleMenu();
   $("#pmClose").onclick = () => togglePeopleMenu(false);
-  $("#pmAdd").onclick = () => { togglePeopleMenu(false); resetPersonForm(); ensurePanel(); const n = $("#pName"); if (n) n.focus(); };
+  $("#pmAdd").onclick = () => { togglePeopleMenu(false); resetPersonForm(); ensurePanel(); const n = $("#pFirst"); if (n) n.focus(); };
   $("#pmArrange").onclick = () => { pushUndo(); state.manual = {}; selection = new Set(); relayoutAndSave(); fitView(); toast("Auto-arranged"); };
   $("#peopleFilter").addEventListener("input", () => updatePeopleList());
   $("#sibLeftBtn").onclick = () => shiftSibling(-1);
@@ -3115,7 +3174,7 @@
   $("#panelToggle").onclick = () => $("#panel").classList.toggle("collapsed");
   function ensurePanel() { $("#panel").classList.remove("collapsed"); }
   $("#legendToggle").onclick = () => { const l = $("#legend"); l.classList.toggle("min"); $("#legendToggle").textContent = l.classList.contains("min") ? "+" : "–"; };
-  $("#emptyAdd").onclick = () => { resetPersonForm(); $("#pName").focus(); };
+  $("#emptyAdd").onclick = () => { resetPersonForm(); $("#pFirst").focus(); };
   $("#emptyDemo").onclick = () => { loadObject(demoData()); relayoutAndSave(); fitView(); toast("Loaded example family"); };
 
   /* ============================================================ LOCK SCREEN */
@@ -3197,6 +3256,7 @@
       const l = $("#legend"); if (l) { l.classList.add("min"); const t = $("#legendToggle"); if (t) t.textContent = "+"; }
     }
     if (!readonly && dedupeParentUnions()) save();   // heal any duplicate parentage in existing data
+    if (!readonly && !state.namesSplit) { splitNames(); state.namesSplit = true; save(); }   // one-time: split names into parts
     autoLayout(); render(); syncTitle(); setupTitleEditing();
     if (!readonly) { setCloudStatus(CLOUD_ON() ? "on" : "off"); setBackupStatus(BACKUP_ON() ? "on" : "off"); }
     // One-time: turn any already-attached obituary photos into node pictures.
