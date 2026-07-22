@@ -1005,8 +1005,16 @@
 
   /* ------------------------------------------------------- people list UI */
   function updatePeopleList() {
-    const ul = $("#peopleList"); ul.textContent = "";
-    const sorted = state.persons.slice().sort((a, b) => (a.birth || 9999) - (b.birth || 9999) || a.name.localeCompare(b.name));
+    const ul = $("#peopleList"); if (!ul) return; ul.textContent = "";
+    const q = (($("#peopleFilter") && $("#peopleFilter").value) || "").trim().toLowerCase();
+    const sorted = state.persons.slice()
+      .filter((p) => !q || p.name.toLowerCase().includes(q))
+      .sort((a, b) => (a.birth || 9999) - (b.birth || 9999) || a.name.localeCompare(b.name));
+    if (!sorted.length) {
+      const li = document.createElement("li"); li.className = "pm-empty";
+      li.textContent = q ? "No one matches “" + q + "”." : "No people yet.";
+      ul.appendChild(li); return;
+    }
     sorted.forEach((p) => {
       const li = document.createElement("li");
       li.className = (p.id === selectedId ? "sel " : "") + (isHidden(p.id) ? "hidden" : "");
@@ -2940,17 +2948,21 @@
   }
 
   /* wire toolbar + buttons */
-  $("#tbAdd").onclick = () => { resetPersonForm(); $("#pName").focus(); ensurePanel(); };
-  $("#tbUnion").onclick = openUnionModal;
-  $("#tbChild").onclick = openChildModal;
-  $("#tbArrange").onclick = () => { pushUndo(); state.manual = {}; selection = new Set(); relayoutAndSave(); fitView(); toast("Auto-arranged"); };
   $("#tbFit").onclick = fitView;
   $("#tbRearrange").onclick = () => setRearrange(!rearrange);
   $("#tbTidy").onclick = tidyUp;
-  $("#tbMenu").onclick = () => {
-    const tb = $("#toolbar"), collapsed = tb.classList.toggle("collapsed");
-    $("#tbMenu").classList.toggle("active", !collapsed);
-  };
+  // ☰ opens the People list + menu (add a person, auto-arrange).
+  function togglePeopleMenu(show) {
+    const m = $("#peopleMenu"); if (!m) return;
+    const vis = (show === undefined) ? m.hidden : show;
+    m.hidden = !vis; $("#tbMenu").classList.toggle("active", vis);
+    if (vis) { updatePeopleList(); const f = $("#peopleFilter"); if (f) setTimeout(() => f.focus(), 0); }
+  }
+  $("#tbMenu").onclick = () => togglePeopleMenu();
+  $("#pmClose").onclick = () => togglePeopleMenu(false);
+  $("#pmAdd").onclick = () => { togglePeopleMenu(false); resetPersonForm(); ensurePanel(); const n = $("#pName"); if (n) n.focus(); };
+  $("#pmArrange").onclick = () => { pushUndo(); state.manual = {}; selection = new Set(); relayoutAndSave(); fitView(); toast("Auto-arranged"); };
+  $("#peopleFilter").addEventListener("input", () => updatePeopleList());
   $("#sibLeftBtn").onclick = () => shiftSibling(-1);
   $("#sibRightBtn").onclick = () => shiftSibling(1);
   $("#tbZoomIn").onclick = () => zoomAt(1.2);
@@ -3014,10 +3026,8 @@
   function enterReadonly() {
     readonly = true;
     document.body.classList.add("readonly");
-    $("#tbAdd").style.display = $("#tbUnion").style.display = $("#tbChild").style.display = "none";
-    const imp = $("#tbImport"); if (imp) imp.style.display = "none";
-    $("#tbArrange").style.display = "none";
-    const tidy = $("#tbTidy"); if (tidy) tidy.style.display = "none";
+    // Hide the editing tools; leave ☰ (people list), fit and zoom for viewers.
+    ["#tbImport", "#tbRearrange", "#tbTidy", "#pmAdd", "#pmArrange"].forEach((sel) => { const el = $(sel); if (el) el.style.display = "none"; });
     applyTitleEditability();
   }
 
@@ -3072,7 +3082,6 @@
     if (window.matchMedia && window.matchMedia("(max-width: 720px)").matches) {
       $("#panel").classList.add("collapsed");
       const l = $("#legend"); if (l) { l.classList.add("min"); const t = $("#legendToggle"); if (t) t.textContent = "+"; }
-      $("#toolbar").classList.add("collapsed"); $("#tbMenu").classList.remove("active"); // tools tucked behind ☰
     }
     if (!readonly && dedupeParentUnions()) save();   // heal any duplicate parentage in existing data
     autoLayout(); render(); syncTitle(); setupTitleEditing();

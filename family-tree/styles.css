@@ -202,7 +202,23 @@ button.btn.danger { color: var(--divorce); }
 #toolbar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 #toolbar .sep { width:1px; height:22px; background: var(--panel-border); margin:0 2px; }
 #toolbar .zoomlabel { font-size:12px; color:var(--muted); width:44px; text-align:center; }
-#tbMenu { display: none; }   /* the ☰ tools toggle is mobile-only */
+
+/* People list + menu, opened by ☰ (docked under the toolbar) */
+#peopleMenu {
+  top: 60px; left: 14px; width: 300px; max-width: calc(100vw - 28px);
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: 12px; padding: 10px; box-shadow: var(--shadow);
+  display: flex; flex-direction: column; max-height: calc(100vh - 80px);
+}
+#peopleMenu .pm-head { display:flex; align-items:center; justify-content:space-between; margin-bottom: 8px; }
+#peopleMenu .pm-head h3 { margin:0; font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
+#peopleMenu .pm-x { border:none; background:transparent; cursor:pointer; color:var(--muted); font-size:14px; padding:2px 6px; line-height:1; }
+#peopleMenu .pm-x:hover { color:var(--ink); }
+#peopleMenu #peopleFilter { width:100%; padding:7px 9px; border-radius:8px; border:1px solid var(--panel-border); background:var(--paper); color:var(--ink); margin-bottom:8px; }
+#peopleMenu .people-list { overflow-y:auto; flex:1; min-height:0; }
+#peopleMenu .pm-actions { margin-top:10px; }
+#peopleMenu .pm-actions .btn { flex:1; }
+.people-list .pm-empty { color:var(--muted); font-size:12.5px; padding:6px 2px; }
 
 /* Rearrange mode: marquee box, multi-selection highlight */
 #stage.rearranging { cursor: crosshair; }
@@ -215,7 +231,7 @@ button.btn.danger { color: var(--divorce); }
 }
 .person.multi .shape { stroke: var(--accent) !important; stroke-width: 4.5; }
 .person.multi .label { fill: var(--accent); }
-.readonly #tbRearrange, .readonly #tbAdd, .readonly #tbUnion, .readonly #tbChild, .readonly #tbArrange { display: none; }
+.readonly #tbRearrange, .readonly #tbImport, .readonly #tbTidy { display: none; }
 
 #legend {
   bottom: 14px; left: 14px; background: var(--panel);
@@ -440,12 +456,10 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
   #tbMenu { display: flex; }
   #toolbar button { width: 44px; height: 44px; font-size: 20px; }
   #toolbar .zoomlabel { width: 38px; font-size: 12px; }
-  /* collapsed: show only the ☰ toggle */
-  #toolbar.collapsed { flex-wrap: nowrap; max-width: none; }
-  #toolbar.collapsed > *:not(#tbMenu) { display: none; }
-  /* pinch handles zoom on touch, so drop the zoom cluster from the mobile menu */
+  /* pinch handles zoom on touch, so drop the zoom cluster from the mobile bar */
   #toolbar .sep, #toolbar #tbZoomIn, #toolbar #tbZoomOut, #toolbar .zoomlabel { display: none; }
   #tbMenu.active { background: var(--accent); color: #fff; }
+  #peopleMenu { top: calc(64px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left)); width: min(320px, calc(100vw - 20px)); }
   #panelToggle {
     top: calc(10px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right));
     width: 48px; height: 48px; font-size: 21px;
