@@ -2818,8 +2818,25 @@
     setCloudStatus("saving");
     try {
       const payload = await encryptState(fam);
-      const res = await fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "saveTree", passcode: pass, payload }) });
-      if (!res.ok) { let msg = "failed (" + res.status + ")"; try { msg = (await res.json()).error || msg; } catch (e) {} if (res.status === 404) msg = "needs the Vercel site + a Blob store"; throw new Error(msg); }
+      // Vercel caps a request body at ~4.5MB. Small trees go in one POST; larger
+      // ones (lots of photos) are streamed up in parts and stitched server-side,
+      // so saving keeps working no matter how big the tree gets.
+      const CHUNK = 3_500_000;
+      const post = async (b) => {
+        const res = await fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ passcode: pass }, b)) });
+        if (!res.ok) { let msg = "failed (" + res.status + ")"; try { msg = (await res.json()).error || msg; } catch (e) {} if (res.status === 404) msg = "needs the Vercel site + a Blob store"; throw new Error(msg); }
+        return res;
+      };
+      if (payload.length <= CHUNK) {
+        await post({ action: "saveTree", payload });
+      } else {
+        const total = Math.ceil(payload.length / CHUNK);
+        for (let i = 0; i < total; i++) {
+          await post({ action: "putPart", index: i, chunk: payload.slice(i * CHUNK, (i + 1) * CHUNK) });
+          setCloudStatus("saving");
+        }
+        await post({ action: "commitTree", total });
+      }
       setCloudStatus("saved");
       if (manual) toast("Saved to your site ✓");
     } catch (e) { setCloudStatus("error", e.message); if (manual) toast(e.message || "Cloud save failed"); }
@@ -2829,7 +2846,13 @@
     let res; try { res = await fetch("api/store?action=getTree"); } catch (e) { toast("Couldn’t reach your site"); return false; }
     if (res.status === 404) { toast("No cloud copy saved yet"); return false; }
     if (!res.ok) { toast("Cloud load failed (" + res.status + ")"); return false; }
-    let payload = ""; try { payload = (await res.json()).payload || ""; } catch (e) {}
+    let payload = "";
+    try {
+      const j = await res.json();
+      payload = j.payload || "";
+      // A big tree comes back as a direct Blob URL — fetch it straight from storage.
+      if (!payload && j.url) { try { payload = await (await fetch(j.url)).text(); } catch (e) {} }
+    } catch (e) {}
     if (!payload) { toast("No cloud copy found"); return false; }
     let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
     if (!fam) fam = prompt("Your family password (to open the cloud copy):") || "";
@@ -2846,7 +2869,14 @@
   // present, else the cloud copy (so the family view works with no GitHub).
   async function getPublishedPayload() {
     if (typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20) return window.FAMILY_TREE_DATA;
-    try { const r = await fetch("api/store?action=getTree"); if (r.ok) { const j = await r.json(); if (j && j.payload) return j.payload; } } catch (e) {}
+    try {
+      const r = await fetch("api/store?action=getTree");
+      if (r.ok) {
+        const j = await r.json();
+        if (j && j.payload) return j.payload;
+        if (j && j.url) { try { return await (await fetch(j.url)).text(); } catch (e) {} }   // big tree: fetch directly from Blob
+      }
+    } catch (e) {}
     return null;
   }
 
