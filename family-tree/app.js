@@ -2169,6 +2169,63 @@
     }
   }
 
+  // All obituary text we hold for a person (durable text copies + scraped text
+  // from uploads), concatenated so date extraction can read across records.
+  function obitTextOf(p) {
+    return (p.docs || [])
+      .map((d) => (d ? (d.text || (d.kind === "text" ? d.content : "")) : ""))
+      .filter(Boolean).join("\n\n---\n\n").trim();
+  }
+  // Retroactively fill in exact birth/death dates from every saved obituary.
+  // Only fills gaps — never overwrites a date already on a profile — and never
+  // guesses (year-only obituaries leave the exact date blank).
+  async function backfillDatesFromObits() {
+    if (readonly) return;
+    const targets = state.persons.filter((p) => (!p.birthDate || !p.deathDate) && obitTextOf(p));
+    if (!targets.length) { toast("No saved obituaries with text to read dates from"); return; }
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
+    if (!pass) return;
+    try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
+    const btn = $("#backfillDatesBtn"); if (btn) btn.disabled = true;
+    let filled = 0;
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const p = targets[i];
+        if (btn) btn.textContent = "Reading dates… (" + (i + 1) + " of " + targets.length + ")";
+        let r; try { r = await callDates({ passcode: pass, name: p.name, text: obitTextOf(p) }); } catch (e) { if (/passcode/i.test(e.message || "")) throw e; continue; }
+        const b = normDate(r.birthDate), dd = normDate(r.deathDate);
+        let changed = false;
+        if (!p.birthDate && b) { p.birthDate = b; if (p.birth == null) p.birth = num(b.slice(0, 4)); changed = true; }
+        if (!p.deathDate && dd) { p.deathDate = dd; if (p.death == null) p.death = num(dd.slice(0, 4)); changed = true; }
+        // fill a year-only gap when the obituary gives just the year
+        if (p.birth == null && r.birthYear && num(r.birthYear)) { p.birth = num(r.birthYear); changed = true; }
+        if (p.death == null && r.deathYear && num(r.deathYear)) { p.death = num(r.deathYear); changed = true; }
+        if (changed) { filled++; save(); }
+      }
+      toast(filled ? ("Filled dates for " + filled + " " + (filled === 1 ? "person" : "people")) : "No new dates found in the saved obituaries");
+    } catch (e) {
+      toast((e.message || "Stopped") + (filled ? " — filled " + filled + " first" : ""));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "📅 Fill dates from saved obituaries"; }
+      const cur = personById(selectedId); if (cur) fillPersonForm(cur);
+      render();
+    }
+  }
+
+  async function callDates(payload) {
+    let res;
+    try { res = await fetch("api/dates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); }
+    catch (e) { throw new Error("Couldn’t reach the date-reading service."); }
+    if (!res.ok) {
+      let msg = "Reading dates failed (" + res.status + ").";
+      try { msg = (await res.json()).error || msg; } catch (e) {}
+      if (res.status === 404) msg = "Reading dates from obituaries needs the Vercel site.";
+      throw new Error(msg);
+    }
+    return res.json();
+  }
+
   async function callTranscribe(payload) {
     let res;
     try { res = await fetch("api/transcribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); }
@@ -2658,6 +2715,7 @@
   $("#backupBtn").onclick = () => backupToRepo(true);
   $("#importObitBtn").onclick = openImportModal;
   $("#scrapeAllBtn").onclick = scrapeAllObits;
+  $("#backfillDatesBtn").onclick = backfillDatesFromObits;
   $("#tbImport").onclick = openImportModal;
   $("#addDocBtn").onclick = () => { const id = $("#personId").value; if (id) openAttachModal(id); };
   $("#obitPhotoBtn").onclick = () => { const id = $("#personId").value; if (id) usePhotoFromObit(personById(id)); };
