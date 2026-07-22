@@ -29,7 +29,11 @@ async function readBody(req) {
 // either so it works however the store was named.
 function blobToken() {
   if (process.env.BLOB_READ_WRITE_TOKEN) return process.env.BLOB_READ_WRITE_TOKEN;
-  for (const k of Object.keys(process.env)) if (/BLOB_READ_WRITE_TOKEN$/.test(k) && process.env[k]) return process.env[k];
+  // Match by var name (custom-named store) OR by the token's own value prefix
+  // (vercel_blob_rw_…), so it's found however the variable ended up named.
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v && (/BLOB_READ_WRITE_TOKEN$/.test(k) || String(v).startsWith("vercel_blob_rw_"))) return v;
+  }
   return null;
 }
 
