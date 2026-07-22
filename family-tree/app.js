@@ -1915,14 +1915,19 @@
     const keyToId = {};
     const newIds = [];
     const findByName = (name) => state.persons.find((p) => p.name.trim().toLowerCase() === String(name || "").trim().toLowerCase());
+    const yearOf = (year, date) => year || (date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date.slice(0, 4) : "");
+    const isoDate = (date) => (/^\d{4}-\d{2}-\d{2}$/.test(date || "") ? date : null);
     (d.people || []).forEach((pp) => {
+      const bDate = isoDate(pp.birthDate), dDate = isoDate(pp.deathDate);
       const ex = findByName(pp.name);
       if (ex) {
         keyToId[pp.key] = ex.id;
-        if (ex.birth == null && pp.birthYear) ex.birth = num(pp.birthYear);
-        if (ex.death == null && pp.deathYear) ex.death = num(pp.deathYear);
+        if (ex.birth == null && yearOf(pp.birthYear, bDate)) ex.birth = num(yearOf(pp.birthYear, bDate));
+        if (ex.death == null && yearOf(pp.deathYear, dDate)) ex.death = num(yearOf(pp.deathYear, dDate));
+        if (!ex.birthDate && bDate) ex.birthDate = bDate;   // exact dates from the obituary
+        if (!ex.deathDate && dDate) ex.deathDate = dDate;
       } else {
-        const np = addPerson({ name: pp.name || "Unnamed", sex: pp.sex || "unknown", birth: pp.birthYear, death: pp.deathYear });
+        const np = addPerson({ name: pp.name || "Unnamed", sex: pp.sex || "unknown", birth: yearOf(pp.birthYear, bDate), death: yearOf(pp.deathYear, dDate), birthDate: bDate, deathDate: dDate });
         keyToId[pp.key] = np.id; newIds.push(np.id);
       }
     });

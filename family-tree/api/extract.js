@@ -23,13 +23,15 @@ const SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["key", "name", "sex", "birthYear", "deathYear"],
+        required: ["key", "name", "sex", "birthYear", "deathYear", "birthDate", "deathDate"],
         properties: {
           key: { type: "string" },
           name: { type: "string" },
           sex: { type: "string", enum: ["male", "female", "unknown"] },
           birthYear: { type: "string" },
           deathYear: { type: "string" },
+          birthDate: { type: "string" },
+          deathDate: { type: "string" },
         },
       },
     },
@@ -71,6 +73,7 @@ Rules:
 - Give every NEW person a short unique "key" (e.g. "m1", "wife", "child2"). Anywhere you reference a person (in couples or children), use either that key OR — if the person already exists in the tree — their EXACT existing name.
 - "sex": use male/female when the text makes it clear (from pronouns, relationship words like son/daughter/husband/wife/mother/father, or clearly gendered names); otherwise "unknown".
 - Years are strings. Use "" when unknown. Only include a deathYear if the person is stated or clearly implied to be deceased (e.g. the obituary's subject, "preceded in death by", "the late").
+- "birthDate"/"deathDate": the EXACT full date in ISO format "YYYY-MM-DD", but ONLY when the day and month are actually given in the text (e.g. "born March 4, 1931" -> "1931-03-04"; "passed away on July 22, 2026" -> "2026-07-22"). If only the year is known, or the full date isn't stated, use "" — never guess a day or month. Keep birthYear/deathYear filled with the year whenever it's known, whether or not the full date is.
 - A "couple" is two partners. Set "b" to "" for a single parent. status: "married" normally; "divorced" for divorces/separations; "partners" for unmarried partners.
 - Children attach to the specific couple they belong to (parentA + parentB identify that couple). Set parentB to "" if only one parent is known. relationship: "bio" normally, "adopted" when the text says adopted / raised / took in.
 - Handle remarriages by emitting multiple couples for the same person, and put each child under the correct couple.
