@@ -747,8 +747,8 @@
   // A little "+" button that appears on hover over a union's lines, to quickly
   // add a child / sibling to that couple. Hidden until the union group is hovered
   // (see CSS); clicks are caught in the pointerdown handler via the .add-plus class.
-  function addPlus(unionId, x, y, label) {
-    const g = el("g", { class: "add-plus", "data-union": unionId, transform: `translate(${x},${y})` });
+  function addPlus(unionId, x, y, label, personId) {
+    const g = el("g", { class: "add-plus", "data-union": unionId, "data-person": personId || "", transform: `translate(${x},${y})` });
     g.appendChild(el("circle", { class: "add-plus-bg", r: 11, cx: 0, cy: 0 }));
     g.appendChild(el("line", { class: "add-plus-mark", x1: -5, y1: 0, x2: 5, y2: 0 }));
     g.appendChild(el("line", { class: "add-plus-mark", x1: 0, y1: -5, x2: 0, y2: 5 }));
@@ -828,6 +828,69 @@
     toast("Added — type their name and Save");
   }
 
+  // ---- shared add-a-relative actions (used by the tree + menu and the profile) ----
+  const guessSpouseSex = (p) => (p && p.sex === "male") ? "female" : (p && p.sex === "female") ? "male" : "unknown";
+  // Focus a freshly-added blank person so you can just type their name and Save.
+  function focusNewPerson(np, msg) {
+    selectedId = np.id;
+    relayoutAndSave();
+    ensurePanel(); fillPersonForm(np);
+    const nameEl = $("#pName"); if (nameEl) { nameEl.focus(); nameEl.select(); }
+    toast(msg || "Added — type their name and Save");
+  }
+
+  // Add a NEW blank spouse/partner beside a person and open them for naming.
+  function quickAddSpouse(personId) {
+    if (readonly) return;
+    const p = personById(personId); if (!p) return;
+    pushUndo();
+    const sp = addPerson({ name: "New spouse", sex: guessSpouseSex(p) });
+    addUnion(personId, sp.id, "married");
+    if (isManual(personId)) { const pp = posOf(personId); placeAt(sp.id, pp.x + COLW, pp.y); }
+    focusNewPerson(sp, "Added spouse — type their name and Save");
+  }
+
+  // Add a NEW blank child of a person (their own union; make a solo one if none).
+  function quickAddChildOf(personId) {
+    if (readonly) return;
+    const p = personById(personId); if (!p) return;
+    pushUndo();
+    let u = unionsOfPerson(personId)[0];
+    if (!u) u = addUnion(personId, null, "married");
+    const np = addPerson({ name: "New person", sex: "unknown" });
+    addChild(u.id, np.id, "bio");
+    placeNewChild(u, np.id);
+    focusNewPerson(np);
+  }
+
+  const shortName = (n) => { const s = (n || "").replace(/["'()]/g, "").trim(); return s.split(/\s+/)[0] || s || "them"; };
+
+  // A little floating menu on the tree + : Sibling / Spouse / Child, anchored to the
+  // person the + sits beside (so "spouse" and "child" act on the right person).
+  function onAwayAddMenu(e) { if (!(e.target.closest && e.target.closest("#addMenu"))) closeAddMenu(); }
+  function closeAddMenu() { const m = $("#addMenu"); if (m) m.remove(); document.removeEventListener("pointerdown", onAwayAddMenu, true); }
+  function openAddMenu(unionId, personId, clientX, clientY) {
+    if (readonly) return;
+    closeAddMenu();
+    const p = personById(personId);
+    const nm = p ? escapeHtml(shortName(p.name)) : "this person";
+    const items = [
+      { label: "＋ Sibling", sub: "another child of the same parents", act: () => quickAddChild(unionId) },
+      { label: "＋ Spouse / partner", sub: "a couple line for " + nm, act: () => quickAddSpouse(personId) },
+      { label: "＋ Child", sub: nm + "’s child", act: () => quickAddChildOf(personId) },
+    ];
+    const menu = document.createElement("div");
+    menu.id = "addMenu"; menu.className = "add-menu";
+    menu.innerHTML = items.map((it, i) => `<button type="button" data-i="${i}"><b>${it.label}</b><span>${it.sub}</span></button>`).join("");
+    document.body.appendChild(menu);
+    const r = menu.getBoundingClientRect();
+    const x = Math.max(8, Math.min(clientX, window.innerWidth - r.width - 8));
+    const y = Math.max(8, Math.min(clientY, window.innerHeight - r.height - 8));
+    menu.style.left = x + "px"; menu.style.top = y + "px";
+    menu.querySelectorAll("button").forEach((b) => (b.onclick = () => { const it = items[+b.getAttribute("data-i")]; closeAddMenu(); it.act(); }));
+    setTimeout(() => document.addEventListener("pointerdown", onAwayAddMenu, true), 0);
+  }
+
   function renderUnion(u) {
     const pa = personById(u.a); if (!pa) return;
     const pb = u.b != null ? personById(u.b) : null;
@@ -885,7 +948,7 @@
       childTops.forEach((c) => gu.appendChild(el("line", { class: "hit", x1: c.x, y1: busY, x2: c.x, y2: c.top })));
       const rightKid = kids.reduce((r, k) => (posOf(k.p.id).x > posOf(r.p.id).x ? k : r), kids[0]);
       const rp = posOf(rightKid.p.id);
-      gu.appendChild(addPlus(u.id, rp.x + HALF + 22, rp.y, "Add another child / sibling"));
+      gu.appendChild(addPlus(u.id, rp.x + HALF + 22, rp.y, "Add sibling / spouse / child", rightKid.p.id));
     }
     gLinks.appendChild(gu);
   }
@@ -1029,7 +1092,11 @@
     const hb = e.target.closest && e.target.closest(".hidden-badge");
     if (hb) { openHiddenPopup(hb.getAttribute("data-anchor")); return; }
     const plus = e.target.closest && e.target.closest(".add-plus");
-    if (plus) { quickAddChild(plus.getAttribute("data-union")); return; }
+    if (plus) {
+      const uid_ = plus.getAttribute("data-union"), pid_ = plus.getAttribute("data-person");
+      if (pid_) openAddMenu(uid_, pid_, e.clientX, e.clientY); else quickAddChild(uid_);
+      return;
+    }
     const personEl = e.target.closest && e.target.closest(".person");
 
     if (rearrange && !readonly) {
@@ -1222,9 +1289,19 @@
   gNodes.addEventListener("pointerover", (e) => {
     if (readonly) return;
     const pe = e.target.closest && e.target.closest(".person"); if (!pe) return;
+    const pid = pe.getAttribute("data-id");
     clearTimeout(plusRevealTimer); clearPlusReveal();
-    parentLinksOfPerson(pe.getAttribute("data-id")).forEach((l) => {
-      const g = gLinks.querySelector('.union[data-union="' + l.union + '"]'); if (g) g.classList.add("reveal-plus");
+    parentLinksOfPerson(pid).forEach((l) => {
+      const g = gLinks.querySelector('.union[data-union="' + l.union + '"]'); if (!g) return;
+      g.classList.add("reveal-plus");
+      // Slide the + beside the person you're hovering and aim it at them, so the
+      // menu's "spouse / child" act on the right person (not just the last child).
+      const plus = g.querySelector(".add-plus[data-person]");
+      if (plus && posOf(pid)) {
+        const pp = posOf(pid);
+        plus.setAttribute("transform", `translate(${pp.x + HALF + 22},${pp.y})`);
+        plus.setAttribute("data-person", pid);
+      }
     });
   });
   gNodes.addEventListener("pointerout", (e) => {
@@ -1258,6 +1335,7 @@
     $("#hideOneBtn").disabled = false;
     $("#hideOneBtn").textContent = isHidden(p.id) ? "Unhide this person" : "Hide this person";
     renderDocsForm(p);
+    renderRelationships(p);
   }
   function resetPersonForm() {
     $("#personId").value = "";
@@ -1272,6 +1350,7 @@
     $("#hideOneBtn").disabled = true;
     $("#hideOneBtn").textContent = "Hide this person";
     renderDocsForm(null);
+    renderRelationships(null);
   }
 
   const docIcon = (k) => ({ link: "🔗", text: "📄", pdf: "📕", image: "🖼️" }[k] || "📄");
@@ -1307,6 +1386,131 @@
       list.appendChild(li);
     });
   }
+
+  /* ------------------------------------------- relationships (in the profile) */
+  const relName = (id) => { const q = personById(id); return q ? escapeHtml(q.name) : "?"; };
+  // Choose an existing person or spin up a new blank one. onPick(idOrNull); null = new.
+  function pickPerson(title, hint, onPick, excludeIds) {
+    const excl = new Set(excludeIds || []);
+    const opts = state.persons.filter((q) => !excl.has(q.id)).sort((a, b) => a.name.localeCompare(b.name))
+      .map((q) => `<option value="${q.id}">${escapeHtml(q.name)}${q.birth ? " (" + q.birth + ")" : ""}</option>`).join("");
+    openModal(title, hint,
+      `<label class="field"><span>Who</span><select id="ppWho">
+         <option value="__new">➕ New person (I’ll name them)</option>${opts}</select></label>`,
+      (m) => { const v = m.querySelector("#ppWho").value; onPick(v === "__new" ? null : v); }, "Add");
+  }
+  // Re-save + re-render the tree and the open profile after a relationship edit.
+  function refreshRel(personId) {
+    relayoutAndSave();
+    const p = personById(personId);
+    if (p) { selectedId = personId; fillPersonForm(p); }
+  }
+  function relSetStatus(unionId, status, personId) { pushUndo(); const u = unionById(unionId); if (u) u.status = status; refreshRel(personId); }
+  function relSetChildType(linkId, type, personId) { pushUndo(); const l = state.links.find((x) => x.id === linkId); if (l) l.type = type; refreshRel(personId); }
+  function relUnlinkUnion(unionId, personId) {
+    if (!confirm("Remove this relationship? Both people stay in the tree; any children of this couple lose this parent link.")) return;
+    pushUndo(); deleteUnion(unionId); refreshRel(personId);
+  }
+  function relRemoveLink(linkId, personId) {
+    if (!confirm("Remove this parent–child link? Both people stay in the tree.")) return;
+    pushUndo(); deleteLink(linkId); refreshRel(personId);
+  }
+  function relAddPartner(personId) {
+    pickPerson("Add a partner", "Link an existing person as a spouse / partner, or create a new one.", (pid) => {
+      if (pid === personId) return toast("Pick someone else");
+      pushUndo();
+      let partnerId = pid;
+      if (!partnerId) partnerId = addPerson({ name: "New spouse", sex: guessSpouseSex(personById(personId)) }).id;
+      addUnion(personId, partnerId, "married");
+      if (isManual(personId) && !isManual(partnerId)) { const pp = posOf(personId); placeAt(partnerId, pp.x + COLW, pp.y); }
+      if (!pid) focusNewPerson(personById(partnerId), "Added spouse — type their name and Save");
+      else { refreshRel(personId); toast("Linked as a couple"); }
+    }, [personId]);
+  }
+  function relAddChild(unionId, personId) {
+    pickPerson("Add a child", "Link an existing person as this couple’s child, or create a new one.", (cid) => {
+      pushUndo();
+      let childId = cid;
+      if (!childId) childId = addPerson({ name: "New person", sex: "unknown" }).id;
+      addChild(unionId, childId, "bio");
+      const u = unionById(unionId); if (u) placeNewChild(u, childId);
+      if (!cid) focusNewPerson(personById(childId));
+      else { refreshRel(personId); toast("Child linked"); }
+    }, [personId]);
+  }
+  function relAddParent(personId) {
+    pickPerson("Add a parent", "Pick an existing person as a parent — this person is attached as their child. Add the second parent by editing that person’s partners.",
+      (pid) => {
+        if (!pid) return toast("Pick an existing person as the parent");
+        if (pid === personId) return toast("Pick someone else");
+        pushUndo();
+        let u = unionsOfPerson(pid)[0];
+        if (!u) u = addUnion(pid, null, "married");
+        addChild(u.id, personId, "bio");
+        refreshRel(personId);
+      }, [personId]);
+  }
+  function renderRelationships(p) {
+    const sec = $("#relSection"), box = $("#relList"); if (!box || !sec) return;
+    box.innerHTML = "";
+    if (!p) { sec.hidden = true; return; }
+    sec.hidden = false;
+    const pid = p.id;
+    const head = (t) => { const li = document.createElement("li"); li.className = "rel-head"; li.textContent = t; box.appendChild(li); };
+    const none = (t) => { const li = document.createElement("li"); li.className = "rel-none"; li.textContent = t; box.appendChild(li); };
+    const add = (html) => { const li = document.createElement("li"); li.className = "rel-add"; li.innerHTML = html; box.appendChild(li); return li; };
+
+    // ---- partners & their children ----
+    head("Partners");
+    const unions = unionsOfPerson(pid);
+    if (!unions.length) none("No partner recorded yet.");
+    unions.forEach((u) => {
+      const other = u.a === pid ? u.b : u.a;
+      const li = document.createElement("li"); li.className = "rel-row";
+      li.innerHTML = `<span class="rn">${other ? relName(other) : "<em>single parent</em>"}</span>
+        <select class="rel-status" data-u="${u.id}">
+          <option value="married">Married</option><option value="divorced">Divorced</option><option value="partners">Partners</option>
+        </select><button class="rel-x" data-unlink="${u.id}" title="Remove relationship">✕</button>`;
+      li.querySelector(".rel-status").value = u.status || "married";
+      box.appendChild(li);
+      childLinksOfUnion(u.id).forEach((l) => {
+        if (!personById(l.child)) return;
+        const ci = document.createElement("li"); ci.className = "rel-child";
+        ci.innerHTML = `<span class="rn">↳ ${relName(l.child)}</span>
+          <select class="rel-ctype" data-link="${l.id}"><option value="bio">Biological</option><option value="adopted">Adopted</option></select>
+          <button class="rel-x" data-rmlink="${l.id}" title="Remove child link">✕</button>`;
+        ci.querySelector(".rel-ctype").value = l.type || "bio";
+        box.appendChild(ci);
+      });
+      add(`<button class="btn small" data-addchild="${u.id}">＋ Add child with ${other ? relName(other) : "this partner"}</button>`);
+    });
+    add(`<button class="btn small" data-addpartner="1">＋ Add partner</button>`);
+
+    // ---- parents ----
+    head("Parents");
+    const plinks = parentLinksOfPerson(pid);
+    if (!plinks.length) none("No parents recorded.");
+    plinks.forEach((l) => {
+      const u = unionById(l.union); if (!u) return;
+      const li = document.createElement("li"); li.className = "rel-row";
+      li.innerHTML = `<span class="rn">${escapeHtml(unionLabel(u))}</span>
+        <select class="rel-ctype" data-link="${l.id}"><option value="bio">Biological</option><option value="adopted">Adopted</option></select>
+        <button class="rel-x" data-rmlink="${l.id}" title="Remove parent link">✕</button>`;
+      li.querySelector(".rel-ctype").value = l.type || "bio";
+      box.appendChild(li);
+    });
+    add(`<button class="btn small" data-addparent="1">＋ Add parent</button>`);
+
+    // ---- wire it up ----
+    box.querySelectorAll(".rel-status").forEach((s) => (s.onchange = () => relSetStatus(s.getAttribute("data-u"), s.value, pid)));
+    box.querySelectorAll(".rel-ctype").forEach((s) => (s.onchange = () => relSetChildType(s.getAttribute("data-link"), s.value, pid)));
+    box.querySelectorAll("[data-unlink]").forEach((b) => (b.onclick = () => relUnlinkUnion(b.getAttribute("data-unlink"), pid)));
+    box.querySelectorAll("[data-rmlink]").forEach((b) => (b.onclick = () => relRemoveLink(b.getAttribute("data-rmlink"), pid)));
+    box.querySelectorAll("[data-addchild]").forEach((b) => (b.onclick = () => relAddChild(b.getAttribute("data-addchild"), pid)));
+    const ap = box.querySelector("[data-addpartner]"); if (ap) ap.onclick = () => relAddPartner(pid);
+    const apar = box.querySelector("[data-addparent]"); if (apar) apar.onclick = () => relAddParent(pid);
+  }
+
   function setSex(s) {
     formSex = s;
     document.querySelectorAll("#sexToggle button").forEach((b) => b.classList.toggle("active", b.dataset.sex === s));
