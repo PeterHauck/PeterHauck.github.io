@@ -1966,7 +1966,64 @@
     if (old.photoMigrated) state.photoMigrated = true;
   }
 
-  function relayoutAndSave() { autoLayout(); render(); save(); syncTitle(); }
+  // Auto-heal duplicate parentage that would draw a child's descent line twice:
+  //  1. merge unions that are the SAME couple entered twice,
+  //  2. drop exact duplicate child links,
+  //  3. when a child is under both "Parent alone" and "Parent + spouse", keep the
+  //     couple and drop the redundant single-parent link,
+  //  4. remove leftover empty single-parent unions.
+  // Genuinely different couples (e.g. a child's birth vs adoptive parents) are two
+  // distinct partner-sets and are left untouched.
+  function dedupeParentUnions() {
+    let changed = false;
+    const partners = (u) => [u.a, u.b].filter((v) => v != null);
+    const keyOf = (u) => partners(u).slice().sort().join("|");
+
+    // 1. merge identical-partner unions → keep the first, repoint the rest
+    const seen = {}, remap = {};
+    state.unions.forEach((u) => { const k = keyOf(u); if (!k) return; if (seen[k]) remap[u.id] = seen[k]; else seen[k] = u.id; });
+    if (Object.keys(remap).length) {
+      state.links.forEach((l) => { if (remap[l.union]) { l.union = remap[l.union]; changed = true; } });
+      state.unions = state.unions.filter((u) => !remap[u.id]);
+    }
+
+    // 2. drop exact duplicate links (same union + child)
+    const linkSeen = new Set();
+    state.links = state.links.filter((l) => { const kk = l.union + ">" + l.child; if (linkSeen.has(kk)) { changed = true; return false; } linkSeen.add(kk); return true; });
+
+    // 3. subset cleanup: single-parent link redundant next to a couple with that parent
+    const uById = {}; state.unions.forEach((u) => (uById[u.id] = u));
+    const pset = (u) => new Set(partners(u));
+    const subset = (small, big) => { for (const v of small) if (!big.has(v)) return false; return true; };
+    const byChild = {};
+    state.links.forEach((l) => { if (uById[l.union]) (byChild[l.child] = byChild[l.child] || []).push(l); });
+    const removeLink = new Set();
+    Object.values(byChild).forEach((links) => {
+      if (links.length < 2) return;
+      links.forEach((Li) => {
+        if (removeLink.has(Li.id)) return;
+        const Pi = pset(uById[Li.union]);
+        if (!Pi.size) return;
+        links.forEach((Lj) => {
+          if (Li === Lj || removeLink.has(Lj.id)) return;
+          const Pj = pset(uById[Lj.union]);
+          if (Pi.size < Pj.size && subset(Pi, Pj)) removeLink.add(Li.id);   // Li's union is the smaller (redundant) one
+        });
+      });
+    });
+    if (removeLink.size) { state.links = state.links.filter((l) => !removeLink.has(l.id)); changed = true; }
+
+    // 4. remove leftover single-parent unions that no longer have any children
+    const childCount = {};
+    state.links.forEach((l) => (childCount[l.union] = (childCount[l.union] || 0) + 1));
+    const before = state.unions.length;
+    state.unions = state.unions.filter((u) => !(u.b == null && !childCount[u.id]));
+    if (state.unions.length !== before) changed = true;
+
+    return changed;
+  }
+
+  function relayoutAndSave() { dedupeParentUnions(); autoLayout(); render(); save(); syncTitle(); }
 
   /* -------- undo / redo (Cmd/Ctrl+Z) -------- */
   function snapshot() { return JSON.stringify(exportObject()); }
@@ -2323,6 +2380,7 @@
       const l = $("#legend"); if (l) { l.classList.add("min"); const t = $("#legendToggle"); if (t) t.textContent = "+"; }
       $("#toolbar").classList.add("collapsed"); $("#tbMenu").classList.remove("active"); // tools tucked behind ☰
     }
+    if (!readonly && dedupeParentUnions()) save();   // heal any duplicate parentage in existing data
     autoLayout(); render(); syncTitle(); setupTitleEditing();
     // One-time: turn any already-attached obituary photos into node pictures.
     if (!readonly && !state.photoMigrated) {
