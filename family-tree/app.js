@@ -1882,19 +1882,37 @@
     return btoa(bin);
   }
   const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  const hasGzip = typeof CompressionStream === "function" && typeof DecompressionStream === "function";
+  async function gzip(bytes) {
+    const s = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+    return new Uint8Array(await new Response(s).arrayBuffer());
+  }
+  async function gunzip(bytes) {
+    const s = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+    return new Uint8Array(await new Response(s).arrayBuffer());
+  }
 
   async function encryptState(password) {
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const key = await deriveKey(password, salt);
-    const data = new TextEncoder().encode(JSON.stringify(exportObject()));
+    // Compress before encrypting so embedded photos/PDFs don't bloat the payload
+    // (encrypted data can't be compressed afterwards). Single base64, not double —
+    // together this roughly halves the size that goes to backup/publish, so big
+    // trees stay under the server's request limit (413 Payload Too Large).
+    let data = new TextEncoder().encode(JSON.stringify(exportObject()));
+    let v = 1;
+    if (hasGzip) { try { data = await gzip(data); v = 2; } catch (e) { v = 1; } }
     const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, data);
-    return btoa(JSON.stringify({ v: 1, salt: b64(salt), iv: b64(iv), ct: b64(ct) }));
+    return JSON.stringify({ v, salt: b64(salt), iv: b64(iv), ct: b64(ct) });
   }
   async function decryptState(password, payload) {
-    const o = JSON.parse(atob(payload));
+    // New payloads are a JSON object; older published data was wrapped in an extra
+    // base64 layer (btoa) — accept both so anything already published still opens.
+    const o = (typeof payload === "string" && payload.trim().charAt(0) === "{") ? JSON.parse(payload) : JSON.parse(atob(payload));
     const key = await deriveKey(password, unb64(o.salt));
-    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(o.iv) }, key, unb64(o.ct));
+    let pt = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(o.iv) }, key, unb64(o.ct)));
+    if (o.v === 2) pt = await gunzip(pt);   // v2 = gzip-compressed before encryption
     return JSON.parse(new TextDecoder().decode(pt));
   }
 
