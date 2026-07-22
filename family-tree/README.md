@@ -47,19 +47,27 @@ screen if you want an icon. Family members enter the password to view.
 
 ## Building your tree
 
-Everything you do auto-saves in your browser (localStorage). Use the toolbar:
+Everything you do auto-saves in your browser (IndexedDB — it holds photos and
+PDFs with no practical size limit, and needs no account or server). Use the
+toolbar:
 
 | Button | Action |
 | ------ | ------ |
-| ＋ | add a person |
-| 💍 | add a couple / relationship |
-| 👶 | add a child (choose the couple + biological/adopted) |
-| ✦ | auto-arrange |
+| ☰ | people list + add a person / auto-arrange |
+| ✨ | add people from an obituary (Claude reads it) |
+| ✥ | Move mode (drag / box-select people) |
+| 🧲 | tidy up (line up people on the same level) |
 | ⤢ | fit to screen |
 | ± | zoom |
 
-**Export / Import** save the tree as a plain `.json` file for backup or moving
-between computers.
+Add relatives straight on the tree with the **＋ handles** around each person
+(parent above, child below, spouse to the sides), or from the **Relationships**
+list on a profile.
+
+**Backing up:** your tree lives in this browser. Use **⬇︎ Download a backup**
+now and then to keep an offsite copy (and to move to another device via **⬆︎
+Restore from a backup file**). GitHub is **not required** — the repo backup
+under *Advanced* is optional.
 
 ---
 

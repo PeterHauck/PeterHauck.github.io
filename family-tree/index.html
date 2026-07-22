@@ -216,27 +216,35 @@
           <p class="hint" style="margin-top:6px">Reads the text out of every photo/PDF obituary already attached (that doesn’t have a text copy yet) and saves it as a durable, searchable record.</p>
           <button class="btn wide" id="backfillDatesBtn" style="margin-top:10px">📅 Fill dates from saved obituaries</button>
           <p class="hint" style="margin-top:6px">Reads every saved obituary — including uploaded photos &amp; PDFs and saved links — with Claude, and fills in each person’s exact birth &amp; death date where the obituary states it. Only fills blanks; never changes a date you’ve already entered. (Runs on the Vercel deployment.)</p>
-          <button class="btn wide" id="migrateRecordsBtn" style="margin-top:10px">🗄️ Move records to the repo (smaller backups)</button>
-          <p class="hint" style="margin-top:6px">Moves obituary PDFs &amp; photos out of the tree and into their own files in the repository, so the saved tree stays small and backs up no matter how many you add. New uploads do this automatically. (Needs GITHUB_TOKEN set on Vercel.)</p>
+          <button class="btn wide" id="migrateRecordsBtn" style="margin-top:10px">🗄️ Move records to the GitHub repo</button>
+          <p class="hint" style="margin-top:6px">Optional — only if you use the GitHub backup. Moves obituary PDFs &amp; photos into their own files in the repo so that backup stays small. Not needed otherwise: your browser holds them fine. (Needs GITHUB_TOKEN on Vercel.)</p>
         </div>
 
         <div class="section editor-only">
-          <h2>Save & share</h2>
+          <h2>Save &amp; back up</h2>
+          <p class="hint" style="margin:0 0 8px">Your tree is saved automatically in this browser (it holds photos &amp; PDFs — no size limit, no account needed). For safety, download a copy now and then, and use it to move to another device.</p>
           <div class="btn-row">
-            <button class="btn" id="exportBtn">⬇︎ Export file</button>
-            <button class="btn" id="importBtn">⬆︎ Import file</button>
+            <button class="btn primary wide" id="exportBtn">⬇︎ Download a backup</button>
+          </div>
+          <div class="btn-row" style="margin-top:8px">
+            <button class="btn wide" id="importBtn">⬆︎ Restore from a backup file</button>
             <input type="file" id="importInput" accept=".json,application/json" hidden />
           </div>
-          <div class="btn-row" style="margin-top:8px">
-            <button class="btn primary wide" id="backupBtn">☁︎ Back up to repo now</button>
-          </div>
-          <p class="hint" id="backupStatus" style="margin-top:6px">Not set up yet</p>
-          <p class="hint" style="margin-top:2px">Keeps a durable, encrypted copy in the repository (versioned, loadable on any device) so your tree isn’t only in this browser. After the first time, it backs up automatically a few seconds after each change. (Needs the Vercel site + a GitHub token — see the README.)</p>
-          <div class="btn-row" style="margin-top:10px">
-            <button class="btn wide" id="publishBtn">🔒 Download encrypted copy</button>
-          </div>
-          <p class="hint" style="margin-top:6px">Or download <code>family-data.js</code> yourself to commit by hand.</p>
-          <div class="btn-row" style="margin-top:8px">
+
+          <details class="advanced" style="margin-top:14px">
+            <summary>Advanced: publish &amp; GitHub</summary>
+            <div class="btn-row" style="margin-top:10px">
+              <button class="btn wide" id="publishBtn">🔒 Download encrypted copy for the web</button>
+            </div>
+            <p class="hint" style="margin-top:6px">Downloads <code>family-data.js</code> — commit it to publish a password-protected family view.</p>
+            <div class="btn-row" style="margin-top:10px">
+              <button class="btn wide" id="backupBtn">☁︎ Back up to the GitHub repo</button>
+            </div>
+            <p class="hint" id="backupStatus" style="margin-top:6px">Optional</p>
+            <p class="hint" style="margin-top:2px">Optional: also keep an encrypted copy in the GitHub repo (needs the Vercel site + a GitHub token — see the README). Not required — your browser copy and the downloaded backup already keep your tree safe.</p>
+          </details>
+
+          <div class="btn-row" style="margin-top:14px">
             <button class="btn danger" id="resetBtn">Clear everything</button>
           </div>
         </div>

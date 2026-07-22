@@ -2577,21 +2577,60 @@
       photoMigrated: !!obj.photoMigrated,
     });
   }
-  function savedVersion() { try { const s = localStorage.getItem(STORE_KEY); return s ? (JSON.parse(s).version || 0) : 0; } catch (e) { return 0; } }
+  /* -------- local storage: IndexedDB (roomy — holds photos/PDFs), with a
+     localStorage fallback for tiny trees / private-mode browsers. This is what
+     lets the tree live durably in your browser with no server and no GitHub. */
+  const IDB = { db: "familyTreeDB", store: "kv", key: "tree.v1" };
+  function idbOpen() {
+    return new Promise((res, rej) => {
+      let r; try { r = indexedDB.open(IDB.db, 1); } catch (e) { return rej(e); }
+      r.onupgradeneeded = () => { try { r.result.createObjectStore(IDB.store); } catch (e) {} };
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    });
+  }
+  function idbGet(key) { return idbOpen().then((db) => new Promise((res, rej) => { const q = db.transaction(IDB.store, "readonly").objectStore(IDB.store).get(key); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); })); }
+  function idbSet(key, val) { return idbOpen().then((db) => new Promise((res, rej) => { const tx = db.transaction(IDB.store, "readwrite"); tx.objectStore(IDB.store).put(val, key); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); })); }
+  function idbDel(key) { return idbOpen().then((db) => new Promise((res) => { const tx = db.transaction(IDB.store, "readwrite"); tx.objectStore(IDB.store).delete(key); tx.oncomplete = () => res(); tx.onerror = () => res(); })).catch(() => {}); }
+
+  // The saved tree, read once at boot so the (synchronous) boot logic below can
+  // consult it without awaiting.
+  let localData = null;
+  async function loadLocalData() {
+    try { localData = (await idbGet(IDB.key)) || null; } catch (e) { localData = null; }
+    if (!localData) {   // migrate an existing localStorage tree into IndexedDB (one time)
+      let ls = null;
+      try { const s = localStorage.getItem(STORE_KEY); if (s) ls = JSON.parse(s); } catch (e) {}
+      if (ls && ls.persons) {
+        localData = ls;
+        try { await idbSet(IDB.key, ls); try { localStorage.removeItem(STORE_KEY); } catch (e) {} } catch (e) {}   // once safely in IDB, free localStorage
+      }
+    }
+    // Ask the browser not to evict our data (best effort; no prompt in most browsers).
+    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
+  }
+
+  function savedVersion() { return localData ? (localData.version || 0) : 0; }
   function downloadFile(name, content, type) {
     const blob = new Blob([content], { type: type || "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob); a.download = name; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
-  function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(exportObject())); } catch (e) { console.warn("save failed", e); } scheduleBackup(); }
+  function save() {
+    const obj = exportObject();
+    localData = obj;
+    const json = JSON.stringify(obj);
+    idbSet(IDB.key, obj).catch((e) => console.warn("idb save failed", e));   // primary (roomy)
+    try { localStorage.setItem(STORE_KEY, json); } catch (e) {}              // best-effort mirror (small trees)
+    scheduleBackup();
+  }
 
   /* -------- durable backup: commit the encrypted tree to the repo -------- */
   let backupTimer = null;
   const BACKUP_ON = () => { try { return localStorage.getItem("familyTree.backupOn") === "1"; } catch (e) { return false; } };
   function setBackupStatus(state, msg) {
     const el = $("#backupStatus"); if (!el) return;
-    const map = { off: "Not set up yet", on: "Auto-backup on ✓", pending: "Saving to repo soon…", saving: "Backing up…", saved: "Backed up to repo ✓", error: "Backup failed" };
+    const map = { off: "Optional — off", on: "Auto-backup on ✓", pending: "Saving to repo soon…", saving: "Backing up…", saved: "Backed up to repo ✓", error: "Backup failed" };
     el.textContent = (map[state] || "") + (msg ? " — " + msg : "");
     el.className = "hint backup-" + state;
   }
@@ -2626,15 +2665,14 @@
       if (manual) toast(e.message || "Backup failed");
     }
   }
-  function hasLocalData() { try { const s = localStorage.getItem(STORE_KEY); return s && JSON.parse(s).persons && JSON.parse(s).persons.length; } catch (e) { return false; } }
-  function loadLocal() { try { const s = localStorage.getItem(STORE_KEY); if (s) loadObject(JSON.parse(s)); } catch (e) { console.warn(e); } }
+  function hasLocalData() { return !!(localData && localData.persons && localData.persons.length); }
+  function loadLocal() { if (localData) loadObject(localData); }
   // When a newer starter replaces the saved copy, keep everything the user made
   // their own from that old copy — the tree's name, dragged positions, hidden
   // people, the focus centre, any pictures / obituaries they added, and anyone
   // they added themselves — so an update never wipes their work.
   function carryOverLocalPrefs() {
-    let old = null;
-    try { const s = localStorage.getItem(STORE_KEY); if (s) old = JSON.parse(s); } catch (e) {}
+    const old = localData;
     if (!old) return;
     const ids = new Set(state.persons.map((p) => p.id));
     // the tree's own name / subtitle (their rename wins over the built-in default)
@@ -3011,7 +3049,7 @@
     relayoutAndSave(); fitView();
   };
   $("#hiddenChip").onclick = () => { showAll(); relayoutAndSave(); fitView(); toast("Showing everyone"); };
-  $("#resetBtn").onclick = () => { if (confirm("Clear the entire tree from this browser?")) { state = blankState(); localStorage.removeItem(STORE_KEY); selectedId = null; resetPersonForm(); relayoutAndSave(); } };
+  $("#resetBtn").onclick = () => { if (confirm("Clear the entire tree from this browser?")) { state = blankState(); localData = null; try { localStorage.removeItem(STORE_KEY); } catch (e) {} idbDel(IDB.key); selectedId = null; resetPersonForm(); relayoutAndSave(); } };
   $("#panelToggle").onclick = () => $("#panel").classList.toggle("collapsed");
   function ensurePanel() { $("#panel").classList.remove("collapsed"); }
   $("#legendToggle").onclick = () => { const l = $("#legend"); l.classList.toggle("min"); $("#legendToggle").textContent = l.classList.contains("min") ? "+" : "–"; };
@@ -3109,11 +3147,12 @@
     if (focus.length) focusView(focus); else fitView();
   }
 
-  function init() {
+  async function init() {
     buildColorSwatches();
     setSex("male");
     setColor("");
     renderDocsForm(null);
+    await loadLocalData();   // pull the saved tree out of IndexedDB (roomy, no server)
     const params = new URLSearchParams(location.search);
     const wantEdit = params.has("edit");
     const published = typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20;
