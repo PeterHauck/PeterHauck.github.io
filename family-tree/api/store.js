@@ -27,14 +27,20 @@ async function readBody(req) {
 // Find the Blob token. Vercel names it BLOB_READ_WRITE_TOKEN by default, but a
 // store connected under a custom name gets <PREFIX>_BLOB_READ_WRITE_TOKEN — accept
 // either so it works however the store was named.
+// Strip stray whitespace and surrounding quotes — a token pasted straight from
+// the ".env.local" snippet (BLOB_READ_WRITE_TOKEN="vercel_blob_rw_…") often keeps
+// its quotes, which makes Vercel reject it with "Access denied".
+const clean = (v) => String(v == null ? "" : v).trim().replace(/^['"]+|['"]+$/g, "");
 function blobToken() {
-  if (process.env.BLOB_READ_WRITE_TOKEN) return process.env.BLOB_READ_WRITE_TOKEN;
-  // Match by var name (custom-named store) OR by the token's own value prefix
-  // (vercel_blob_rw_…), so it's found however the variable ended up named.
+  const direct = clean(process.env.BLOB_READ_WRITE_TOKEN);
+  if (direct.startsWith("vercel_blob_rw_")) return direct;
+  // Match by var name (custom-named store) OR by the token's own value prefix,
+  // so it's found however the variable ended up named — and cleaned either way.
   for (const [k, v] of Object.entries(process.env)) {
-    if (v && (/BLOB_READ_WRITE_TOKEN$/.test(k) || String(v).startsWith("vercel_blob_rw_"))) return v;
+    const t = clean(v);
+    if (t && (/BLOB_READ_WRITE_TOKEN$/.test(k) || t.startsWith("vercel_blob_rw_"))) return t;
   }
-  return null;
+  return direct || null;
 }
 
 export default async function handler(req, res) {
