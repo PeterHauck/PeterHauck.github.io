@@ -2762,6 +2762,7 @@
   // The "owner" is a device holding the import passcode (the secret only used to
   // save the tree). Private notes are shown/edited only for the owner.
   const isOwner = () => { try { return !!(localStorage.getItem("familyTree.importPass") || "").trim(); } catch (e) { return false; } };
+  function readFileDataURL(file) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(file); }); }
 
   function personDatesLine(p) {
     const parts = [];
@@ -2859,6 +2860,41 @@
     card.appendChild(head);
     const body = document.createElement("div"); body.className = "pcard-body"; card.appendChild(body);
     const section = (title, cls) => { const s = document.createElement("div"); s.className = "pcard-section" + (cls ? " " + cls : ""); if (title) { const t = document.createElement("h3"); t.textContent = title; s.appendChild(t); } body.appendChild(s); return s; };
+    // Photo — the owner can add/replace a picture from their phone. Photos that
+    // came from an obituary (or the computer) are protected: they can't be removed
+    // or replaced here, so saved obituary portraits are never lost by accident.
+    if (isOwner()) {
+      const s = section("Photo", "pcard-photo-sec");
+      const mobileAdded = !!p.photoMobile;
+      const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*"; fileInput.style.display = "none";
+      const setFromFile = async (file) => {
+        if (!file) return;
+        let photo = null; try { const dataUrl = await readFileDataURL(file); photo = await imageDataToPhoto(dataUrl); } catch (e) {}
+        if (!photo) { toast("Couldn’t read that image"); return; }
+        p.photo = photo; p.photoMobile = true;
+        save(); try { cloudSaveTree(false); } catch (e) {}
+        render(); openProfileCard(id); toast("Photo updated");
+      };
+      fileInput.onchange = () => setFromFile(fileInput.files[0]);
+      const addBtn = (label) => { const b = document.createElement("button"); b.className = "btn small"; b.textContent = label; s.appendChild(b); return b; };
+      if (!p.photo) {
+        addBtn("📷 Add a photo").onclick = () => fileInput.click();
+      } else if (mobileAdded) {
+        addBtn("📷 Change photo").onclick = () => fileInput.click();
+        const rm = addBtn("Remove photo"); rm.classList.add("danger");
+        rm.onclick = () => {
+          if (!confirm("Remove this photo?")) return;
+          delete p.photo; delete p.photoMobile;
+          save(); try { cloudSaveTree(false); } catch (e) {}
+          render(); openProfileCard(id); toast("Photo removed");
+        };
+      } else {
+        const note = document.createElement("div"); note.className = "pcard-subhint";
+        note.textContent = "This photo is saved with their records and is protected here. You can change it on the computer.";
+        s.appendChild(note);
+      }
+      s.appendChild(fileInput);
+    }
     // relationships (read-only, tap a name to jump)
     const groups = profileRelationships(id);
     if (groups.length) {

@@ -559,6 +559,8 @@ button.btn.tiny.danger { color: var(--divorce); border-color: var(--divorce); }
 .pcard-ctext { resize: vertical; }
 .pcard-comment-new .btn { align-self: flex-end; }
 button.btn.small { padding: 5px 9px; font-size: 12px; }
+.pcard-photo-sec .btn { margin: 0 8px 0 0; }
+.btn.danger { color: var(--divorce); border-color: var(--divorce); }
 
 /* remove the 300ms tap delay & double-tap zoom on controls */
 button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #panelToggle, #hiddenChip { touch-action: manipulation; }
