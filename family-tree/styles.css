@@ -526,6 +526,8 @@ button.btn.tiny.danger { color: var(--divorce); border-color: var(--divorce); }
 
 /* read-only profile card (opened by tapping a person on mobile) — a bottom sheet */
 .pcard-back { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; justify-content: center; }
+/* a record/obituary viewer opened from the profile card sits ABOVE it */
+.docview-backdrop { z-index: 70; }
 .pcard { background: var(--panel); width: 100%; max-width: 560px; max-height: 88vh; overflow-y: auto; border-radius: 16px 16px 0 0; box-shadow: var(--shadow); padding: 16px 16px calc(20px + env(safe-area-inset-bottom)); }
 .pcard-head { display: flex; align-items: flex-start; gap: 12px; }
 .pcard-photo { width: 60px; height: 60px; flex: none; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 28px; background: var(--paper); border: 2px solid var(--panel-border); border-radius: 12px; }
@@ -594,7 +596,7 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
   #toolbar .zoomlabel { width: 42px; font-size: 12px; display: flex; align-items: center; justify-content: center; }
   #tbMenu, #tbImport, #tbRearrange, #tbTidy, #toolbar .sep,
   #panelToggle, #peopleMenu, #panel, #hiddenChip { display: none !important; }
-  #tbFit, #tbZoomIn, #tbZoomOut { display: flex; }
+  #tbFit, #tbZoomIn, #tbZoomOut, #tbSync { display: flex; }
 
   /* legend is compact and starts collapsed on phones (tap to expand) */
   #legend {
