@@ -1942,7 +1942,48 @@
     a.href = URL.createObjectURL(blob); a.download = name; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
-  function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(exportObject())); } catch (e) { console.warn("save failed", e); } }
+  function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(exportObject())); } catch (e) { console.warn("save failed", e); } scheduleBackup(); }
+
+  /* -------- durable backup: commit the encrypted tree to the repo -------- */
+  let backupTimer = null;
+  const BACKUP_ON = () => { try { return localStorage.getItem("familyTree.backupOn") === "1"; } catch (e) { return false; } };
+  function setBackupStatus(state, msg) {
+    const el = $("#backupStatus"); if (!el) return;
+    const map = { off: "Not set up yet", on: "Auto-backup on ✓", pending: "Saving to repo soon…", saving: "Backing up…", saved: "Backed up to repo ✓", error: "Backup failed" };
+    el.textContent = (map[state] || "") + (msg ? " — " + msg : "");
+    el.className = "hint backup-" + state;
+  }
+  function scheduleBackup() {
+    if (readonly || !BACKUP_ON()) return;
+    clearTimeout(backupTimer);
+    setBackupStatus("pending");
+    backupTimer = setTimeout(() => backupToRepo(false), 8000);   // coalesce a burst of edits into one commit
+  }
+  async function backupToRepo(manual) {
+    if (readonly) return;
+    let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
+    if (!fam) {
+      if (!manual) return;
+      fam = prompt("Your family password (encrypts the backup & the family view):") || "";
+      if (!fam) return;
+      try { localStorage.setItem("familyTree.familyPass", fam); } catch (e) {}
+    }
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    if (!pass) { if (!manual) return; pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || ""; if (!pass) return; try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {} }
+    try { localStorage.setItem("familyTree.backupOn", "1"); } catch (e) {}   // enable auto-backup from now on
+    setBackupStatus("saving");
+    try {
+      const payload = await encryptState(fam);
+      const content = "/* Encrypted family tree — auto-backed up from the editor. */\nwindow.FAMILY_TREE_DATA = " + JSON.stringify(payload) + ";\n";
+      const res = await fetch("api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ passcode: pass, content }) });
+      if (!res.ok) { let msg = "failed (" + res.status + ")"; try { msg = (await res.json()).error || msg; } catch (e) {} if (res.status === 404) msg = "needs the Vercel site + a GitHub token"; throw new Error(msg); }
+      setBackupStatus("saved");
+      if (manual) toast("Backed up to the repo");
+    } catch (e) {
+      setBackupStatus("error", e.message);
+      if (manual) toast(e.message || "Backup failed");
+    }
+  }
   function hasLocalData() { try { const s = localStorage.getItem(STORE_KEY); return s && JSON.parse(s).persons && JSON.parse(s).persons.length; } catch (e) { return false; } }
   function loadLocal() { try { const s = localStorage.getItem(STORE_KEY); if (s) loadObject(JSON.parse(s)); } catch (e) { console.warn(e); } }
   // When a newer starter replaces the saved copy, keep everything the user made
@@ -2303,6 +2344,7 @@
     r.readAsText(f); e.target.value = "";
   });
   $("#publishBtn").onclick = openPublishModal;
+  $("#backupBtn").onclick = () => backupToRepo(true);
   $("#importObitBtn").onclick = openImportModal;
   $("#scrapeAllBtn").onclick = scrapeAllObits;
   $("#tbImport").onclick = openImportModal;
@@ -2410,6 +2452,7 @@
     }
     if (!readonly && dedupeParentUnions()) save();   // heal any duplicate parentage in existing data
     autoLayout(); render(); syncTitle(); setupTitleEditing();
+    if (!readonly) setBackupStatus(BACKUP_ON() ? "on" : "off");
     // One-time: turn any already-attached obituary photos into node pictures.
     if (!readonly && !state.photoMigrated) {
       state.photoMigrated = true; save();
