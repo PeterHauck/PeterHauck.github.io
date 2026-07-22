@@ -383,6 +383,13 @@ button.btn.danger { color: var(--divorce); }
 }
 .rel-list select.rel-kind:hover, .rel-list select.rel-kind:focus { border-color: var(--panel-border); background: var(--panel); color: var(--ink); }
 .rel-list .rel-kind.static { padding-right: 2px; }
+/* parents/children: plain-text relationship word (matching the Siblings rows),
+   click to flip biological ⇄ adoptive */
+.rel-list button.rel-kind.static.toggle {
+  border: 1px solid transparent; border-radius: 6px; padding: 2px 4px; background: transparent;
+  color: var(--muted); cursor: pointer; font: inherit; font-size: 12px;
+}
+.rel-list button.rel-kind.static.toggle:hover { border-color: var(--panel-border); background: var(--panel); color: var(--ink); }
 .rel-list .rel-x { border: none; background: transparent; cursor: pointer; color: var(--muted); font-size: 12px; padding: 2px 4px; line-height: 1; opacity: 0; }
 .rel-list .rel-item:hover .rel-x { opacity: 1; }
 .rel-list .rel-x:hover { color: var(--divorce); }
@@ -427,6 +434,53 @@ button.btn.small { padding: 5px 9px; font-size: 12px; }
 .add-plus-mark { stroke: #fff; stroke-width: 2.2; stroke-linecap: round; }
 .add-plus:hover .add-plus-bg { fill: var(--accent-2, var(--accent)); }
 .readonly .add-plus { display: none; }
+
+/* the + and +hidden handles that appear when you hover a couple's marriage line */
+.union .couple-plus, .union .hidden-plus { opacity: 0; pointer-events: none; transition: opacity .1s; cursor: pointer; }
+.union:hover .couple-plus, .union:hover .hidden-plus,
+.person:hover .hidden-plus { opacity: 1; pointer-events: auto; }
+.couple-hit { stroke: transparent; stroke-width: 26; fill: none; }
+/* +hidden handle: the eye-with-a-slash marker plus a small + badge */
+.hidden-plus-bg { fill: var(--panel); stroke: var(--panel-border); stroke-width: 1; }
+.hidden-plus-mark { stroke: var(--muted); stroke-width: 1.3; }
+.hidden-plus-pupil { fill: var(--muted); }
+.hidden-plus-slash { stroke: var(--muted); stroke-width: 1.6; stroke-linecap: round; }
+.hidden-plus-badge { fill: var(--accent); }
+.hidden-plus-badgemark { stroke: #fff; stroke-width: 1.8; stroke-linecap: round; }
+.hidden-plus:hover .hidden-plus-bg { fill: var(--accent); stroke: var(--accent); }
+.hidden-plus:hover .hidden-plus-mark, .hidden-plus:hover .hidden-plus-slash { stroke: #fff; }
+.hidden-plus:hover .hidden-plus-pupil { fill: #fff; }
+.hidden-plus:hover .hidden-plus-badge { fill: var(--accent-2, var(--accent)); }
+
+/* editable hidden-family pop-up */
+.hidden-editor { width: min(860px, 96vw); }
+.hidden-editor .he-head { margin-bottom: 10px; }
+.hidden-editor .he-body { display: flex; gap: 14px; align-items: stretch; }
+.hidden-editor .he-canvas { flex: 1 1 auto; min-width: 0; }
+.hidden-editor .he-svg { width: 100%; height: min(56vh, 480px); display: block; background: var(--paper); border: 1px solid var(--panel-border); border-radius: 10px; touch-action: none; }
+.hidden-editor .he-side { flex: 0 0 220px; }
+.he-node { cursor: grab; }
+.he-node .mini-shape { fill: var(--node-fill); stroke: var(--line); stroke-width: 2; }
+.he-node.root .mini-shape { stroke: var(--accent-2); }
+.he-node.sel .mini-shape { stroke: var(--accent); stroke-width: 3.4; }
+.he-node .he-plus { opacity: 0; pointer-events: none; transition: opacity .1s; cursor: pointer; }
+.he-node:hover .he-plus, .he-node.sel .he-plus { opacity: 1; pointer-events: auto; }
+.he-plus-hit { fill: transparent; }
+.he-plus-bg { fill: var(--accent); }
+.he-plus-mark { stroke: #fff; stroke-width: 2; stroke-linecap: round; }
+.he-plus:hover .he-plus-bg { fill: var(--accent-2, var(--accent)); }
+.he-side-empty, .he-note { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.he-note { margin-top: 10px; }
+.he-edit-title { font-weight: 700; font-size: 13px; margin-bottom: 10px; }
+.he-field { display: block; margin-bottom: 9px; }
+.he-field > span { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin-bottom: 3px; }
+.he-field input, .he-field select { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--panel-border); border-radius: 7px; background: var(--paper); color: var(--ink); font-size: 13px; }
+.he-field-2 { display: flex; gap: 8px; }
+.he-field-2 .he-field { flex: 1; }
+.he-check { display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 4px 0 10px; }
+.he-side-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+button.btn.tiny { padding: 5px 8px; font-size: 11.5px; }
+button.btn.tiny.danger { color: var(--divorce); border-color: var(--divorce); }
 .attach-choice { display: flex; gap: 8px; margin-bottom: 10px; }
 .attach-choice button { flex: 1; padding: 7px; border-radius: 8px; border: 1px solid var(--panel-border); background: var(--paper); cursor: pointer; font-size: 12.5px; }
 .attach-choice button.active { border-color: var(--accent-2); box-shadow: inset 0 0 0 1px var(--accent-2); }
