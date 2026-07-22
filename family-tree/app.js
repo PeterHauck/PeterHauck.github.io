@@ -2160,18 +2160,20 @@
       img.src = dataUrl;
     });
   }
-  // Commit a record's binary to the repo as its own file and point the doc at it
-  // (clearing the in-tree copy). Returns true on success; false means keep it
-  // embedded (repo not configured / unreachable — nothing is lost either way).
+  // Store a record's binary in cloud storage (Vercel Blob) as its own file and
+  // point the doc at its URL (clearing the in-tree copy). Returns true on success;
+  // false means keep it embedded (cloud not set up / unreachable — nothing lost).
   async function storeRecordBinary(doc, dataUrl, pass) {
     const m = /^data:([^;]+);base64,(.*)$/.exec(dataUrl || ""); if (!m) return false;
     const mt = m[1], b64 = m[2];
-    const path = "records/" + doc.id + "." + extFor(mt);
+    const name = doc.id + "." + extFor(mt);
     try {
-      const res = await fetch("api/save", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ passcode: pass, path, encoding: "base64", content: b64, message: "Add obituary record " + doc.id }) });
+      const res = await fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "putRecord", passcode: pass, name, base64: b64, contentType: mt }) });
       if (!res.ok) return false;
-      doc.path = path; doc.mediaType = mt; delete doc.content;
+      const j = await res.json();
+      if (!j || !j.url) return false;
+      doc.path = j.url; doc.mediaType = mt; delete doc.content;   // path = public blob URL
       return true;
     } catch (e) { return false; }
   }
@@ -2382,8 +2384,8 @@
   }
 
   // Move every obituary file that's still embedded in the tree out to its own
-  // file in the repo, shrinking the saved tree so it scales to any number of
-  // uploads. Safe to re-run; needs GITHUB_TOKEN configured on Vercel.
+  // file in cloud storage (Vercel Blob), shrinking the saved tree so it scales to
+  // any number of uploads. Safe to re-run; needs the Blob store set up on Vercel.
   async function migrateRecordsToRepo() {
     if (readonly) return;
     const targets = [];
@@ -2402,12 +2404,12 @@
         const data = d.kind === "image" ? await shrinkImageDataUrl(d.content, 1500) : d.content;
         if (await storeRecordBinary(d, data, pass)) { moved++; save(); } else { failed++; }
       }
-      if (moved) relayoutAndSave();   // re-save the (now smaller) tree; backup is scheduled from save()
-      toast(moved ? ("Moved " + moved + " record" + (moved === 1 ? "" : "s") + " to the repo" + (failed ? " (" + failed + " couldn’t be saved)" : "")) : "Couldn’t move records — is GITHUB_TOKEN set on Vercel?");
+      if (moved) relayoutAndSave();   // re-save the (now smaller) tree; cloud save is scheduled from save()
+      toast(moved ? ("Moved " + moved + " record" + (moved === 1 ? "" : "s") + " to your site" + (failed ? " (" + failed + " couldn’t be saved)" : "")) : "Couldn’t move records — is the Blob store set up on Vercel?");
     } catch (e) {
       toast(e.message || "Stopped");
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = "🗄️ Move records to the repo (smaller backups)"; }
+      if (btn) { btn.disabled = false; btn.textContent = "🗄️ Move records to cloud storage"; }
       render();
     }
   }
@@ -2622,10 +2624,68 @@
     const json = JSON.stringify(obj);
     idbSet(IDB.key, obj).catch((e) => console.warn("idb save failed", e));   // primary (roomy)
     try { localStorage.setItem(STORE_KEY, json); } catch (e) {}              // best-effort mirror (small trees)
-    scheduleBackup();
+    scheduleCloudSave();   // durable copy to your site (Vercel Blob)
+    scheduleBackup();      // optional legacy GitHub backup (only if turned on)
   }
 
-  /* -------- durable backup: commit the encrypted tree to the repo -------- */
+  /* -------- durable cloud save: encrypted tree in Vercel Blob (no GitHub) ---- */
+  let cloudTimer = null;
+  const CLOUD_ON = () => { try { return localStorage.getItem("familyTree.cloudOn") === "1"; } catch (e) { return false; } };
+  function setCloudStatus(st, msg) {
+    const el = $("#cloudStatus"); if (!el) return;
+    const map = { off: "Off — turn on to save a durable copy to your site", on: "On ✓ — saves automatically", pending: "Saving soon…", saving: "Saving to your site…", saved: "Saved to your site ✓", error: "Save failed" };
+    el.textContent = (map[st] || "") + (msg ? " — " + msg : "");
+    el.className = "hint backup-" + st;
+  }
+  function scheduleCloudSave() {
+    if (readonly || !CLOUD_ON()) return;
+    clearTimeout(cloudTimer);
+    setCloudStatus("pending");
+    cloudTimer = setTimeout(() => cloudSaveTree(false), 6000);   // coalesce a burst of edits
+  }
+  async function cloudSaveTree(manual) {
+    if (readonly) return;
+    let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
+    if (!fam) { if (!manual) return; fam = prompt("Choose a family password (used to encrypt your saved tree):") || ""; if (!fam) return; try { localStorage.setItem("familyTree.familyPass", fam); } catch (e) {} }
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    if (!pass) { if (!manual) return; pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || ""; if (!pass) return; try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {} }
+    try { localStorage.setItem("familyTree.cloudOn", "1"); } catch (e) {}
+    setCloudStatus("saving");
+    try {
+      const payload = await encryptState(fam);
+      const res = await fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "saveTree", passcode: pass, payload }) });
+      if (!res.ok) { let msg = "failed (" + res.status + ")"; try { msg = (await res.json()).error || msg; } catch (e) {} if (res.status === 404) msg = "needs the Vercel site + a Blob store"; throw new Error(msg); }
+      setCloudStatus("saved");
+      if (manual) toast("Saved to your site ✓");
+    } catch (e) { setCloudStatus("error", e.message); if (manual) toast(e.message || "Cloud save failed"); }
+  }
+  // Owner: pull the latest encrypted tree from the cloud and load it into the editor.
+  async function cloudLoadTree() {
+    let res; try { res = await fetch("api/store?action=getTree"); } catch (e) { toast("Couldn’t reach your site"); return false; }
+    if (res.status === 404) { toast("No cloud copy saved yet"); return false; }
+    if (!res.ok) { toast("Cloud load failed (" + res.status + ")"); return false; }
+    let payload = ""; try { payload = (await res.json()).payload || ""; } catch (e) {}
+    if (!payload) { toast("No cloud copy found"); return false; }
+    let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
+    if (!fam) fam = prompt("Your family password (to open the cloud copy):") || "";
+    if (!fam) return false;
+    try {
+      const obj = await decryptState(fam, payload);
+      try { localStorage.setItem("familyTree.familyPass", fam); localStorage.setItem("familyTree.cloudOn", "1"); } catch (e) {}
+      loadObject(obj); relayoutAndSave(); fitView();
+      toast("Loaded your latest tree from your site");
+      return true;
+    } catch (e) { toast("Wrong family password, or nothing to open"); return false; }
+  }
+  // The encrypted tree to unlock on a fresh device: a committed family-data.js if
+  // present, else the cloud copy (so the family view works with no GitHub).
+  async function getPublishedPayload() {
+    if (typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20) return window.FAMILY_TREE_DATA;
+    try { const r = await fetch("api/store?action=getTree"); if (r.ok) { const j = await r.json(); if (j && j.payload) return j.payload; } } catch (e) {}
+    return null;
+  }
+
+  /* -------- optional legacy backup: commit the encrypted tree to a GitHub repo -- */
   let backupTimer = null;
   const BACKUP_ON = () => { try { return localStorage.getItem("familyTree.backupOn") === "1"; } catch (e) { return false; } };
   function setBackupStatus(state, msg) {
@@ -3027,6 +3087,8 @@
     r.onload = () => { try { loadObject(JSON.parse(r.result)); relayoutAndSave(); fitView(); toast("Imported"); } catch (err) { toast("Bad file"); } };
     r.readAsText(f); e.target.value = "";
   });
+  $("#cloudSaveBtn").onclick = () => cloudSaveTree(true);
+  $("#cloudLoadBtn").onclick = () => { if (confirm("Replace what's in this browser with the latest copy saved on your site?")) cloudLoadTree(); };
   $("#publishBtn").onclick = openPublishModal;
   $("#backupBtn").onclick = () => backupToRepo(true);
   $("#importObitBtn").onclick = openImportModal;
@@ -3057,13 +3119,14 @@
   $("#emptyDemo").onclick = () => { loadObject(demoData()); relayoutAndSave(); fitView(); toast("Loaded example family"); };
 
   /* ============================================================ LOCK SCREEN */
-  function showLock(intoEditor) {
+  function showLock(intoEditor, payload) {
+    const data = payload || window.FAMILY_TREE_DATA;
     const lock = $("#lock"); lock.hidden = false;
     $("#lockForm").onsubmit = (e) => {
       e.preventDefault();
       const pw = $("#lockPass").value;
       $("#lockErr").textContent = "";
-      decryptState(pw, window.FAMILY_TREE_DATA).then((obj) => {
+      decryptState(pw, data).then((obj) => {
         loadObject(obj);
         lock.hidden = true;
         if (intoEditor) { readonly = false; save(); }
@@ -3135,7 +3198,7 @@
     }
     if (!readonly && dedupeParentUnions()) save();   // heal any duplicate parentage in existing data
     autoLayout(); render(); syncTitle(); setupTitleEditing();
-    if (!readonly) setBackupStatus(BACKUP_ON() ? "on" : "off");
+    if (!readonly) { setCloudStatus(CLOUD_ON() ? "on" : "off"); setBackupStatus(BACKUP_ON() ? "on" : "off"); }
     // One-time: turn any already-attached obituary photos into node pictures.
     if (!readonly && !state.photoMigrated) {
       state.photoMigrated = true; save();
@@ -3155,16 +3218,19 @@
     await loadLocalData();   // pull the saved tree out of IndexedDB (roomy, no server)
     const params = new URLSearchParams(location.search);
     const wantEdit = params.has("edit");
-    const published = typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20;
+    // The published tree can come from a committed family-data.js OR the cloud
+    // copy (Vercel Blob) — so the family view and cross-device editing work with
+    // no GitHub. Only look it up when this browser has no local copy.
+    const published = hasLocalData() ? null : await getPublishedPayload();
 
     if (published && !hasLocalData() && !wantEdit) {
       // visitor: must unlock, read-only
-      showLock(false);
+      showLock(false, published);
       return;
     }
     if (published && wantEdit && !hasLocalData()) {
       // owner returning on another machine: unlock into the editor
-      showLock(true);
+      showLock(true, published);
       return;
     }
     // normal editor. Prefer a newer published starter over an older saved copy:

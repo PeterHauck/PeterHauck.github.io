@@ -92,15 +92,22 @@ browser).
    - `ANTHROPIC_API_KEY` — your Anthropic API key (from console.anthropic.com).
    - `IMPORT_PASSCODE` — any passcode you choose; you'll type it in the editor
      to authorize an import. This stops visitors from spending your API credits.
-   - `GITHUB_TOKEN` *(optional, enables **auto-backup to the repo**)* — a
-     fine-grained GitHub token with **Contents: Read and write** on this
-     repository. With it set, the editor commits an encrypted backup of your
-     tree to `family-data.js` a few seconds after each change, so your data
-     lives durably in git (versioned, loadable on any device) instead of only
-     in one browser. Optional overrides: `GITHUB_REPO` (defaults to
-     `PeterHauck/PeterHauck.github.io`) and `GITHUB_BRANCH` (defaults to
-     `master`). The browser encrypts before sending, so only ciphertext is
-     ever committed.
+   - *(That's all that's required.)*
+
+   **Durable cloud save (recommended — no GitHub needed).** So your tree isn't
+   only in one browser, turn on **cloud save**: in the Vercel project, go to
+   **Storage → Create → Blob**. That adds a `BLOB_READ_WRITE_TOKEN` to the
+   project automatically — nothing to copy. Then in the editor, **Save & back
+   up → “☁︎ Save to my site now.”** From then on an **encrypted** copy of the
+   tree (and each obituary PDF/photo, stored as its own file) saves to your
+   site a few seconds after every change, and opens on any device with the
+   family password. The browser encrypts before sending, so only ciphertext
+   leaves your computer.
+
+   `GITHUB_TOKEN` *(optional, legacy)* — a fine-grained GitHub token with
+   **Contents: Read and write** on this repo enables the older “back up to the
+   GitHub repo” option under *Advanced* instead. Not needed if you use cloud
+   save above. Optional overrides: `GITHUB_REPO` / `GITHUB_BRANCH`.
 4. **Add the domain**: project → *Settings → Domains* → add
    `family.petermhauck.com`. Vercel shows you the DNS record to create.
 5. **At your domain registrar** (wherever `petermhauck.com` is managed), add the
