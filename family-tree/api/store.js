@@ -53,12 +53,21 @@ export default async function handler(req, res) {
     return;
   }
 
+  // Try a public blob first (stable, directly-fetchable URL); if this store only
+  // allows private blobs, fall back to private. The tree is read back through
+  // this function, so a private tree blob is fine.
+  async function putBlob(pathname, body, contentType) {
+    const base = { token, addRandomSuffix: false, contentType, allowOverwrite: true };
+    try { return await put(pathname, body, { ...base, access: "public" }); }
+    catch (ePub) { try { return await put(pathname, body, { ...base, access: "private" }); } catch (ePriv) { throw ePub; } }
+  }
+
   try {
     if (req.method === "GET" && (req.query.action || "getTree") === "getTree") {
       const { blobs } = await list({ prefix: TREE, token });
       const b = blobs.find((x) => x.pathname === TREE);
       if (!b) { res.status(404).json({ error: "No saved tree in the cloud yet." }); return; }
-      const r = await fetch(b.url);
+      const r = await fetch(b.downloadUrl || b.url);   // downloadUrl works for private blobs too
       const payload = await r.text();
       res.setHeader("Cache-Control", "no-store");
       res.status(200).json({ payload });
@@ -73,7 +82,7 @@ export default async function handler(req, res) {
       if (action === "saveTree") {
         const payload = (body.payload || "").toString();
         if (!payload || payload.length > 30 * 1024 * 1024) { res.status(400).json({ error: "Nothing to save (or too large)." }); return; }
-        await put(TREE, payload, { access: "public", token, addRandomSuffix: false, contentType: "text/plain", allowOverwrite: true });
+        await putBlob(TREE, payload, "text/plain");
         res.status(200).json({ ok: true });
         return;
       }
