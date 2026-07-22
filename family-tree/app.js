@@ -758,12 +758,69 @@
 
   // Quick-add a child to a union: drop in a blank person, link them, and open the
   // form focused on the name so you just type and Save. Undoable.
+  // ---- placing newly-added people next to their family (instead of off in auto-land) ----
+  const hasPos = (id) => !!(state.manual[id] || layoutPos[id]);
+  // Shift everyone at/right of x rightward by `width`, keeping their relative
+  // positions, so a gap opens at x. Pins them so the shift survives re-layout.
+  function makeRoomAt(x, width, exceptIds) {
+    visiblePersons().forEach((p) => {
+      if (exceptIds && exceptIds.has(p.id)) return;
+      const q = posOf(p.id);
+      if (q.x >= x) state.manual[p.id] = { x: q.x + width, y: q.y };
+    });
+  }
+  const spotOccupied = (x, y, exceptId) => visiblePersons().some((p) => p.id !== exceptId && Math.abs(posOf(p.id).x - x) < COLW * 0.85 && Math.abs(posOf(p.id).y - y) < ROWH * 0.55);
+  // Pin `id` at (x,y); if that spot is taken, open room by shifting the right side over.
+  function placeAt(id, x, y) {
+    if (spotOccupied(x, y, id)) makeRoomAt(x - COLW * 0.5, COLW, new Set([id]));
+    state.manual[id] = { x, y };
+  }
+  const isManual = (id) => !!(id && state.manual && state.manual[id]);
+  // A new child goes next to the rightmost sibling (same row), or — if the first —
+  // centred one row below the parents. Only pins a spot when that family is
+  // MANUALLY arranged; for a purely auto-laid-out family, auto-layout already
+  // places siblings correctly, so we leave the newcomer to it.
+  function placeNewChild(u, childId) {
+    const sibs = childLinksOfUnion(u.id).map((l) => l.child).filter((c) => c !== childId && personById(c) && !isHidden(c));
+    if (sibs.length) {
+      const right = sibs.reduce((r, c) => (posOf(c).x > posOf(r).x ? c : r), sibs[0]);
+      if (!isManual(right)) return;
+      const rp = posOf(right); placeAt(childId, rp.x + COLW, rp.y);
+    } else {
+      if (!isManual(u.a) && !isManual(u.b)) return;
+      const A = posOf(u.a), B = u.b != null ? posOf(u.b) : null;
+      const x = B ? (A.x + B.x) / 2 : A.x;
+      const y = (B ? Math.max(A.y, B.y) : A.y) + ROWH;
+      placeAt(childId, x, y);
+    }
+  }
+  // Place a batch of freshly-imported people relative to whoever is already placed:
+  // children under their parents/siblings, spouses beside partners, parents above
+  // their children — iterating until nothing new can be anchored.
+  function placeNewPeople(ids) {
+    const pending = new Set(ids.filter((id) => personById(id) && !isHidden(id)));
+    let progress = true;
+    while (pending.size && progress) {
+      progress = false;
+      for (const id of [...pending]) {
+        const pu = parentLinksOfPerson(id).map((l) => unionById(l.union)).find((u) => u && [u.a, u.b].filter(Boolean).some((pid) => !pending.has(pid) && hasPos(pid)));
+        if (pu) { placeNewChild(pu, id); pending.delete(id); progress = true; continue; }
+        const su = state.unions.find((u) => (u.a === id || u.b === id) && (() => { const o = u.a === id ? u.b : u.a; return o && !pending.has(o) && hasPos(o); })());
+        if (su) { const o = su.a === id ? su.b : su.a; if (isManual(o)) { const op = posOf(o); placeAt(id, op.x + COLW, op.y); } pending.delete(id); progress = true; continue; }
+        const kl = state.links.find((l) => { const u = unionById(l.union); return u && (u.a === id || u.b === id) && !pending.has(l.child) && hasPos(l.child); });
+        if (kl) { if (isManual(kl.child)) { const kp = posOf(kl.child); placeAt(id, kp.x, kp.y - ROWH); } pending.delete(id); progress = true; continue; }
+      }
+    }
+    // whatever's left (isolated new clusters) falls back to auto-layout
+  }
+
   function quickAddChild(unionId) {
     if (readonly) return;
     const u = unionById(unionId); if (!u) return;
     pushUndo();
     const np = addPerson({ name: "New person", sex: "unknown" });
     addChild(u.id, np.id, "bio");
+    placeNewChild(u, np.id);   // slot in next to siblings / below the parents
     selectedId = np.id;
     relayoutAndSave();
     ensurePanel(); fillPersonForm(np);
@@ -1652,6 +1709,7 @@
 
   function mergeExtraction(d) {
     const keyToId = {};
+    const newIds = [];
     const findByName = (name) => state.persons.find((p) => p.name.trim().toLowerCase() === String(name || "").trim().toLowerCase());
     (d.people || []).forEach((pp) => {
       const ex = findByName(pp.name);
@@ -1661,7 +1719,7 @@
         if (ex.death == null && pp.deathYear) ex.death = num(pp.deathYear);
       } else {
         const np = addPerson({ name: pp.name || "Unnamed", sex: pp.sex || "unknown", birth: pp.birthYear, death: pp.deathYear });
-        keyToId[pp.key] = np.id;
+        keyToId[pp.key] = np.id; newIds.push(np.id);
       }
     });
     const resolve = (ref) => {
@@ -1683,6 +1741,10 @@
       if (!u && a) u = addUnion(a, b || null, "married");
       if (u) addChild(u.id, child, ch.relationship === "adopted" ? "adopted" : "bio");
     });
+    // Slot the new people in next to their connections, opening room as needed,
+    // so imports keep everyone else where they are instead of reshuffling.
+    placeNewPeople(newIds);
+    return newIds;
   }
 
   /* ============================================================ OBITUARY / RECORD ATTACHMENTS */
