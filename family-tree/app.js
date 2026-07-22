@@ -3173,7 +3173,10 @@
   $("#resetBtn").onclick = () => { if (confirm("Clear the entire tree from this browser?")) { state = blankState(); localData = null; try { localStorage.removeItem(STORE_KEY); } catch (e) {} idbDel(IDB.key); selectedId = null; resetPersonForm(); relayoutAndSave(); } };
   $("#panelToggle").onclick = () => $("#panel").classList.toggle("collapsed");
   function ensurePanel() { $("#panel").classList.remove("collapsed"); }
-  $("#legendToggle").onclick = () => { const l = $("#legend"); l.classList.toggle("min"); $("#legendToggle").textContent = l.classList.contains("min") ? "+" : "–"; };
+  function syncLegendToggle() { const l = $("#legend"); $("#legendToggle").textContent = l.classList.contains("min") ? "⌃" : "⌄"; }
+  $("#legendToggle").onclick = (e) => { e.stopPropagation(); $("#legend").classList.toggle("min"); syncLegendToggle(); };
+  // When collapsed to the centred pill, a click anywhere on it pulls the drawer up.
+  $("#legend").addEventListener("click", () => { const l = $("#legend"); if (l.classList.contains("min")) { l.classList.remove("min"); syncLegendToggle(); } });
   $("#emptyAdd").onclick = () => { resetPersonForm(); $("#pFirst").focus(); };
   $("#emptyDemo").onclick = () => { loadObject(demoData()); relayoutAndSave(); fitView(); toast("Loaded example family"); };
 
@@ -3253,7 +3256,7 @@
     // collapsed. The ✎ button re-opens the editor / people list.
     if (window.matchMedia && window.matchMedia("(max-width: 720px)").matches) {
       $("#panel").classList.add("collapsed");
-      const l = $("#legend"); if (l) { l.classList.add("min"); const t = $("#legendToggle"); if (t) t.textContent = "+"; }
+      const l = $("#legend"); if (l) { l.classList.add("min"); const t = $("#legendToggle"); if (t) t.textContent = "⌃"; }
     }
     if (!readonly && dedupeParentUnions()) save();   // heal any duplicate parentage in existing data
     if (!readonly && !state.namesSplit) { splitNames(); state.namesSplit = true; save(); }   // one-time: split names into parts
