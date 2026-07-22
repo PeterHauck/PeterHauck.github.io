@@ -330,6 +330,26 @@ button.btn.danger { color: var(--divorce); }
 }
 .person.selected .shape { stroke: var(--accent-2) !important; stroke-width: 4; }
 
+/* pill shown while viewing/editing a hidden branch (the canvas is scoped to it) —
+   top-centre so it never covers the top-left toolbar */
+#hiddenScopeBar {
+  position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 45;
+  display: flex; align-items: center; gap: 10px; max-width: min(92vw, 560px);
+  padding: 7px 8px 7px 14px; background: var(--accent); color: #fff; box-shadow: var(--shadow);
+  border-radius: 999px; font-size: 13px;
+}
+#hiddenScopeBar .hsb-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#hiddenScopeBar .hsb-text b { font-weight: 700; }
+#hiddenScopeBar .hsb-eye {
+  width: 16px; height: 16px; flex: none; border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%, #fff 1.8px, transparent 2.3px),
+    linear-gradient(135deg, transparent 44%, #fff 44%, #fff 56%, transparent 56%);
+  border: 1.5px solid #fff;
+}
+#hiddenScopeBar #hsbDone { flex: none; background: #fff; color: var(--accent); border: none; padding: 5px 11px; font-size: 12.5px; white-space: nowrap; }
+body.in-hidden-scope #hiddenChip { display: none; }
+
 /* photo crop / reposition editor */
 .pa-stage {
   position: relative; width: 280px; max-width: 100%; aspect-ratio: 1 / 1; margin: 4px auto 12px;

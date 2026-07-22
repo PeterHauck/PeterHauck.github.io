@@ -55,10 +55,17 @@
   /* --------- visibility (hidden people keep their data; view-only filter) --- */
   const isHidden = (id) => !!(state.hidden && state.hidden[id]);
   const anyHidden = () => state.hidden && Object.keys(state.hidden).length > 0;
-  const visiblePersons = () => state.persons.filter((p) => !isHidden(p.id));
-  const unionVisible = (u) => !isHidden(u.a) && (u.b == null || !isHidden(u.b));
+  // When `hiddenScope` is set the canvas shows ONLY that hidden branch (its seed
+  // people + the hidden relatives hanging off them). Otherwise it shows everyone
+  // who isn't hidden. Everything downstream (rendering, hover handles, the editor,
+  // add/move) runs unchanged — only the visible set differs — so a hidden branch
+  // behaves exactly like the main tree.
+  let hiddenScope = null;
+  const inView = (id) => hiddenScope ? hiddenScope.set.has(id) : !isHidden(id);
+  const visiblePersons = () => state.persons.filter((p) => inView(p.id));
+  const unionVisible = (u) => inView(u.a) && (u.b == null || inView(u.b));
   const visibleUnions = () => state.unions.filter(unionVisible);
-  const visibleLinks = () => state.links.filter((l) => { const u = unionById(l.union); return !isHidden(l.child) && u && unionVisible(u); });
+  const visibleLinks = () => state.links.filter((l) => { const u = unionById(l.union); return inView(l.child) && u && unionVisible(u); });
 
   // Everyone who should stay visible when focusing on X: X, X's spouses, and all
   // of X's descendants plus their spouses. Everyone "above"/aside is hidden.
@@ -156,6 +163,8 @@
     const np = nameParts(data);
     const p = { id: uid(), name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate || null, deathDate: data.deathDate || null, deceased: !!data.deceased, sex: data.sex || "unknown", color: data.color || null, photo: data.photo || null, docs: data.docs || [] };
     state.persons.push(p);
+    // Anyone added while inside a hidden branch stays hidden from the main tree.
+    if (hiddenScope) { if (!state.hidden) state.hidden = {}; state.hidden[p.id] = true; }
     return p;
   }
   const isDeceased = (p) => p.death != null || !!p.deceased;
@@ -168,6 +177,8 @@
     state.unions = state.unions.filter((u) => !goneUnions.includes(u.id));
     state.links = state.links.filter((l) => l.child !== pid && !goneUnions.includes(l.union));
     delete state.manual[pid];
+    if (state.manualHidden) delete state.manualHidden[pid];
+    if (state.hidden) delete state.hidden[pid];
   }
 
   function addUnion(a, b, status) {
@@ -636,10 +647,18 @@
   function range(a, b, step) { step = step || (a <= b ? 1 : -1); const out = []; for (let i = a; step > 0 ? i <= b : i >= b; i += step) out.push(i); return out; }
   function stableSort(arr, cmp) { return arr.map((v, i) => [v, i]).sort((x, y) => cmp(x[0], y[0]) || x[1] - y[1]).map((p) => p[0]); }
 
-  const posOf = (id) => state.manual[id] || layoutPos[id] || { x: 0, y: 0 };
+  // Manual positions live in their own map per view: the main tree uses
+  // state.manual; a hidden branch uses state.manualHidden. That keeps a branch
+  // self-contained (its seed people don't drag their main-tree coordinates in)
+  // and never disturbs the main layout.
+  const posMap = () => hiddenScope ? (state.manualHidden || (state.manualHidden = {})) : state.manual;
+  const posOf = (id) => posMap()[id] || layoutPos[id] || { x: 0, y: 0 };
 
   /* ============================================================= RENDER */
   function render() {
+    // Inside a hidden branch, refresh which people belong to it (so ones you just
+    // added show up) before drawing.
+    if (hiddenScope) hiddenScope.set = new Set(hiddenMembersFrom(hiddenScope.seedIds).members);
     gNodes.textContent = "";
     gLinks.textContent = "";
     emptyState.style.display = state.persons.length ? "none" : "flex";
@@ -647,7 +666,7 @@
     busLevels = computeBusLevels();
     visibleUnions().forEach(renderUnion);
     visiblePersons().forEach(renderPerson);
-    renderHiddenBadges();
+    if (!hiddenScope) renderHiddenBadges();   // no eye-badges inside a hidden branch
     updatePeopleList();
     $("#peopleCount").textContent = state.persons.length;
     updateHiddenChip();
@@ -726,7 +745,7 @@
       g.appendChild(dirPlus(p.id, "left", -OFF, 0, "Add a spouse / partner on the left"));
       g.appendChild(dirPlus(p.id, "right", OFF, 0, "Add a spouse / partner on the right"));
       g.appendChild(dirPlus(p.id, "down", 0, labelBottom + 18, "Add a child"));
-      g.appendChild(hiddenPlus({ person: p.id }, OFF - 4, -OFF + 4));
+      if (!hiddenScope) g.appendChild(hiddenPlus({ person: p.id }, OFF - 4, -OFF + 4));
     }
 
     gNodes.appendChild(g);
@@ -846,7 +865,7 @@
   function busSpan(u) {
     const pa = personById(u.a); if (!pa) return null;
     const pb = u.b != null ? personById(u.b) : null;
-    const kids = childLinksOfUnion(u.id).map((l) => l.child).filter((c) => personById(c) && !isHidden(c));
+    const kids = childLinksOfUnion(u.id).map((l) => l.child).filter((c) => personById(c) && inView(c));
     if (!kids.length) return null;
     const A = posOf(u.a), B = pb ? posOf(u.b) : null;
     const midY = pb ? (A.y + B.y) / 2 : A.y;
@@ -889,29 +908,29 @@
   // Quick-add a child to a union: drop in a blank person, link them, and open the
   // form focused on the name so you just type and Save. Undoable.
   // ---- placing newly-added people next to their family (instead of off in auto-land) ----
-  const hasPos = (id) => !!(state.manual[id] || layoutPos[id]);
+  const hasPos = (id) => !!(posMap()[id] || layoutPos[id]);
   // Shift everyone at/right of x rightward by `width`, keeping their relative
   // positions, so a gap opens at x. Pins them so the shift survives re-layout.
   function makeRoomAt(x, width, exceptIds) {
     visiblePersons().forEach((p) => {
       if (exceptIds && exceptIds.has(p.id)) return;
       const q = posOf(p.id);
-      if (q.x >= x) state.manual[p.id] = { x: q.x + width, y: q.y };
+      if (q.x >= x) posMap()[p.id] = { x: q.x + width, y: q.y };
     });
   }
   const spotOccupied = (x, y, exceptId) => visiblePersons().some((p) => p.id !== exceptId && Math.abs(posOf(p.id).x - x) < COLW * 0.85 && Math.abs(posOf(p.id).y - y) < ROWH * 0.55);
   // Pin `id` at (x,y); if that spot is taken, open room by shifting the right side over.
   function placeAt(id, x, y) {
     if (spotOccupied(x, y, id)) makeRoomAt(x - COLW * 0.5, COLW, new Set([id]));
-    state.manual[id] = { x, y };
+    posMap()[id] = { x, y };
   }
-  const isManual = (id) => !!(id && state.manual && state.manual[id]);
+  const isManual = (id) => !!(id && posMap()[id]);
   // A new child goes next to the rightmost sibling (same row), or — if the first —
   // centred one row below the parents. Only pins a spot when that family is
   // MANUALLY arranged; for a purely auto-laid-out family, auto-layout already
   // places siblings correctly, so we leave the newcomer to it.
   function placeNewChild(u, childId) {
-    const sibs = childLinksOfUnion(u.id).map((l) => l.child).filter((c) => c !== childId && personById(c) && !isHidden(c));
+    const sibs = childLinksOfUnion(u.id).map((l) => l.child).filter((c) => c !== childId && personById(c) && inView(c));
     if (sibs.length) {
       const right = sibs.reduce((r, c) => (posOf(c).x > posOf(r).x ? c : r), sibs[0]);
       if (!isManual(right)) return;
@@ -928,7 +947,7 @@
   // children under their parents/siblings, spouses beside partners, parents above
   // their children — iterating until nothing new can be anchored.
   function placeNewPeople(ids) {
-    const pending = new Set(ids.filter((id) => personById(id) && !isHidden(id)));
+    const pending = new Set(ids.filter((id) => personById(id) && inView(id)));
     let progress = true;
     while (pending.size && progress) {
       progress = false;
@@ -1064,7 +1083,7 @@
   // — instead of stacking on top of each other.
   function childAttachX(childId, unionId, baseX) {
     const uids = [...new Set(parentLinksOfPerson(childId).map((l) => l.union))]
-      .filter((uid) => { const u = unionById(uid); return u && !isHidden(u.a) && (u.b == null || !isHidden(u.b)); });
+      .filter((uid) => { const u = unionById(uid); return u && inView(u.a) && (u.b == null || inView(u.b)); });
     if (uids.length <= 1) return baseX;
     const idx = Math.max(0, uids.indexOf(unionId));
     return baseX + (idx - (uids.length - 1) / 2) * 18;   // spread the attach points
@@ -1074,7 +1093,7 @@
     const pa = personById(u.a); if (!pa) return;
     const pb = u.b != null ? personById(u.b) : null;
     const A = posOf(u.a), B = pb ? posOf(u.b) : null;
-    const kids = childLinksOfUnion(u.id).map((l) => ({ l, p: personById(l.child) })).filter((k) => k.p && !isHidden(k.p.id));
+    const kids = childLinksOfUnion(u.id).map((l) => ({ l, p: personById(l.child) })).filter((k) => k.p && inView(k.p.id));
     const gu = el("g", { class: "union", "data-union": u.id });   // group so hover reveals the +
 
     let midX, midY, dropTop;
@@ -1102,7 +1121,7 @@
         // hit-line keeps them reachable across the whole line.
         gu.appendChild(el("line", { class: "couple-hit", x1: left.x + HALF - 6, y1: y, x2: right.x - HALF + 6, y2: y }));
         gu.appendChild(couplePlus(u.id, midX, y));
-        gu.appendChild(hiddenPlus({ union: u.id }, midX, y - 30));
+        if (!hiddenScope) gu.appendChild(hiddenPlus({ union: u.id }, midX, y - 30));
       }
     } else {
       midX = A.x; midY = A.y; dropTop = A.y + HALF; // drop from the single parent's bottom
@@ -1144,7 +1163,7 @@
     const lastOf = (p) => (p.last != null ? p.last : parseName(p.name).last || p.name || "").toLowerCase();
     const firstOf = (p) => (p.first != null ? p.first : parseName(p.name).first || "").toLowerCase();
     const sorted = state.persons.slice()
-      .filter((p) => !q || p.name.toLowerCase().includes(q))
+      .filter((p) => (hiddenScope ? inView(p.id) : true) && (!q || p.name.toLowerCase().includes(q)))
       .sort((a, b) => lastOf(a).localeCompare(lastOf(b)) || firstOf(a).localeCompare(firstOf(b)) || (a.birth || 9999) - (b.birth || 9999));
     if (!sorted.length) {
       const li = document.createElement("li"); li.className = "pm-empty";
@@ -1198,7 +1217,7 @@
   // people sit dead-centre, with the zoom set so their immediate family (spouses,
   // parents and children) is comfortably in view around them.
   function focusView(ids) {
-    const focus = ids.filter((id) => personById(id) && !isHidden(id));
+    const focus = ids.filter((id) => personById(id) && inView(id));
     if (!focus.length) return fitView();
     const fp = focus.map((id) => posOf(id));
     const cx = fp.reduce((s, p) => s + p.x, 0) / fp.length;
@@ -1207,12 +1226,12 @@
     const set = new Set(focus);
     focus.forEach((id) => {
       unionsOfPerson(id).forEach((u) => {
-        [u.a, u.b].forEach((x) => { if (x != null && !isHidden(x)) set.add(x); });
-        childLinksOfUnion(u.id).forEach((l) => { if (!isHidden(l.child)) set.add(l.child); });
+        [u.a, u.b].forEach((x) => { if (x != null && inView(x)) set.add(x); });
+        childLinksOfUnion(u.id).forEach((l) => { if (inView(l.child)) set.add(l.child); });
       });
       parentLinksOfPerson(id).forEach((l) => {
         const u = unionById(l.union); if (!u) return;
-        [u.a, u.b].forEach((x) => { if (x != null && !isHidden(x)) set.add(x); });
+        [u.a, u.b].forEach((x) => { if (x != null && inView(x)) set.add(x); });
       });
     });
     // widest distance from the couple's centre, so the frame stays centred on
@@ -1349,7 +1368,7 @@
     else if (drag.mode === "group") {
       if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
       const wdx = dx / view.scale, wdy = dy / view.scale;
-      for (const pid in drag.starts) state.manual[pid] = { x: drag.starts[pid].x + wdx, y: drag.starts[pid].y + wdy };
+      for (const pid in drag.starts) posMap()[pid] = { x: drag.starts[pid].x + wdx, y: drag.starts[pid].y + wdy };
       render();
     }
     else if (drag.mode === "marquee") {
@@ -1424,7 +1443,7 @@
     const plinks = parentLinksOfPerson(selectedId);
     if (!plinks.length) { toast("This person has no siblings to shift past"); return; }
     const union = (plinks.find((l) => l.type !== "adopted") || plinks[0]).union;
-    const sibs = childLinksOfUnion(union).map((l) => l.child).filter((c) => personById(c) && !isHidden(c));
+    const sibs = childLinksOfUnion(union).map((l) => l.child).filter((c) => personById(c) && inView(c));
     if (sibs.length < 2) { toast("No siblings to shift past"); return; }
     sibs.sort((a, b) => posOf(a).x - posOf(b).x);
     const idx = sibs.indexOf(selectedId);
@@ -1437,8 +1456,8 @@
     const a = [...familyBlock(selectedId)].map((pid) => ({ pid, p: posOf(pid) }));
     const b = [...familyBlock(other)].map((pid) => ({ pid, p: posOf(pid) }));
     pushUndo();
-    a.forEach(({ pid, p }) => (state.manual[pid] = { x: p.x + delta, y: p.y }));
-    b.forEach(({ pid, p }) => (state.manual[pid] = { x: p.x - delta, y: p.y }));
+    a.forEach(({ pid, p }) => (posMap()[pid] = { x: p.x + delta, y: p.y }));
+    b.forEach(({ pid, p }) => (posMap()[pid] = { x: p.x - delta, y: p.y }));
     save(); render();
   }
 
@@ -1472,7 +1491,7 @@
       const n = ys.length;
       const ty = n % 2 ? ys[(n - 1) / 2] : (ys[n / 2 - 1] + ys[n / 2]) / 2;  // median height
       for (const it of band.items) {
-        if (Math.abs(it.y - ty) > 0.5) { state.manual[it.id] = { x: it.x, y: ty }; moved++; }
+        if (Math.abs(it.y - ty) > 0.5) { posMap()[it.id] = { x: it.x, y: ty }; moved++; }
       }
     }
     if (!moved) { toast("Everything's already lined up"); return; }
@@ -3073,6 +3092,7 @@
   }
   function updateHiddenChip() {
     const chip = $("#hiddenChip");
+    if (hiddenScope) { chip.hidden = true; return; }   // not meaningful inside a branch
     const n = state.hidden ? Object.keys(state.hidden).length : 0;
     chip.hidden = n === 0;
     chip.textContent = "Show all (" + n + " hidden)";
@@ -3120,88 +3140,6 @@
     });
   }
 
-  // Lay out a small subset (the anchor + its hidden people) into its own mini
-  // family tree: filter to the members, compute generations, then place each
-  // couple over the centre of their children.
-  function layoutMini(members) {
-    const set = new Set(members);
-    const persons = members.map(personById).filter(Boolean);
-    const unions = state.unions.filter((u) => set.has(u.a) && (u.b == null || set.has(u.b)));
-    const uById = {}; unions.forEach((u) => (uById[u.id] = u));
-    const links = state.links.filter((l) => set.has(l.child) && uById[l.union]);
-    const gen = computeGenerations(persons, unions, links, uById);
-    const minG = Math.min(...persons.map((p) => gen[p.id] || 0));
-    const genOf = (id) => (gen[id] || 0) - minG;
-    const spouseOf = (id) => { const u = unions.find((uu) => (uu.a === id || uu.b === id) && uu.b != null); return u ? (u.a === id ? u.b : u.a) : null; };
-    const childrenVia = (id) => { const us = unions.filter((u) => u.a === id || u.b === id).map((u) => u.id); return links.filter((l) => us.includes(l.union)).map((l) => l.child); };
-
-    const COLW = 118, ROWH = 118;
-    const x = {}; let cursor = 0; const placed = new Set();
-    function placePerson(id) {
-      if (placed.has(id)) return;
-      placed.add(id);
-      const sp = spouseOf(id); if (sp) placed.add(sp);
-      const kids = [...new Set([...childrenVia(id), ...(sp ? childrenVia(sp) : [])])].filter((c) => set.has(c) && !placed.has(c));
-      if (kids.length) {
-        kids.forEach(placePerson);
-        const cxs = kids.map((k) => x[k] || 0);
-        const center = (Math.min(...cxs) + Math.max(...cxs)) / 2;
-        if (sp) { x[id] = center - COLW / 2; x[sp] = center + COLW / 2; } else x[id] = center;
-      } else if (sp) { x[id] = cursor; x[sp] = cursor + COLW; cursor += COLW * 2 + 34; }
-      else { x[id] = cursor; cursor += COLW + 34; }
-    }
-    members.filter((id) => genOf(id) === 0).forEach(placePerson);
-    members.forEach((id) => { if (!placed.has(id)) placePerson(id); });
-    const pos = {}; members.forEach((id) => (pos[id] = { x: x[id] || 0, y: genOf(id) * ROWH }));
-    return { pos, unions, links, uById, persons, COLW };
-  }
-
-  function renderMiniTreeSVG(members, anchorId) {
-    const L = layoutMini(members);
-    const NS = 17;
-    const svg = el("svg", { class: "mini-tree" });
-    const gL = el("g"), gN = el("g"); svg.appendChild(gL); svg.appendChild(gN);
-    L.unions.forEach((u) => {
-      const A = L.pos[u.a], B = u.b != null ? L.pos[u.b] : null; if (!A) return;
-      let midX, midY, dropTop;
-      if (B) {
-        gL.appendChild(el("line", { class: "mini-link", x1: Math.min(A.x, B.x) + NS, y1: (A.y + B.y) / 2, x2: Math.max(A.x, B.x) - NS, y2: (A.y + B.y) / 2 }));
-        midX = (A.x + B.x) / 2; midY = (A.y + B.y) / 2; dropTop = midY;
-      } else { midX = A.x; midY = A.y; dropTop = A.y + NS; }
-      const kids = L.links.filter((l) => l.union === u.id).map((l) => l.child).filter((c) => L.pos[c]);
-      if (!kids.length) return;
-      const busY = (dropTop + Math.min(...kids.map((c) => L.pos[c].y))) / 2;
-      const kxs = kids.map((c) => L.pos[c].x);
-      gL.appendChild(el("line", { class: "mini-link", x1: midX, y1: dropTop, x2: midX, y2: busY }));
-      if (kids.length > 1) gL.appendChild(el("line", { class: "mini-link", x1: Math.min(...kxs), y1: busY, x2: Math.max(...kxs), y2: busY }));
-      kids.forEach((c) => {
-        const adopt = (L.links.find((l) => l.union === u.id && l.child === c) || {}).type === "adopted";
-        gL.appendChild(el("line", { class: "mini-link" + (adopt ? " adopt" : ""), x1: L.pos[c].x, y1: busY, x2: L.pos[c].x, y2: L.pos[c].y - NS }));
-      });
-    });
-    L.persons.forEach((p) => {
-      const q = L.pos[p.id]; if (!q) return;
-      const g = el("g", { class: "mini-node" + (p.id === anchorId ? " anchor" : ""), transform: `translate(${q.x},${q.y})` });
-      let shape;
-      if (p.sex === "female") shape = el("circle", { r: NS, cx: 0, cy: 0 });
-      else if (p.sex === "unknown") shape = el("polygon", { points: `0,${-NS} ${NS},0 0,${NS} ${-NS},0` });
-      else shape = el("rect", { x: -NS, y: -NS, width: NS * 2, height: NS * 2, rx: 4 });
-      shape.setAttribute("class", "mini-shape");
-      if (p.color) shape.setAttribute("style", "stroke:" + p.color);
-      g.appendChild(shape);
-      if (isDeceased(p)) g.appendChild(el("line", { class: "mini-deceased", x1: -NS, y1: NS, x2: NS, y2: -NS }));
-      g.appendChild(el("text", { class: "mini-label", x: 0, y: NS + 13 }, txt(treeDisplayName(p))));
-      gN.appendChild(g);
-    });
-    const xs = L.persons.map((p) => L.pos[p.id].x), ys = L.persons.map((p) => L.pos[p.id].y);
-    const pad = 46;
-    const minX = Math.min(...xs) - L.COLW / 2 - pad, maxX = Math.max(...xs) + L.COLW / 2 + pad;
-    const minY = Math.min(...ys) - NS - pad, maxY = Math.max(...ys) + NS + 30 + pad;
-    svg.setAttribute("viewBox", `${minX} ${minY} ${maxX - minX} ${maxY - minY}`);
-    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
-    return svg;
-  }
-
   // A hidden sub-tree rooted at the given (visible) seed people: the seeds
   // themselves (plus any visible spouse so a couple shows together) and the whole
   // connected cluster of hidden relatives that hangs off them.
@@ -3241,259 +3179,44 @@
   function startHiddenBranch(seedIds) {
     if (readonly) return;
     seedIds = (seedIds || []).filter((id) => personById(id));
-    if (seedIds.length) openHiddenEditor(seedIds);
+    if (seedIds.length) enterHiddenScope(seedIds);
   }
-  // The main-tree eye-badge reopens the same editor.
-  function openHiddenPopup(anchorId) { if (personById(anchorId)) openHiddenEditor([anchorId]); }
+  // The main-tree eye-badge opens the same hidden branch.
+  function openHiddenPopup(anchorId) { if (personById(anchorId)) enterHiddenScope([anchorId]); }
 
-  // An editable mini-tree in a pop-up: add (+ handles), edit (click a person),
-  // and move (drag) — the same gestures as the main tree, but everything you add
-  // is hidden from it. Positions live in state.manualHidden (their own space).
-  function openHiddenEditor(seedIds) {
-    const back = document.createElement("div");
-    back.className = "modal-backdrop hidden-editor-back";
-    back.innerHTML = `<div class="modal hidden-editor">
-      <div class="he-head"><div><h2>Hidden family</h2>
-        <div class="hint">Kept off the main tree. Hover a person for + handles to add relatives; click to edit; drag to move.</div></div></div>
-      <div class="he-body"><div class="he-canvas"><svg class="he-svg" xmlns="http://www.w3.org/2000/svg"></svg></div>
-        <div class="he-side"></div></div>
-      <div class="btn-row"><button class="btn" data-close>Done</button>
-        <button class="btn" data-reveal>Show everyone here on the main tree</button></div></div>`;
-    document.body.appendChild(back);
-    const svgEl = back.querySelector(".he-svg");
-    const side = back.querySelector(".he-side");
-    if (!state.manualHidden) state.manualHidden = {};
-    let selected = null;
-    let curPos = {};
-    let curRoots = new Set();
-    const NS = 20, COLW = 128, ROWH = 128;
-
-    function toSvgXY(clientX, clientY) {
-      const ctm = svgEl.getScreenCTM(); if (!ctm) return { x: 0, y: 0 };
-      const pt = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
-      return { x: pt.x, y: pt.y };
-    }
-    function nodeShape(sex) {
-      if (sex === "female") return el("circle", { class: "mini-shape", r: NS, cx: 0, cy: 0 });
-      if (sex === "unknown") return el("polygon", { class: "mini-shape", points: `0,${-NS} ${NS},0 0,${NS} ${-NS},0` });
-      return el("rect", { class: "mini-shape", x: -NS, y: -NS, width: NS * 2, height: NS * 2, rx: 4 });
-    }
-    function hePlus(id, kind, x, y, label) {
-      const g = el("g", { class: "he-plus", "data-he-add": kind, "data-id": id, transform: `translate(${x},${y})` });
-      g.appendChild(el("circle", { class: "he-plus-hit", r: 15, cx: 0, cy: 0 }));
-      g.appendChild(el("circle", { class: "he-plus-bg", r: 9, cx: 0, cy: 0 }));
-      g.appendChild(el("line", { class: "he-plus-mark", x1: -4.5, y1: 0, x2: 4.5, y2: 0 }));
-      g.appendChild(el("line", { class: "he-plus-mark", x1: 0, y1: -4.5, x2: 0, y2: 4.5 }));
-      g.appendChild(el("title", null, txt(label)));
-      return g;
-    }
-
-    function layout(members) {
-      const L = layoutMini(members);
-      const pos = {};
-      members.forEach((id) => {
-        const mh = state.manualHidden[id];
-        pos[id] = mh ? { x: mh.x, y: mh.y } : { x: (L.pos[id] || {}).x || 0, y: (L.pos[id] || {}).y || 0 };
-      });
-      return { pos, unions: L.unions, links: L.links };
-    }
-
-    function drawCanvas(info) {
-      svgEl.textContent = "";
-      const L = layout(info.members);
-      curPos = L.pos;
-      const gL = el("g"), gN = el("g"); svgEl.appendChild(gL); svgEl.appendChild(gN);
-      // descent + marriage lines
-      L.unions.forEach((u) => {
-        const A = L.pos[u.a], B = u.b != null ? L.pos[u.b] : null; if (!A) return;
-        let midX, midY, dropTop;
-        if (B) {
-          gL.appendChild(el("line", { class: "mini-link", x1: Math.min(A.x, B.x) + NS, y1: (A.y + B.y) / 2, x2: Math.max(A.x, B.x) - NS, y2: (A.y + B.y) / 2 }));
-          midX = (A.x + B.x) / 2; midY = (A.y + B.y) / 2; dropTop = midY;
-        } else { midX = A.x; midY = A.y; dropTop = A.y + NS; }
-        const kids = L.links.filter((l) => l.union === u.id).map((l) => l.child).filter((c) => L.pos[c]);
-        if (!kids.length) return;
-        const busY = Math.min(...kids.map((c) => L.pos[c].y)) - ROWH / 2 + NS;
-        const kxs = kids.map((c) => L.pos[c].x);
-        gL.appendChild(el("line", { class: "mini-link", x1: midX, y1: dropTop, x2: midX, y2: busY }));
-        if (kids.length > 1) gL.appendChild(el("line", { class: "mini-link", x1: Math.min(...kxs), y1: busY, x2: Math.max(...kxs), y2: busY }));
-        kids.forEach((c) => {
-          const adopt = (L.links.find((l) => l.union === u.id && l.child === c) || {}).type === "adopted";
-          gL.appendChild(el("line", { class: "mini-link" + (adopt ? " adopt" : ""), x1: L.pos[c].x, y1: busY, x2: L.pos[c].x, y2: L.pos[c].y - NS }));
-        });
-      });
-      // nodes + handles
-      info.members.map(personById).filter(Boolean).forEach((p) => {
-        const q = L.pos[p.id]; if (!q) return;
-        const isRoot = curRoots.has(p.id);
-        const g = el("g", { class: "he-node" + (p.id === selected ? " sel" : "") + (isRoot ? " root" : ""), "data-he-id": p.id, transform: `translate(${q.x},${q.y})` });
-        const shape = nodeShape(p.sex);
-        if (p.color) shape.setAttribute("style", "stroke:" + p.color);
-        g.appendChild(shape);
-        if (isDeceased(p)) g.appendChild(el("line", { class: "mini-deceased", x1: -NS, y1: NS, x2: NS, y2: -NS }));
-        g.appendChild(el("text", { class: "mini-label", x: 0, y: NS + 14 }, txt(treeDisplayName(p))));
-        // add-handles
-        const OFF = NS + 15;
-        g.appendChild(hePlus(p.id, "parent", 0, -OFF, "Add a parent"));
-        g.appendChild(hePlus(p.id, "spouse-left", -OFF, 0, "Add a partner on the left"));
-        g.appendChild(hePlus(p.id, "spouse-right", OFF, 0, "Add a partner on the right"));
-        g.appendChild(hePlus(p.id, "child", 0, OFF + 12, "Add a child"));
-        gN.appendChild(g);
-      });
-      // fit viewBox
-      const ids = info.members.filter((id) => L.pos[id]);
-      const xs = ids.map((id) => L.pos[id].x), ys = ids.map((id) => L.pos[id].y);
-      const pad = 70;
-      const minX = (xs.length ? Math.min(...xs) : 0) - COLW / 2 - pad, maxX = (xs.length ? Math.max(...xs) : 0) + COLW / 2 + pad;
-      const minY = (ys.length ? Math.min(...ys) : 0) - NS - pad, maxY = (ys.length ? Math.max(...ys) : 0) + NS + 34 + pad;
-      svgEl.setAttribute("viewBox", `${minX} ${minY} ${maxX - minX} ${maxY - minY}`);
-      svgEl.setAttribute("preserveAspectRatio", "xMidYMid meet");
-    }
-
-    function fieldRow(label, inputHtml) { return `<label class="he-field"><span>${label}</span>${inputHtml}</label>`; }
-    function drawSide(info) {
-      if (!selected || !personById(selected)) {
-        side.innerHTML = `<div class="he-side-empty">Click a person to edit them.<br><br>Use the <b>+</b> handles around anyone to add a parent, partner, or child. Everyone you add here stays hidden from the main tree.</div>`;
-        return;
-      }
-      const p = personById(selected);
-      const isRoot = curRoots.has(p.id) && !isHidden(p.id);
-      side.innerHTML = `<div class="he-edit-title">Edit person</div>
-        ${fieldRow("Name", `<input id="heName" type="text" value="${escapeHtml(p.name || "")}">`)}
-        ${fieldRow("Sex", `<select id="heSex"><option value="male">Male</option><option value="female">Female</option><option value="unknown">Unknown</option></select>`)}
-        <div class="he-field-2">${fieldRow("Born", `<input id="heBirth" type="text" inputmode="numeric" value="${p.birth != null ? p.birth : ""}">`)}
-          ${fieldRow("Died", `<input id="heDeath" type="text" inputmode="numeric" value="${p.death != null ? p.death : ""}">`)}</div>
-        <label class="he-check"><input id="heDeceased" type="checkbox" ${isDeceased(p) ? "checked" : ""}> Deceased</label>
-        <div class="he-side-actions">
-          <button class="btn tiny" data-he-reveal-one>Show on main tree</button>
-          ${isRoot ? "" : `<button class="btn tiny danger" data-he-del>Delete</button>`}
-        </div>
-        ${isRoot ? `<div class="he-note">This person is on the main tree — the hidden branch hangs off them.</div>` : ""}`;
-      side.querySelector("#heSex").value = p.sex || "unknown";
-      const commit = () => {
-        const full = side.querySelector("#heName").value.trim();
-        if (full) { const np = nameParts({ name: full }); p.name = np.name; p.first = np.first; p.middle = np.middle; p.last = np.last; p.nickname = np.nickname; p.maiden = np.maiden; }
-        p.sex = side.querySelector("#heSex").value;
-        p.birth = num(side.querySelector("#heBirth").value);
-        p.death = num(side.querySelector("#heDeath").value);
-        p.deceased = side.querySelector("#heDeceased").checked || p.death != null;
-        save();
-        // live-update just this node's label/shape without losing focus
-        drawCanvas(info);
-      };
-      side.querySelector("#heName").addEventListener("change", commit);
-      side.querySelector("#heSex").addEventListener("change", commit);
-      side.querySelector("#heBirth").addEventListener("change", commit);
-      side.querySelector("#heDeath").addEventListener("change", commit);
-      side.querySelector("#heDeceased").addEventListener("change", commit);
-      const del = side.querySelector("[data-he-del]");
-      if (del) del.onclick = () => {
-        pushUndo(); deletePerson(p.id); if (state.manualHidden) delete state.manualHidden[p.id];
-        selected = null; save(); rerender();
-      };
-      side.querySelector("[data-he-reveal-one]").onclick = () => {
-        if (state.hidden) delete state.hidden[p.id];
-        save(); toast("Revealed on the main tree"); rerender();
-      };
-    }
-
-    function rerender() {
-      const info = hiddenMembersFrom(seedIds);
-      curRoots = new Set(info.roots);
-      drawCanvas(info);
-      drawSide(info);
-    }
-
-    // ---- add actions (new people are auto-hidden) ----
-    function ensureManualHidden() { if (!state.manualHidden) state.manualHidden = {}; }
-    function heAddSpouse(id, side_) {
-      const p = personById(id); if (!p) return;
-      pushUndo(); ensureManualHidden();
-      const sp = addPerson({ name: "New spouse", sex: guessSpouseSex(p) });
-      state.hidden[sp.id] = true; addUnion(id, sp.id, "married");
-      const s = curPos[id] || { x: 0, y: 0 };
-      state.manualHidden[sp.id] = { x: s.x + (side_ === "left" ? -COLW : COLW), y: s.y };
-      save(); selected = sp.id; rerender();
-    }
-    function heAddChild(id) {
-      const p = personById(id); if (!p) return;
-      pushUndo(); ensureManualHidden();
-      let u = unionsOfPerson(id)[0] || addUnion(id, null, "married");
-      const np = addPerson({ name: "New person", sex: "unknown" });
-      state.hidden[np.id] = true; addChild(u.id, np.id, "bio");
-      const s = curPos[id] || { x: 0, y: 0 };
-      const sibs = childLinksOfUnion(u.id).map((l) => l.child).filter((c) => c !== np.id && curPos[c]);
-      if (sibs.length) { const rx = Math.max(...sibs.map((c) => curPos[c].x)); state.manualHidden[np.id] = { x: rx + COLW, y: curPos[sibs[0]].y }; }
-      else state.manualHidden[np.id] = { x: s.x, y: s.y + ROWH };
-      save(); selected = np.id; rerender();
-    }
-    function heAddParent(id) {
-      const p = personById(id); if (!p) return;
-      pushUndo(); ensureManualHidden();
-      const par = addPerson({ name: "New parent", sex: "unknown" });
-      state.hidden[par.id] = true;
-      const pu = parentLinksOfPerson(id).map((l) => unionById(l.union)).find(Boolean);
-      const s = curPos[id] || { x: 0, y: 0 };
-      if (pu && pu.b == null && pu.a !== par.id) { pu.b = par.id; const ax = curPos[pu.a] || s; state.manualHidden[par.id] = { x: ax.x + COLW, y: ax.y }; }
-      else { const u = addUnion(par.id, null, "married"); addChild(u.id, id, "bio"); state.manualHidden[par.id] = { x: s.x, y: s.y - ROWH }; }
-      save(); selected = par.id; rerender();
-    }
-
-    // ---- canvas interactions: click-select, drag-move, +-handle add ----
-    let hdrag = null;
-    svgEl.addEventListener("pointerdown", (e) => {
-      const handle = e.target.closest && e.target.closest("[data-he-add]");
-      if (handle) {
-        e.preventDefault();
-        const id = handle.getAttribute("data-id"), kind = handle.getAttribute("data-he-add");
-        if (kind === "spouse-left") heAddSpouse(id, "left");
-        else if (kind === "spouse-right") heAddSpouse(id, "right");
-        else if (kind === "child") heAddChild(id);
-        else if (kind === "parent") heAddParent(id);
-        return;
-      }
-      const node = e.target.closest && e.target.closest("[data-he-id]");
-      if (!node) { if (selected) { selected = null; drawSide(hiddenMembersFrom(seedIds)); markSel(); } return; }
-      const id = node.getAttribute("data-he-id");
-      try { svgEl.setPointerCapture(e.pointerId); } catch (_) {}
-      const start = toSvgXY(e.clientX, e.clientY); const cur = curPos[id] || { x: 0, y: 0 };
-      hdrag = { id, offx: cur.x - start.x, offy: cur.y - start.y, moved: false, sx: e.clientX, sy: e.clientY };
-    });
-    svgEl.addEventListener("pointermove", (e) => {
-      if (!hdrag) return;
-      if (!hdrag.moved && Math.abs(e.clientX - hdrag.sx) + Math.abs(e.clientY - hdrag.sy) > 4) hdrag.moved = true;
-      if (!hdrag.moved) return;
-      ensureManualHidden();
-      const p = toSvgXY(e.clientX, e.clientY);
-      const np = { x: p.x + hdrag.offx, y: p.y + hdrag.offy };
-      state.manualHidden[hdrag.id] = np; curPos[hdrag.id] = np;
-      const g = svgEl.querySelector(`[data-he-id="${hdrag.id}"]`); if (g) g.setAttribute("transform", `translate(${np.x},${np.y})`);
-    });
-    function endDrag(e) {
-      if (!hdrag) return;
-      const d = hdrag; hdrag = null;
-      try { svgEl.releasePointerCapture(e.pointerId); } catch (_) {}
-      if (d.moved) { save(); rerender(); }
-      else { selected = d.id; drawSide(hiddenMembersFrom(seedIds)); markSel(); }
-    }
-    svgEl.addEventListener("pointerup", endDrag);
-    svgEl.addEventListener("pointercancel", endDrag);
-    function markSel() { svgEl.querySelectorAll(".he-node").forEach((g) => g.classList.toggle("sel", g.getAttribute("data-he-id") === selected)); }
-
-    const close = () => { back.remove(); render(); updateHiddenChip(); };
-    back.querySelector("[data-close]").onclick = close;
-    back.addEventListener("click", (e) => { if (e.target === back) close(); });
-    back.querySelector("[data-reveal]").onclick = () => {
-      const info = hiddenMembersFrom(seedIds);
-      const toReveal = info.members.filter((id) => isHidden(id));
-      toReveal.forEach((id) => { delete state.hidden[id]; });
-      relayoutAndSave();
-      toast(toReveal.length ? ("Revealed " + toReveal.length + (toReveal.length === 1 ? " person" : " people")) : "No hidden people here yet");
-      close();
-    };
-    document.addEventListener("keydown", function esc(ev) { if (ev.key === "Escape") { close(); document.removeEventListener("keydown", esc); } });
-    rerender();
+  // Enter a hidden branch: the canvas now shows ONLY this branch — its seed
+  // people plus the hidden relatives hanging off them — and behaves exactly like
+  // the main tree (same node info, hover handles, editor, add/move). Everyone you
+  // add while inside stays hidden from the main tree.
+  function enterHiddenScope(seedIds) {
+    hiddenScope = { seedIds: seedIds.slice(), set: new Set() };
+    hiddenScope.set = new Set(hiddenMembersFrom(seedIds).members);
+    selection = new Set(); marquee = null; drag = null;
+    selectedId = null; resetPersonForm();
+    const names = seedIds.map((id) => { const p = personById(id); return p ? p.name : ""; }).filter(Boolean);
+    showHiddenBar(names.join(" & "));
+    document.body.classList.add("in-hidden-scope");
+    autoLayout(); render(); fitView();
   }
+  function exitHiddenScope() {
+    if (!hiddenScope) return;
+    hiddenScope = null;
+    const bar = document.getElementById("hiddenScopeBar"); if (bar) bar.hidden = true;
+    document.body.classList.remove("in-hidden-scope");
+    selection = new Set(); marquee = null; drag = null;
+    selectedId = null; resetPersonForm();
+    autoLayout(); render(); fitView();
+  }
+  function showHiddenBar(label) {
+    let bar = document.getElementById("hiddenScopeBar");
+    if (!bar) { bar = document.createElement("div"); bar.id = "hiddenScopeBar"; document.body.appendChild(bar); }
+    bar.innerHTML = `<span class="hsb-eye" aria-hidden="true"></span>
+      <span class="hsb-text">Hidden branch of <b>${escapeHtml(label || "")}</b> — anyone you add here stays off the main tree.</span>
+      <button class="btn primary" id="hsbDone">Done — back to main tree</button>`;
+    bar.querySelector("#hsbDone").onclick = exitHiddenScope;
+    bar.hidden = false;
+  }
+
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
   function syncTitle() {
     $("#treeTitle").textContent = state.title || "Family Tree";
@@ -3543,7 +3266,7 @@
   $("#tbMenu").onclick = () => togglePeopleMenu();
   $("#pmClose").onclick = () => togglePeopleMenu(false);
   $("#pmAdd").onclick = () => { togglePeopleMenu(false); resetPersonForm(); ensurePanel(); const n = $("#pFirst"); if (n) n.focus(); };
-  $("#pmArrange").onclick = () => { pushUndo(); state.manual = {}; selection = new Set(); relayoutAndSave(); fitView(); toast("Auto-arranged"); };
+  $("#pmArrange").onclick = () => { pushUndo(); if (hiddenScope) state.manualHidden = {}; else state.manual = {}; selection = new Set(); relayoutAndSave(); fitView(); toast("Auto-arranged"); };
   $("#peopleFilter").addEventListener("input", () => updatePeopleList());
   $("#sibLeftBtn").onclick = () => shiftSibling(-1);
   $("#sibRightBtn").onclick = () => shiftSibling(1);
