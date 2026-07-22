@@ -2736,8 +2736,10 @@
       bodyHtml += `<div class="scraped-label">Scraped text</div><pre>${escapeHtml(doc.text)}</pre>`;
     }
     const srcLine = (doc.url ? `<a href="${escapeHtml(doc.url)}" target="_blank" rel="noopener">View original listing ↗</a> · ` : "") + "saved " + (doc.capturedAt || "");
+    // Only ever one record viewer open, and it sits ABOVE the profile card.
+    const prev = document.getElementById("docViewerBack"); if (prev) prev.remove();
     const back = document.createElement("div");
-    back.className = "modal-backdrop";
+    back.className = "modal-backdrop docview-backdrop"; back.id = "docViewerBack";
     back.innerHTML = `<div class="modal doc-view"><h2>${escapeHtml(doc.title || "Record")}</h2>
       <div class="src">${srcLine}</div>${bodyHtml}
       <div class="btn-row">${doc.kind !== "link" ? '<button class="btn" data-dl>⬇︎ Download</button>' : ""}<button class="btn primary" data-cancel>Close</button></div></div>`;
@@ -3063,8 +3065,15 @@
       try { const j = await done.json(); if (j && j.savedAt) localStorage.setItem("familyTree.cloudSavedAt", String(j.savedAt)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
       setCloudStatus("saved");
       if (manual) toast("Saved to your site ✓");
-    } catch (e) { setCloudStatus("error", e.message); if (manual) toast(e.message || "Cloud save failed"); }
+    } catch (e) {
+      setCloudStatus("error", e.message);
+      // Surface the failure even for automatic saves — a silent push failure is
+      // exactly what leaves other devices (your phone) stuck on an old copy.
+      const now = Date.now();
+      if (manual || now - lastCloudErrToast > 20000) { lastCloudErrToast = now; toast("Couldn’t save to your site: " + (e.message || "error")); }
+    }
   }
+  let lastCloudErrToast = 0;
   // Owner: pull the latest encrypted tree from the cloud and load it into the editor.
   async function cloudLoadTree() {
     let res; try { res = await fetch("api/store?action=getTree"); } catch (e) { toast("Couldn’t reach your site"); return false; }
@@ -3093,6 +3102,26 @@
   async function cloudTreeInfo() {
     try { const r = await fetch("api/store?action=treeInfo"); if (!r.ok) return null; return await r.json(); }
     catch (e) { return null; }
+  }
+  // Manual "refresh from the cloud" (the ⟳ button). Pulls the latest cloud copy
+  // and shows it — non-destructive: it never overwrites this device's saved copy,
+  // so an owner can peek at the cloud without losing local edits. Also reports the
+  // cloud's last-saved time so you can see how fresh it is.
+  async function forcePullFromCloud() {
+    toast("Checking your site for the latest…");
+    const cp = await fetchCloudPayload();
+    if (!cp || !cp.payload) { toast("No cloud copy found (your site may still be catching up)"); return; }
+    let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
+    if (!fam) fam = prompt("Family password:") || "";
+    if (!fam) return;
+    try {
+      const obj = await decryptState(fam, cp.payload);
+      loadObject(obj);
+      try { localStorage.setItem("familyTree.familyPass", fam); localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || 0)); } catch (e) {}
+      autoLayout(); render(); fitView();
+      let when = ""; try { when = cp.savedAt ? new Date(cp.savedAt).toLocaleString() : ""; } catch (e) {}
+      toast(when ? ("Showing the latest — cloud saved " + when) : "Showing the latest from your site");
+    } catch (e) { toast("That cloud copy didn’t match your password"); }
   }
   // On boot, if the cloud copy is newer than what this device last synced, pull it
   // in — this is what makes edits on one device show up on the others (e.g. your
@@ -3508,6 +3537,7 @@
 
   /* wire toolbar + buttons */
   $("#tbFit").onclick = fitView;
+  { const sb = $("#tbSync"); if (sb) sb.onclick = forcePullFromCloud; }
   $("#tbRearrange").onclick = () => setRearrange(!rearrange);
   $("#tbTidy").onclick = tidyUp;
   // ☰ opens the People list + menu (add a person, auto-arrange).
