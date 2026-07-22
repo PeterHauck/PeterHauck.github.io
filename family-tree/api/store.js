@@ -110,6 +110,22 @@ export default async function handler(req, res) {
       return;
     }
 
+    // Read one slice of the tree back through the function (used for big trees so
+    // every device can read them without a direct-to-Blob fetch, which can be
+    // blocked by CORS on some phones/browsers).
+    if (req.method === "GET" && req.query.action === "getTreePart") {
+      const { blobs } = await list({ prefix: TREE, token });
+      const b = blobs.find((x) => x.pathname === TREE);
+      if (!b) { res.status(404).json({ error: "No saved tree in the cloud yet." }); return; }
+      const r = await fetch(b.downloadUrl || b.url);
+      const text = await r.text();
+      const start = Math.max(0, parseInt(req.query.start, 10) || 0);
+      const len = Math.min(Math.max(1, parseInt(req.query.len, 10) || 3000000), 4000000);
+      res.setHeader("Cache-Control", "no-store");
+      res.status(200).json({ chunk: text.slice(start, start + len), size: text.length });
+      return;
+    }
+
     if (req.method === "GET" && (req.query.action || "getTree") === "getTree") {
       const { blobs } = await list({ prefix: TREE, token });
       const b = blobs.find((x) => x.pathname === TREE);
@@ -117,9 +133,10 @@ export default async function handler(req, res) {
       const url = b.downloadUrl || b.url;   // downloadUrl works for private blobs too
       const savedAt = Date.parse(b.uploadedAt) || 0;
       res.setHeader("Cache-Control", "no-store");
-      // A big tree would blow the function's ~4.5MB response limit — hand back the
-      // blob URL and let the browser fetch it directly (Blob has no size cap).
-      if ((b.size || 0) > 3.5 * 1024 * 1024) { res.status(200).json({ url, savedAt }); return; }
+      // A big tree would blow the function's ~4.5MB response limit. Tell the client
+      // its size so it can read it back in slices through getTreePart (robust), and
+      // also hand over the direct blob URL as a fast path / fallback.
+      if ((b.size || 0) > 3.5 * 1024 * 1024) { res.status(200).json({ big: true, size: b.size || 0, url, savedAt }); return; }
       const r = await fetch(url);
       const payload = await r.text();
       res.status(200).json({ payload, url, savedAt });

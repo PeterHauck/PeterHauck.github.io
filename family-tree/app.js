@@ -2968,6 +2968,7 @@
     const json = JSON.stringify(obj);
     idbSet(IDB.key, obj).catch((e) => console.warn("idb save failed", e));   // primary (roomy)
     try { localStorage.setItem(STORE_KEY, json); } catch (e) {}              // best-effort mirror (small trees)
+    try { localStorage.setItem("familyTree.cloudDirty", "1"); } catch (e) {}  // local has edits not yet in the cloud
     scheduleCloudSave();   // durable copy to your site (Vercel Blob)
     scheduleBackup();      // optional legacy GitHub backup (only if turned on)
   }
@@ -2975,6 +2976,10 @@
   /* -------- durable cloud save: encrypted tree in Vercel Blob (no GitHub) ---- */
   let cloudTimer = null;
   const CLOUD_ON = () => { try { return localStorage.getItem("familyTree.cloudOn") === "1"; } catch (e) { return false; } };
+  // A device that has BOTH the family password and the import passcode is the
+  // owner and can push to the cloud — so their edits sync automatically without
+  // needing to flip a separate "cloud on" switch first.
+  const ownerCanCloud = () => { try { return !!((localStorage.getItem("familyTree.familyPass") || "") && (localStorage.getItem("familyTree.importPass") || "")); } catch (e) { return false; } };
   function setCloudStatus(st, msg) {
     const el = $("#cloudStatus"); if (!el) return;
     const map = { off: "Off — turn on to save a durable copy to your site", on: "On ✓ — saves automatically", pending: "Saving soon…", saving: "Saving to your site…", saved: "Saved to your site ✓", error: "Save failed" };
@@ -2982,7 +2987,7 @@
     el.className = "hint backup-" + st;
   }
   function scheduleCloudSave() {
-    if (readonly || !CLOUD_ON()) return;
+    if (readonly || (!CLOUD_ON() && !ownerCanCloud())) return;
     clearTimeout(cloudTimer);
     setCloudStatus("pending");
     cloudTimer = setTimeout(() => cloudSaveTree(false), 6000);   // coalesce a burst of edits
@@ -3019,7 +3024,7 @@
       }
       // Record the cloud's write time so this device knows it's in sync and won't
       // pull its own save back on the next load.
-      try { const j = await done.json(); if (j && j.savedAt) localStorage.setItem("familyTree.cloudSavedAt", String(j.savedAt)); } catch (e) {}
+      try { const j = await done.json(); if (j && j.savedAt) localStorage.setItem("familyTree.cloudSavedAt", String(j.savedAt)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
       setCloudStatus("saved");
       if (manual) toast("Saved to your site ✓");
     } catch (e) { setCloudStatus("error", e.message); if (manual) toast(e.message || "Cloud save failed"); }
@@ -3086,9 +3091,25 @@
       const r = await fetch("api/store?action=getTree");
       if (!r.ok) return null;
       const j = await r.json();
-      let payload = j.payload || "";
-      if (!payload && j.url) { try { payload = await (await fetch(j.url)).text(); } catch (e) {} }   // big tree: fetch directly from Blob
-      return payload ? { payload, savedAt: j.savedAt || 0 } : null;
+      if (j.payload) return { payload: j.payload, savedAt: j.savedAt || 0 };
+      if (j.big) {
+        // Fast path: the direct blob URL. Some phones/browsers block this with
+        // CORS (or it 403s), so only trust a clean 200; otherwise read the tree
+        // back in slices through the function instead (always works).
+        if (j.url) { try { const rr = await fetch(j.url); if (rr.ok) { const t = await rr.text(); if (t && t.length === (j.size || t.length)) return { payload: t, savedAt: j.savedAt || 0 }; } } catch (e) {} }
+        let out = "", total = j.size || Infinity;
+        for (let s = 0; s < total; s += 3000000) {
+          const pr = await fetch("api/store?action=getTreePart&start=" + s + "&len=3000000");
+          if (!pr.ok) return null;
+          const pj = await pr.json();
+          if (typeof pj.size === "number") total = pj.size;
+          if (!pj.chunk) break;
+          out += pj.chunk;
+        }
+        return out ? { payload: out, savedAt: j.savedAt || 0 } : null;
+      }
+      if (j.url) { try { const rr = await fetch(j.url); if (!rr.ok) return null; const t = await rr.text(); return t ? { payload: t, savedAt: j.savedAt || 0 } : null; } catch (e) { return null; } }
+      return null;
     } catch (e) { return null; }
   }
   // The encrypted tree to unlock on a fresh device. Prefer the LIVE cloud copy
@@ -3671,6 +3692,13 @@
     }
     else if (hasLocalData()) loadLocal();
     boot();
+    // Owner's editing device: make sure the cloud has this device's data. If we
+    // have local edits that never made it up (or the cloud has never been seeded),
+    // push once now so other devices — your phone — can pull the latest.
+    if (!readonly && ownerCanCloud()) {
+      let dirty = "1"; try { dirty = localStorage.getItem("familyTree.cloudDirty"); } catch (e) {}
+      if (dirty !== "0") setTimeout(() => cloudSaveTree(false), 1200);
+    }
   }
 
   init();
