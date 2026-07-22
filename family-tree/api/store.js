@@ -17,6 +17,7 @@ import { put, list } from "@vercel/blob";
 
 const TREE = "family-tree.json";
 const COMMENTS = "comments.json";   // { [personId]: [ {id, name, text, at} ] }
+const VIEWERKEY = "viewer-key.json"; // family password wrapped (encrypted) under the shared viewer password
 
 async function readBody(req) {
   if (req.body) return typeof req.body === "string" ? JSON.parse(req.body) : req.body;
@@ -103,6 +104,18 @@ export default async function handler(req, res) {
       const b = blobs.find((x) => x.pathname === TREE);
       res.setHeader("Cache-Control", "no-store");
       res.status(200).json({ exists: !!b, savedAt: b ? (Date.parse(b.uploadedAt) || 0) : 0 });
+      return;
+    }
+
+    // The wrapped family password for the shared viewer password. It's ciphertext
+    // (only the viewer password opens it), so serving it to anyone is safe.
+    if (req.method === "GET" && req.query.action === "viewerKey") {
+      const { blobs } = await list({ prefix: VIEWERKEY, token });
+      const b = blobs.find((x) => x.pathname === VIEWERKEY);
+      res.setHeader("Cache-Control", "no-store");
+      if (!b) { res.status(404).json({ error: "No viewer password is set." }); return; }
+      const r = await fetch(fresh(b.downloadUrl || b.url));
+      res.status(200).json({ wrap: await r.text() });
       return;
     }
 
@@ -220,6 +233,14 @@ export default async function handler(req, res) {
         if (expected > 0 && combined.length !== expected) { res.status(409).json({ error: "The upload didn't reassemble cleanly — please try saving again." }); return; }
         await putBlob(TREE, combined, "text/plain");
         res.status(200).json({ ok: true, savedAt: await treeSavedAt() });
+        return;
+      }
+
+      if (action === "saveViewerKey") {   // owner-only (passcode gate above)
+        const wrap = (body.wrap || "").toString();
+        if (!wrap || wrap.length > 10000) { res.status(400).json({ error: "Bad viewer key." }); return; }
+        await putBlob(VIEWERKEY, wrap, "application/json");
+        res.status(200).json({ ok: true });
         return;
       }
 
