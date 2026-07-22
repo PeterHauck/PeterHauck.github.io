@@ -355,7 +355,7 @@ button.btn.danger { color: var(--divorce); }
 /* hover-to-add "+" on a couple's lines */
 .union .hit { stroke: transparent; stroke-width: 20; fill: none; pointer-events: stroke; }
 .union .add-plus { opacity: 0; pointer-events: none; transition: opacity .12s; cursor: pointer; }
-.union:hover .add-plus, .add-plus:hover { opacity: 1; pointer-events: auto; }
+.union:hover .add-plus, .add-plus:hover, .union.reveal-plus .add-plus { opacity: 1; pointer-events: auto; }
 .add-plus-bg { fill: var(--accent); }
 .add-plus-mark { stroke: #fff; stroke-width: 2.2; stroke-linecap: round; }
 .add-plus:hover .add-plus-bg { fill: var(--accent-2, var(--accent)); }

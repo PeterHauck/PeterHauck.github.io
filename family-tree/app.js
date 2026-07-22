@@ -1157,6 +1157,24 @@
   }
   stage.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY); }, { passive: false });
 
+  // Hovering a person reveals the "+ add sibling" button beside their family — so
+  // even a lone child obviously shows where to add another child. (The + is on the
+  // couple's line group; a short hide-delay lets you move onto it without flicker.)
+  let plusRevealTimer = null;
+  const clearPlusReveal = () => gLinks.querySelectorAll(".union.reveal-plus").forEach((g) => g.classList.remove("reveal-plus"));
+  gNodes.addEventListener("pointerover", (e) => {
+    if (readonly) return;
+    const pe = e.target.closest && e.target.closest(".person"); if (!pe) return;
+    clearTimeout(plusRevealTimer); clearPlusReveal();
+    parentLinksOfPerson(pe.getAttribute("data-id")).forEach((l) => {
+      const g = gLinks.querySelector('.union[data-union="' + l.union + '"]'); if (g) g.classList.add("reveal-plus");
+    });
+  });
+  gNodes.addEventListener("pointerout", (e) => {
+    const pe = e.target.closest && e.target.closest(".person"); if (!pe) return;
+    clearTimeout(plusRevealTimer); plusRevealTimer = setTimeout(clearPlusReveal, 240);
+  });
+
   /* ============================================================ FORMS */
   function selectPerson(id) {
     selectedId = id;
