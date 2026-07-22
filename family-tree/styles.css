@@ -343,22 +343,6 @@ button.btn.danger { color: var(--divorce); }
 .rel-list .rel-add { padding: 4px 2px 2px; }
 button.btn.small { padding: 5px 9px; font-size: 12px; border-style: dashed; }
 
-/* the floating +  add-a-relative menu on the tree */
-.add-menu {
-  position: fixed; z-index: 60; min-width: 190px; padding: 5px;
-  background: var(--paper); border: 1px solid var(--panel-border);
-  border-radius: 10px; box-shadow: 0 8px 26px rgba(0,0,0,.22);
-}
-.add-menu button {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
-  width: 100%; text-align: left; border: none; background: transparent;
-  padding: 7px 9px; border-radius: 7px; cursor: pointer; color: inherit;
-}
-.add-menu button:hover { background: var(--accent); color: #fff; }
-.add-menu button b { font-size: 13px; font-weight: 600; }
-.add-menu button span { font-size: 11px; color: var(--muted); }
-.add-menu button:hover span { color: rgba(255,255,255,.85); }
-
 .person .doc-badge { cursor: pointer; }
 .person .doc-badge-bg { fill: var(--paper); stroke: var(--panel-border); stroke-width: 1; }
 .person .doc-badge-mark { stroke: var(--muted); stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
@@ -386,14 +370,17 @@ button.btn.small { padding: 5px 9px; font-size: 12px; border-style: dashed; }
 .mini-label { font-size: 11px; text-anchor: middle; fill: var(--ink); font-weight: 600; dominant-baseline: hanging; }
 .mini-node.anchor .mini-label { fill: var(--accent); }
 
-/* hover-to-add "+" on a couple's lines */
-.union .hit { stroke: transparent; stroke-width: 20; fill: none; pointer-events: stroke; }
-.union .add-plus { opacity: 0; pointer-events: none; transition: opacity .12s; cursor: pointer; }
-.union:hover .add-plus, .add-plus:hover, .union.reveal-plus .add-plus { opacity: 1; pointer-events: auto; }
+/* four directional "+" handles around a person, revealed on hover */
+.person .add-plus { opacity: 0; pointer-events: none; transition: opacity .1s; cursor: pointer; }
+.person:hover .add-plus { opacity: 1; pointer-events: auto; }
+/* big invisible target: bridges the gap from the node so the + doesn't vanish as
+   you reach for it, and makes it comfortable to click. transparent (not none) so
+   it still receives pointer events. */
+.add-plus-hit { fill: transparent; }
 .add-plus-bg { fill: var(--accent); }
 .add-plus-mark { stroke: #fff; stroke-width: 2.2; stroke-linecap: round; }
 .add-plus:hover .add-plus-bg { fill: var(--accent-2, var(--accent)); }
-.readonly .union .hit, .readonly .union .add-plus { display: none; }
+.readonly .add-plus { display: none; }
 .attach-choice { display: flex; gap: 8px; margin-bottom: 10px; }
 .attach-choice button { flex: 1; padding: 7px; border-radius: 8px; border: 1px solid var(--panel-border); background: var(--paper); cursor: pointer; font-size: 12.5px; }
 .attach-choice button.active { border-color: var(--accent-2); box-shadow: inset 0 0 0 1px var(--accent-2); }
