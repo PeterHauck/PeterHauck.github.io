@@ -3129,8 +3129,18 @@
   // loaded fresh cloud data (or took over the unlock flow).
   async function syncFromCloudIfNewer() {
     let synced = 0; try { synced = +(localStorage.getItem("familyTree.cloudSavedAt") || 0); } catch (e) {}
+    let dirty = false; try { dirty = localStorage.getItem("familyTree.cloudDirty") === "1"; } catch (e) {}
     const info = await cloudTreeInfo();
-    if (!info || !info.exists || !(info.savedAt > synced)) return false;   // cloud not newer (or unreachable)
+    if (!info || !info.exists) return false;
+    const newer = info.savedAt > synced;
+    // When is it SAFE to replace this device's saved tree with the cloud copy?
+    //  - a viewer's local is only a cache → replace whenever the cloud is newer.
+    //  - the OWNER's local can hold real edits → only replace when we've genuinely
+    //    tracked a newer cloud save (synced>0) AND have no unsynced local edits.
+    //    This is what stops a reload from pulling an older/other cloud copy over
+    //    the owner's current work.
+    const safe = ownerCanCloud() ? (synced > 0 && newer && !dirty) : newer;
+    if (!safe) return false;
     const cp = await fetchCloudPayload();
     if (!cp || !cp.payload) return false;
     const savedAt = cp.savedAt || info.savedAt;
@@ -3159,8 +3169,14 @@
     refreshingBg = true;
     try {
       let synced = 0; try { synced = +(localStorage.getItem("familyTree.cloudSavedAt") || 0); } catch (e) {}
+      let dirty = false; try { dirty = localStorage.getItem("familyTree.cloudDirty") === "1"; } catch (e) {}
       const info = await cloudTreeInfo();
-      if (!info || !info.exists || !(info.savedAt > synced)) return;
+      if (!info || !info.exists) return;
+      const newer = info.savedAt > synced;
+      // Same safety rule as syncFromCloudIfNewer: never replace the owner's local
+      // tree unless the cloud is genuinely newer than our last tracked sync.
+      const safe = ownerCanCloud() ? (synced > 0 && newer && !dirty) : newer;
+      if (!safe) return;
       const cp = await fetchCloudPayload();
       if (!cp || !cp.payload) return;
       let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
@@ -3594,7 +3610,15 @@
     r.onload = () => { try { loadObject(JSON.parse(r.result)); relayoutAndSave(); fitView(); toast("Imported"); } catch (err) { toast("Bad file"); } };
     r.readAsText(f); e.target.value = "";
   });
-  $("#cloudSaveBtn").onclick = () => cloudSaveTree(true);
+  // Prefill the family-password box with whatever this device currently uses.
+  { const fp = $("#cloudFamilyPass"); if (fp) { try { fp.value = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {} } }
+  $("#cloudSaveBtn").onclick = () => {
+    // If the family password box is filled, adopt it before saving — this is how
+    // you re-lock the cloud copy with the correct password so other devices open it.
+    const fp = $("#cloudFamilyPass"); const v = fp ? fp.value.trim() : "";
+    if (v) { try { localStorage.setItem("familyTree.familyPass", v); } catch (e) {} }
+    cloudSaveTree(true);
+  };
   $("#cloudLoadBtn").onclick = () => { if (confirm("Replace what's in this browser with the latest copy saved on your site?")) cloudLoadTree(); };
   $("#publishBtn").onclick = openPublishModal;
   $("#backupBtn").onclick = () => backupToRepo(true);
@@ -3786,12 +3810,13 @@
     }
     else if (hasLocalData()) loadLocal();
     boot();
-    // Owner's editing device: make sure the cloud has this device's data. If we
-    // have local edits that never made it up (or the cloud has never been seeded),
-    // push once now so other devices — your phone — can pull the latest.
+    // Owner's editing device: if there are local edits that haven't reached the
+    // cloud, push them once now so other devices — your phone — can pull the
+    // latest. Only when this device actually has unsynced edits, so a device
+    // holding a stale copy can never push it over good cloud data.
     if (!readonly && ownerCanCloud()) {
-      let dirty = "1"; try { dirty = localStorage.getItem("familyTree.cloudDirty"); } catch (e) {}
-      if (dirty !== "0") setTimeout(() => cloudSaveTree(false), 1200);
+      let dirty = ""; try { dirty = localStorage.getItem("familyTree.cloudDirty") || ""; } catch (e) {}
+      if (dirty === "1") setTimeout(() => cloudSaveTree(false), 1200);
     }
   }
 
