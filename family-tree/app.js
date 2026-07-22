@@ -1709,6 +1709,7 @@
   function setSex(s) {
     formSex = s;
     document.querySelectorAll("#sexToggle button").forEach((b) => b.classList.toggle("active", b.dataset.sex === s));
+    const mf = $("#maidenField"); if (mf) mf.hidden = (s !== "female");   // maiden name only for females
   }
   function buildColorSwatches() {
     const row = $("#colorRow");
@@ -1738,7 +1739,7 @@
     // A full date wins over the year box, so the tree year always matches the exact date.
     const birthYear = birthDate ? birthDate.slice(0, 4) : $("#pBirth").value;
     const deathYear = deathDate ? deathDate.slice(0, 4) : $("#pDeath").value;
-    const np = nameParts({ first: $("#pFirst").value.trim(), middle: $("#pMiddle").value.trim(), last: $("#pLast").value.trim(), nickname: $("#pNick").value.trim(), maiden: $("#pMaiden").value.trim() });
+    const np = nameParts({ first: $("#pFirst").value.trim(), middle: $("#pMiddle").value.trim(), last: $("#pLast").value.trim(), nickname: $("#pNick").value.trim(), maiden: formSex === "female" ? $("#pMaiden").value.trim() : "" });
     const data = { name: np.name, birth: birthYear, death: deathYear, birthDate, deathDate, deceased: $("#pDeceased").checked, sex: formSex, color: formColor, photo: pendingPhoto };
     if (id) {
       const p = personById(id);
