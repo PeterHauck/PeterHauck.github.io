@@ -216,18 +216,25 @@
           <p class="hint" style="margin-top:6px">Reads the text out of every photo/PDF obituary already attached (that doesn’t have a text copy yet) and saves it as a durable, searchable record.</p>
           <button class="btn wide" id="backfillDatesBtn" style="margin-top:10px">📅 Fill dates from saved obituaries</button>
           <p class="hint" style="margin-top:6px">Reads every saved obituary — including uploaded photos &amp; PDFs and saved links — with Claude, and fills in each person’s exact birth &amp; death date where the obituary states it. Only fills blanks; never changes a date you’ve already entered. (Runs on the Vercel deployment.)</p>
-          <button class="btn wide" id="migrateRecordsBtn" style="margin-top:10px">🗄️ Move records to the GitHub repo</button>
-          <p class="hint" style="margin-top:6px">Optional — only if you use the GitHub backup. Moves obituary PDFs &amp; photos into their own files in the repo so that backup stays small. Not needed otherwise: your browser holds them fine. (Needs GITHUB_TOKEN on Vercel.)</p>
+          <button class="btn wide" id="migrateRecordsBtn" style="margin-top:10px">🗄️ Move records to cloud storage</button>
+          <p class="hint" style="margin-top:6px">Moves obituary PDFs &amp; photos into their own files on your site (Vercel Blob), so the saved tree stays small and cloud-saves quickly no matter how many you add. New uploads do this automatically. (Needs the Blob store set up.)</p>
         </div>
 
         <div class="section editor-only">
           <h2>Save &amp; back up</h2>
-          <p class="hint" style="margin:0 0 8px">Your tree is saved automatically in this browser (it holds photos &amp; PDFs — no size limit, no account needed). For safety, download a copy now and then, and use it to move to another device.</p>
+          <p class="hint" style="margin:0 0 8px">Your tree saves automatically in this browser (it holds photos &amp; PDFs — no size limit). Turn on cloud save to also keep a durable, encrypted copy on your own site, so it survives and opens on any device.</p>
           <div class="btn-row">
-            <button class="btn primary wide" id="exportBtn">⬇︎ Download a backup</button>
+            <button class="btn primary wide" id="cloudSaveBtn">☁︎ Save to my site now</button>
           </div>
-          <div class="btn-row" style="margin-top:8px">
-            <button class="btn wide" id="importBtn">⬆︎ Restore from a backup file</button>
+          <p class="hint" id="cloudStatus" style="margin-top:6px">Off — turn on to save a durable copy to your site</p>
+          <div class="btn-row" style="margin-top:6px">
+            <button class="btn wide" id="cloudLoadBtn">⤓ Load my latest from my site</button>
+          </div>
+          <p class="hint" style="margin-top:6px">Encrypted with your family password before it leaves this browser. Runs on the Vercel site — one-time setup: Storage → Create → Blob. No GitHub needed.</p>
+
+          <div class="btn-row" style="margin-top:12px">
+            <button class="btn wide" id="exportBtn">⬇︎ Download a backup file</button>
+            <button class="btn wide" id="importBtn">⬆︎ Restore from a file</button>
             <input type="file" id="importInput" accept=".json,application/json" hidden />
           </div>
 
