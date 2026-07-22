@@ -84,6 +84,15 @@ browser).
    - `ANTHROPIC_API_KEY` — your Anthropic API key (from console.anthropic.com).
    - `IMPORT_PASSCODE` — any passcode you choose; you'll type it in the editor
      to authorize an import. This stops visitors from spending your API credits.
+   - `GITHUB_TOKEN` *(optional, enables **auto-backup to the repo**)* — a
+     fine-grained GitHub token with **Contents: Read and write** on this
+     repository. With it set, the editor commits an encrypted backup of your
+     tree to `family-data.js` a few seconds after each change, so your data
+     lives durably in git (versioned, loadable on any device) instead of only
+     in one browser. Optional overrides: `GITHUB_REPO` (defaults to
+     `PeterHauck/PeterHauck.github.io`) and `GITHUB_BRANCH` (defaults to
+     `master`). The browser encrypts before sending, so only ciphertext is
+     ever committed.
 4. **Add the domain**: project → *Settings → Domains* → add
    `family.petermhauck.com`. Vercel shows you the DNS record to create.
 5. **At your domain registrar** (wherever `petermhauck.com` is managed), add the

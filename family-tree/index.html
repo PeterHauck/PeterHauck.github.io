@@ -217,11 +217,14 @@
             <input type="file" id="importInput" accept=".json,application/json" hidden />
           </div>
           <div class="btn-row" style="margin-top:8px">
-            <button class="btn primary wide" id="publishBtn">🔒 Publish for family (password)</button>
+            <button class="btn primary wide" id="backupBtn">☁︎ Back up to repo now</button>
           </div>
-          <p class="hint" style="margin-top:8px">Your work auto-saves in this browser. “Publish” encrypts the whole
-            tree with a password and downloads <code>family-data.js</code> to commit alongside this page —
-            visitors then need the password to view.</p>
+          <p class="hint" id="backupStatus" style="margin-top:6px">Not set up yet</p>
+          <p class="hint" style="margin-top:2px">Keeps a durable, encrypted copy in the repository (versioned, loadable on any device) so your tree isn’t only in this browser. After the first time, it backs up automatically a few seconds after each change. (Needs the Vercel site + a GitHub token — see the README.)</p>
+          <div class="btn-row" style="margin-top:10px">
+            <button class="btn wide" id="publishBtn">🔒 Download encrypted copy</button>
+          </div>
+          <p class="hint" style="margin-top:6px">Or download <code>family-data.js</code> yourself to commit by hand.</p>
           <div class="btn-row" style="margin-top:8px">
             <button class="btn danger" id="resetBtn">Clear everything</button>
           </div>
