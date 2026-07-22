@@ -687,6 +687,26 @@
   }
 
   // "1906-07-05" → "July 5, 1906" (parsed by parts to avoid timezone drift).
+  // Normalise a date the importer (or a person) hands us into strict ISO
+  // "YYYY-MM-DD" — tolerant of unpadded months/days and written-out formats
+  // ("1948-3-5", "1948/03/05", "March 5, 1948", "5 Mar 1948"). null if not a
+  // real full date (year-only, blank, or unparseable — we never guess a day).
+  const MONTHNUM = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12, jan: 1, feb: 2, mar: 3, apr: 4, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
+  function mkISO(y, mo, da) {
+    if (!(y >= 100 && mo >= 1 && mo <= 12 && da >= 1 && da <= 31)) return null;
+    return y + "-" + String(mo).padStart(2, "0") + "-" + String(da).padStart(2, "0");
+  }
+  function normDate(s) {
+    s = String(s == null ? "" : s).trim();
+    if (!s) return null;
+    let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);            // 1948-3-5, 1948/03/05
+    if (m) return mkISO(+m[1], +m[2], +m[3]);
+    m = s.match(/^([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$/); // March 5, 1948
+    if (m && MONTHNUM[m[1].toLowerCase()]) return mkISO(+m[3], MONTHNUM[m[1].toLowerCase()], +m[2]);
+    m = s.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\.?,?\s+(\d{4})$/); // 5 March 1948
+    if (m && MONTHNUM[m[2].toLowerCase()]) return mkISO(+m[3], MONTHNUM[m[2].toLowerCase()], +m[1]);
+    return null;
+  }
   function fmtDate(iso) {
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ""); if (!m) return iso || "";
     const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -1323,6 +1343,9 @@
     $("#pDeath").value = p.death == null ? "" : p.death;
     $("#pBirthDate").value = p.birthDate || "";
     $("#pDeathDate").value = p.deathDate || "";
+    // Expand the "Exact dates" section when there's a full date to show, so
+    // imported day/month dates are visible without hunting for the toggle.
+    const exd = document.querySelector(".exact-dates"); if (exd) exd.open = !!(p.birthDate || p.deathDate);
     $("#pDeceased").checked = isDeceased(p);
     setSex(p.sex);
     setColor(p.color || "");
@@ -1915,10 +1938,9 @@
     const keyToId = {};
     const newIds = [];
     const findByName = (name) => state.persons.find((p) => p.name.trim().toLowerCase() === String(name || "").trim().toLowerCase());
-    const yearOf = (year, date) => year || (date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date.slice(0, 4) : "");
-    const isoDate = (date) => (/^\d{4}-\d{2}-\d{2}$/.test(date || "") ? date : null);
+    const yearOf = (year, date) => year || (date ? date.slice(0, 4) : "");
     (d.people || []).forEach((pp) => {
-      const bDate = isoDate(pp.birthDate), dDate = isoDate(pp.deathDate);
+      const bDate = normDate(pp.birthDate), dDate = normDate(pp.deathDate);
       const ex = findByName(pp.name);
       if (ex) {
         keyToId[pp.key] = ex.id;
