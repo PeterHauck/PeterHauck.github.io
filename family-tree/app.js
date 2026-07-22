@@ -1080,6 +1080,15 @@
       if (u.status === "divorced") {
         [-7, 5].forEach((dx) => gu.appendChild(el("line", { class: "divorce-tick", x1: midX + dx + 5, y1: midY - 11, x2: midX + dx - 5, y2: midY + 11 })));
       }
+      // Marriage (and divorce) date, sitting just above the line.
+      const dbits = [];
+      if (u.marriage) dbits.push((u.status === "partners" ? "" : "m. ") + u.marriage);
+      if (u.status === "divorced" && u.divorce) dbits.push("div. " + u.divorce);
+      if (dbits.length) {
+        const dlabel = dbits.join("   ");
+        gu.appendChild(el("rect", { class: "union-date-bg", x: midX - (dlabel.length * 3.3) - 4, y: y - 21, width: dlabel.length * 6.6 + 8, height: 15, rx: 4 }));
+        gu.appendChild(el("text", { class: "union-date", x: midX, y: y - 10 }, txt(dlabel)));
+      }
       if (!readonly) {
         // Hovering the marriage line reveals a + (add a child of this couple) and
         // a +hidden (start a private sub-tree from this couple). A wide invisible
@@ -1572,6 +1581,8 @@
     if (p) { selectedId = personId; fillPersonForm(p); }
   }
   function relSetStatus(unionId, status, personId) { pushUndo(); const u = unionById(unionId); if (u) u.status = status; refreshRel(personId); }
+  // Marriage / divorce date (free text — a year like "1950" or a full date). Empty clears it.
+  function relSetUnionField(unionId, field, val, personId) { pushUndo(); const u = unionById(unionId); if (u) { val = (val || "").trim(); if (val) u[field] = val; else delete u[field]; } refreshRel(personId); }
   function relSetChildType(linkId, type, personId) { pushUndo(); const l = state.links.find((x) => x.id === linkId); if (l) l.type = type; refreshRel(personId); }
   function relUnlinkUnion(unionId, personId) {
     if (!confirm("Remove this relationship? Both people stay in the tree; any children of this couple lose this parent link.")) return;
@@ -1737,6 +1748,25 @@
         const s = personById(other).sex;
         const sel = kindSelect([["married", nounPartner(s, "married")], ["partners", nounPartner(s, "partners")], ["divorced", nounPartner(s, "divorced")]], u.status || "married", (v) => relSetStatus(u.id, v, pid));
         rowFor(other, sel, removeBtn(() => relUnlinkUnion(u.id, pid)));
+        // marriage / divorce dates for this couple, on their own line
+        const st = u.status || "married";
+        const dRow = document.createElement("li"); dRow.className = "rel-dates";
+        const dateInput = (val, onCommit) => {
+          const i = document.createElement("input");
+          i.type = "text"; i.className = "rel-date"; i.placeholder = "year"; i.value = val || "";
+          i.onchange = () => onCommit(i.value);
+          i.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); i.blur(); } };
+          return i;
+        };
+        const dateField = (label, val, field) => {
+          const wrap = document.createElement("span"); wrap.className = "rel-date-field";
+          const lab = document.createElement("span"); lab.className = "rel-date-label"; lab.textContent = label;
+          wrap.appendChild(lab); wrap.appendChild(dateInput(val, (v) => relSetUnionField(u.id, field, v, pid)));
+          return wrap;
+        };
+        dRow.appendChild(dateField(st === "partners" ? "Together" : "Married", u.marriage, "marriage"));
+        if (st === "divorced") dRow.appendChild(dateField("Divorced", u.divorce, "divorce"));
+        box.appendChild(dRow);
       });
     }
 

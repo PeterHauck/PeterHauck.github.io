@@ -84,6 +84,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .link.adopt { stroke-dasharray: 7 6; stroke: var(--adopt); }
 .divorce-tick { stroke: var(--divorce); stroke-width: 2.6; }
 .union-label { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+.union-date { fill: var(--muted); font-size: 11px; text-anchor: middle; pointer-events: none; }
+.union-date-bg { fill: var(--paper); stroke: none; pointer-events: none; }
 
 /* ---------- Side panel ---------- */
 #panel {
@@ -393,6 +395,12 @@ button.btn.danger { color: var(--divorce); }
 .rel-list .rel-x { border: none; background: transparent; cursor: pointer; color: var(--muted); font-size: 12px; padding: 2px 4px; line-height: 1; opacity: 0; }
 .rel-list .rel-item:hover .rel-x { opacity: 1; }
 .rel-list .rel-x:hover { color: var(--divorce); }
+/* marriage / divorce dates for a couple, on their own line under the partner */
+.rel-list .rel-dates { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 0 4px 6px 4px; }
+.rel-list .rel-date-field { display: inline-flex; align-items: center; gap: 5px; }
+.rel-list .rel-date-label { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+.rel-list input.rel-date { width: 62px; padding: 3px 6px; border: 1px solid var(--panel-border); border-radius: 6px; background: var(--paper); color: var(--ink); font-size: 12.5px; }
+.rel-list input.rel-date:focus { border-color: var(--accent-2); outline: none; }
 .rel-list .rel-addbar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 button.btn.small { padding: 5px 9px; font-size: 12px; }
 
