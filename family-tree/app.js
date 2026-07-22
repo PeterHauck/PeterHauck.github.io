@@ -1412,7 +1412,6 @@
   }
 
   /* ------------------------------------------- relationships (in the profile) */
-  const relName = (id) => { const q = personById(id); return q ? escapeHtml(q.name) : "?"; };
   // Choose an existing person or spin up a new blank one. onPick(idOrNull); null = new.
   function pickPerson(title, hint, onPick, excludeIds) {
     const excl = new Set(excludeIds || []);
@@ -1463,76 +1462,171 @@
     }, [personId]);
   }
   function relAddParent(personId) {
-    pickPerson("Add a parent", "Pick an existing person as a parent — this person is attached as their child. Add the second parent by editing that person’s partners.",
+    pickPerson("Add a parent", "Pick an existing person as a parent, or create a new one. If this person already has one parent, the new one joins them as the second parent.",
       (pid) => {
-        if (!pid) return toast("Pick an existing person as the parent");
         if (pid === personId) return toast("Pick someone else");
         pushUndo();
-        let u = unionsOfPerson(pid)[0];
-        if (!u) u = addUnion(pid, null, "married");
-        addChild(u.id, personId, "bio");
-        refreshRel(personId);
+        const parId = pid || addPerson({ name: "New parent", sex: "unknown" }).id;
+        const existing = parentLinksOfPerson(personId).map((l) => unionById(l.union)).find(Boolean);
+        if (existing && existing.b == null && existing.a !== parId) existing.b = parId;   // fill the empty slot
+        else { const u = unionsOfPerson(parId)[0] || addUnion(parId, null, "married"); addChild(u.id, personId, "bio"); }
+        if (!pid) focusNewPerson(personById(parId), "Added parent — type their name and Save");
+        else refreshRel(personId);
       }, [personId]);
   }
+  function relAddSibling(personId) {
+    const pl = parentLinksOfPerson(personId)[0];
+    if (!pl) return toast("Add a parent first — siblings share a parent");
+    relAddChild(pl.union, personId);
+  }
+  // Detach ONE parent (not the whole couple): if the other parent stays, the child
+  // is re-pointed to a single-parent union of that other parent.
+  function relRemoveParent(pid, parId, linkId) {
+    const par = personById(parId);
+    if (!confirm("Remove " + (par ? par.name : "this parent") + " as a parent of " + (personById(pid) || {}).name + "? Both people stay in the tree.")) return;
+    pushUndo();
+    const l = state.links.find((x) => x.id === linkId); if (!l) return;
+    const u = unionById(l.union);
+    const other = u ? (u.a === parId ? u.b : u.a) : null;
+    if (!u || other == null) { deleteLink(l.id); }
+    else { let ou = state.unions.find((x) => x.a === other && x.b == null); if (!ou) ou = addUnion(other, null, u.status || "married"); l.union = ou.id; }
+    refreshRel(pid);
+  }
+  // Relationship nouns, gendered from the *other* person's sex.
+  const nounParent = (s, adopted) => (adopted ? "Adoptive " : "") + (s === "male" ? (adopted ? "father" : "Father") : s === "female" ? (adopted ? "mother" : "Mother") : (adopted ? "parent" : "Parent"));
+  const nounChild = (s, adopted) => (adopted ? "Adopted " : "") + (s === "male" ? (adopted ? "son" : "Son") : s === "female" ? (adopted ? "daughter" : "Daughter") : (adopted ? "child" : "Child"));
+  const nounSibling = (s) => (s === "male" ? "Brother" : s === "female" ? "Sister" : "Sibling");
+  const nounPartner = (s, status) => status === "divorced" ? (s === "male" ? "Ex-husband" : s === "female" ? "Ex-wife" : "Former partner")
+    : status === "partners" ? "Partner" : (s === "male" ? "Husband" : s === "female" ? "Wife" : "Spouse");
+
+  // The set of parent PEOPLE for a person (across all their parent unions).
+  function parentsOf(pid) {
+    const set = new Set();
+    parentLinksOfPerson(pid).forEach((l) => { const u = unionById(l.union); if (u) { if (u.a) set.add(u.a); if (u.b) set.add(u.b); } });
+    return set;
+  }
+  // Everyone who shares at least one parent with p (full or half siblings) — robust
+  // even when parents are recorded through different unions.
+  function siblingsOf(pid) {
+    const mine = parentsOf(pid);
+    if (!mine.size) return [];
+    const set = new Set();
+    state.persons.forEach((q) => {
+      if (q.id === pid) return;
+      const theirs = parentsOf(q.id);
+      for (const x of theirs) { if (mine.has(x)) { set.add(q.id); break; } }
+    });
+    return [...set];
+  }
+
+  // Clean, scannable list of a person's DIRECT relations: one row per connected
+  // person — their name (click to jump to them) and exactly what they are
+  // (Father, Wife, Son, Sister…). Kind is an inline control where it's editable.
   function renderRelationships(p) {
     const sec = $("#relSection"), box = $("#relList"); if (!box || !sec) return;
     box.innerHTML = "";
     if (!p) { sec.hidden = true; return; }
     sec.hidden = false;
     const pid = p.id;
-    const head = (t) => { const li = document.createElement("li"); li.className = "rel-head"; li.textContent = t; box.appendChild(li); };
-    const none = (t) => { const li = document.createElement("li"); li.className = "rel-none"; li.textContent = t; box.appendChild(li); };
-    const add = (html) => { const li = document.createElement("li"); li.className = "rel-add"; li.innerHTML = html; box.appendChild(li); return li; };
 
-    // ---- partners & their children ----
-    head("Partners");
-    const unions = unionsOfPerson(pid);
-    if (!unions.length) none("No partner recorded yet.");
-    unions.forEach((u) => {
-      const other = u.a === pid ? u.b : u.a;
-      const li = document.createElement("li"); li.className = "rel-row";
-      li.innerHTML = `<span class="rn">${other ? relName(other) : "<em>single parent</em>"}</span>
-        <select class="rel-status" data-u="${u.id}">
-          <option value="married">Married</option><option value="divorced">Divorced</option><option value="partners">Partners</option>
-        </select><button class="rel-x" data-unlink="${u.id}" title="Remove relationship">✕</button>`;
-      li.querySelector(".rel-status").value = u.status || "married";
+    const groupTitle = (t) => { const li = document.createElement("li"); li.className = "rel-group"; li.textContent = t; box.appendChild(li); };
+    const nameBtn = (otherId) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "rel-nav";
+      const q = personById(otherId); b.textContent = q ? q.name : "?";
+      b.title = "Go to " + (q ? q.name : ""); b.onclick = () => { selectPerson(otherId); if (!isHidden(otherId)) centerOn(otherId); };
+      return b;
+    };
+    const kindSelect = (opts, value, onChange) => {
+      const s = document.createElement("select"); s.className = "rel-kind";
+      opts.forEach(([v, label]) => { const o = document.createElement("option"); o.value = v; o.textContent = label; s.appendChild(o); });
+      s.value = value; s.onchange = () => onChange(s.value);
+      return s;
+    };
+    const kindText = (label) => { const sp = document.createElement("span"); sp.className = "rel-kind static"; sp.textContent = label; return sp; };
+    const removeBtn = (fn) => { const b = document.createElement("button"); b.type = "button"; b.className = "rel-x"; b.textContent = "✕"; b.title = "Remove this relationship"; b.onclick = fn; return b; };
+    const rowFor = (otherId, kindNode, xNode) => {
+      const li = document.createElement("li"); li.className = "rel-item";
+      li.appendChild(nameBtn(otherId)); li.appendChild(kindNode); if (xNode) li.appendChild(xNode);
       box.appendChild(li);
-      childLinksOfUnion(u.id).forEach((l) => {
-        if (!personById(l.child)) return;
-        const ci = document.createElement("li"); ci.className = "rel-child";
-        ci.innerHTML = `<span class="rn">↳ ${relName(l.child)}</span>
-          <select class="rel-ctype" data-link="${l.id}"><option value="bio">Biological</option><option value="adopted">Adopted</option></select>
-          <button class="rel-x" data-rmlink="${l.id}" title="Remove child link">✕</button>`;
-        ci.querySelector(".rel-ctype").value = l.type || "bio";
-        box.appendChild(ci);
-      });
-      add(`<button class="btn small" data-addchild="${u.id}">＋ Add child with ${other ? relName(other) : "this partner"}</button>`);
-    });
-    add(`<button class="btn small" data-addpartner="1">＋ Add partner</button>`);
+    };
 
-    // ---- parents ----
-    head("Parents");
+    // ---- Parents ---- (one row per parent, gendered)
     const plinks = parentLinksOfPerson(pid);
-    if (!plinks.length) none("No parents recorded.");
+    const parentRows = [];
     plinks.forEach((l) => {
       const u = unionById(l.union); if (!u) return;
-      const li = document.createElement("li"); li.className = "rel-row";
-      li.innerHTML = `<span class="rn">${escapeHtml(unionLabel(u))}</span>
-        <select class="rel-ctype" data-link="${l.id}"><option value="bio">Biological</option><option value="adopted">Adopted</option></select>
-        <button class="rel-x" data-rmlink="${l.id}" title="Remove parent link">✕</button>`;
-      li.querySelector(".rel-ctype").value = l.type || "bio";
-      box.appendChild(li);
+      [u.a, u.b].forEach((parId) => {
+        if (parId == null || !personById(parId)) return;
+        parentRows.push({ parId, l });
+      });
     });
-    add(`<button class="btn small" data-addparent="1">＋ Add parent</button>`);
+    if (parentRows.length) {
+      groupTitle("Parents");
+      parentRows.forEach(({ parId, l }) => {
+        const s = personById(parId).sex;
+        const sel = kindSelect([["bio", nounParent(s, false)], ["adopted", nounParent(s, true)]], l.type || "bio", (v) => relSetChildType(l.id, v, pid));
+        rowFor(parId, sel, removeBtn(() => relRemoveParent(pid, parId, l.id)));
+      });
+    }
 
-    // ---- wire it up ----
-    box.querySelectorAll(".rel-status").forEach((s) => (s.onchange = () => relSetStatus(s.getAttribute("data-u"), s.value, pid)));
-    box.querySelectorAll(".rel-ctype").forEach((s) => (s.onchange = () => relSetChildType(s.getAttribute("data-link"), s.value, pid)));
-    box.querySelectorAll("[data-unlink]").forEach((b) => (b.onclick = () => relUnlinkUnion(b.getAttribute("data-unlink"), pid)));
-    box.querySelectorAll("[data-rmlink]").forEach((b) => (b.onclick = () => relRemoveLink(b.getAttribute("data-rmlink"), pid)));
-    box.querySelectorAll("[data-addchild]").forEach((b) => (b.onclick = () => relAddChild(b.getAttribute("data-addchild"), pid)));
-    const ap = box.querySelector("[data-addpartner]"); if (ap) ap.onclick = () => relAddPartner(pid);
-    const apar = box.querySelector("[data-addparent]"); if (apar) apar.onclick = () => relAddParent(pid);
+    // ---- Siblings ---- (derived; read-only)
+    const sibs = siblingsOf(pid);
+    if (sibs.length) {
+      groupTitle("Siblings");
+      sibs.forEach((sid) => rowFor(sid, kindText(nounSibling(personById(sid).sex)), null));
+    }
+
+    // ---- Partners ----
+    const unions = unionsOfPerson(pid);
+    if (unions.length) {
+      groupTitle(unions.length > 1 ? "Partners" : "Partner");
+      unions.forEach((u) => {
+        const other = u.a === pid ? u.b : u.a;
+        if (other == null || !personById(other)) return;
+        const s = personById(other).sex;
+        const sel = kindSelect([["married", nounPartner(s, "married")], ["partners", nounPartner(s, "partners")], ["divorced", nounPartner(s, "divorced")]], u.status || "married", (v) => relSetStatus(u.id, v, pid));
+        rowFor(other, sel, removeBtn(() => relUnlinkUnion(u.id, pid)));
+      });
+    }
+
+    // ---- Children ----
+    const kidLinks = [];
+    unionsOfPerson(pid).forEach((u) => childLinksOfUnion(u.id).forEach((l) => { if (personById(l.child)) kidLinks.push(l); }));
+    if (kidLinks.length) {
+      groupTitle(kidLinks.length > 1 ? "Children" : "Child");
+      kidLinks.forEach((l) => {
+        const s = personById(l.child).sex;
+        const sel = kindSelect([["bio", nounChild(s, false)], ["adopted", nounChild(s, true)]], l.type || "bio", (v) => relSetChildType(l.id, v, pid));
+        rowFor(l.child, sel, removeBtn(() => relRemoveLink(l.id, pid)));
+      });
+    }
+
+    if (!parentRows.length && !sibs.length && !unions.length && !kidLinks.length) {
+      const li = document.createElement("li"); li.className = "rel-none";
+      li.textContent = "No relationships yet. Add one below, or use the ＋ handles on the tree.";
+      box.appendChild(li);
+    }
+
+    // ---- Add buttons ----
+    const addBar = document.createElement("li"); addBar.className = "rel-addbar";
+    [["Parent", () => relAddParent(pid)], ["Sibling", () => relAddSibling(pid)], ["Partner", () => relAddPartner(pid)], ["Child", () => relAddChildOfPerson(pid)]]
+      .forEach(([label, fn]) => { const b = document.createElement("button"); b.type = "button"; b.className = "btn small"; b.textContent = "＋ " + label; b.onclick = fn; addBar.appendChild(b); });
+    box.appendChild(addBar);
+  }
+  // Add a child to this person; if they have no partner yet, a single-parent
+  // union is created (only once the pick is confirmed, so cancelling adds nothing).
+  function relAddChildOfPerson(personId) {
+    pickPerson("Add a child", "Link an existing person as this person’s child, or create a new one.", (cid) => {
+      if (cid === personId) return toast("Pick someone else");
+      pushUndo();
+      let u = unionsOfPerson(personId)[0];
+      if (!u) u = addUnion(personId, null, "married");
+      const childId = cid || addPerson({ name: "New person", sex: "unknown" }).id;
+      addChild(u.id, childId, "bio");
+      placeNewChild(u, childId);
+      if (!cid) focusNewPerson(personById(childId));
+      else { refreshRel(personId); toast("Child linked"); }
+    }, [personId]);
   }
 
   function setSex(s) {
