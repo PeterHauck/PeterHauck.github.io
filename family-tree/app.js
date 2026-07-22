@@ -1697,18 +1697,12 @@
       b.title = "Go to " + (q ? q.name : ""); b.onclick = () => { selectPerson(otherId); if (!isHidden(otherId)) centerOn(otherId); };
       return b;
     };
-    const kindSelect = (opts, value, onChange) => {
-      const s = document.createElement("select"); s.className = "rel-kind";
-      opts.forEach(([v, label]) => { const o = document.createElement("option"); o.value = v; o.textContent = label; s.appendChild(o); });
-      s.value = value; s.onchange = () => onChange(s.value);
-      return s;
-    };
     const kindText = (label) => { const sp = document.createElement("span"); sp.className = "rel-kind static"; sp.textContent = label; return sp; };
     // Like kindText but clickable: shows the relationship as plain words (matching
     // the Siblings rows) and flips biological ⇄ adoptive on click.
-    const kindToggle = (label, onToggle) => {
+    const kindToggle = (label, onToggle, title) => {
       const b = document.createElement("button"); b.type = "button"; b.className = "rel-kind static toggle";
-      b.textContent = label; b.title = "Click to switch between biological and adoptive";
+      b.textContent = label; b.title = title || "Click to switch between biological and adoptive";
       b.onclick = onToggle; return b;
     };
     const removeBtn = (fn) => { const b = document.createElement("button"); b.type = "button"; b.className = "rel-x"; b.textContent = "✕"; b.title = "Remove this relationship"; b.onclick = fn; return b; };
@@ -1753,8 +1747,12 @@
         const other = u.a === pid ? u.b : u.a;
         if (other == null || !personById(other)) return;
         const s = personById(other).sex;
-        const sel = kindSelect([["married", nounPartner(s, "married")], ["partners", nounPartner(s, "partners")], ["divorced", nounPartner(s, "divorced")]], u.status || "married", (v) => relSetStatus(u.id, v, pid));
-        rowFor(other, sel, removeBtn(() => relUnlinkUnion(u.id, pid)));
+        // Plain-text relationship word (matching Parents/Children/Siblings), click
+        // to cycle married → partners → divorced.
+        const stt = u.status || "married";
+        const nextStatus = { married: "partners", partners: "divorced", divorced: "married" };
+        const kn = kindToggle(nounPartner(s, stt), () => relSetStatus(u.id, nextStatus[stt], pid), "Click to change: married → partners → divorced");
+        rowFor(other, kn, removeBtn(() => relUnlinkUnion(u.id, pid)));
         // marriage (exact date) / divorce (year only) for this couple, on their own line
         const st = u.status || "married";
         const dRow = document.createElement("li"); dRow.className = "rel-dates";
