@@ -660,6 +660,17 @@
       g.appendChild(badge);
     }
 
+    // Four directional add-a-relative "+"s, revealed on hover (CSS). Left/right add
+    // a spouse on that side; up adds a parent; down adds a child (below the label).
+    if (!readonly) {
+      const OFF = HALF + 20;
+      const labelBottom = HALF + 6 + bgH;
+      g.appendChild(dirPlus(p.id, "up", 0, -OFF, "Add a parent"));
+      g.appendChild(dirPlus(p.id, "left", -OFF, 0, "Add a spouse / partner on the left"));
+      g.appendChild(dirPlus(p.id, "right", OFF, 0, "Add a spouse / partner on the right"));
+      g.appendChild(dirPlus(p.id, "down", 0, labelBottom + 18, "Add a child"));
+    }
+
     gNodes.appendChild(g);
   }
 
@@ -810,18 +821,6 @@
     return out;
   }
 
-  // A little "+" button that appears on hover over a union's lines, to quickly
-  // add a child / sibling to that couple. Hidden until the union group is hovered
-  // (see CSS); clicks are caught in the pointerdown handler via the .add-plus class.
-  function addPlus(unionId, x, y, label, personId) {
-    const g = el("g", { class: "add-plus", "data-union": unionId, "data-person": personId || "", transform: `translate(${x},${y})` });
-    g.appendChild(el("circle", { class: "add-plus-bg", r: 11, cx: 0, cy: 0 }));
-    g.appendChild(el("line", { class: "add-plus-mark", x1: -5, y1: 0, x2: 5, y2: 0 }));
-    g.appendChild(el("line", { class: "add-plus-mark", x1: 0, y1: -5, x2: 0, y2: 5 }));
-    g.appendChild(el("title", null, txt(label)));
-    return g;
-  }
-
   // Quick-add a child to a union: drop in a blank person, link them, and open the
   // form focused on the name so you just type and Save. Undoable.
   // ---- placing newly-added people next to their family (instead of off in auto-land) ----
@@ -880,20 +879,6 @@
     // whatever's left (isolated new clusters) falls back to auto-layout
   }
 
-  function quickAddChild(unionId) {
-    if (readonly) return;
-    const u = unionById(unionId); if (!u) return;
-    pushUndo();
-    const np = addPerson({ name: "New person", sex: "unknown" });
-    addChild(u.id, np.id, "bio");
-    placeNewChild(u, np.id);   // slot in next to siblings / below the parents
-    selectedId = np.id;
-    relayoutAndSave();
-    ensurePanel(); fillPersonForm(np);
-    const nameEl = $("#pName"); if (nameEl) { nameEl.focus(); nameEl.select(); }
-    toast("Added — type their name and Save");
-  }
-
   // ---- shared add-a-relative actions (used by the tree + menu and the profile) ----
   const guessSpouseSex = (p) => (p && p.sex === "male") ? "female" : (p && p.sex === "female") ? "male" : "unknown";
   // Focus a freshly-added blank person so you can just type their name and Save.
@@ -905,14 +890,15 @@
     toast(msg || "Added — type their name and Save");
   }
 
-  // Add a NEW blank spouse/partner beside a person and open them for naming.
-  function quickAddSpouse(personId) {
+  // Add a NEW blank spouse/partner on a chosen side of a person and name them.
+  function quickAddSpouse(personId, side) {
     if (readonly) return;
     const p = personById(personId); if (!p) return;
     pushUndo();
     const sp = addPerson({ name: "New spouse", sex: guessSpouseSex(p) });
     addUnion(personId, sp.id, "married");
-    if (isManual(personId)) { const pp = posOf(personId); placeAt(sp.id, pp.x + COLW, pp.y); }
+    const pp = posOf(personId);
+    placeAt(sp.id, pp.x + (side === "left" ? -COLW : COLW), pp.y);   // pin to the clicked side
     focusNewPerson(sp, "Added spouse — type their name and Save");
   }
 
@@ -929,32 +915,43 @@
     focusNewPerson(np);
   }
 
-  const shortName = (n) => { const s = (n || "").replace(/["'()]/g, "").trim(); return s.split(/\s+/)[0] || s || "them"; };
-
-  // A little floating menu on the tree + : Sibling / Spouse / Child, anchored to the
-  // person the + sits beside (so "spouse" and "child" act on the right person).
-  function onAwayAddMenu(e) { if (!(e.target.closest && e.target.closest("#addMenu"))) closeAddMenu(); }
-  function closeAddMenu() { const m = $("#addMenu"); if (m) m.remove(); document.removeEventListener("pointerdown", onAwayAddMenu, true); }
-  function openAddMenu(unionId, personId, clientX, clientY) {
+  // Add a NEW blank parent above a person. If they already have one known parent,
+  // the new person becomes that parent's partner (second parent); otherwise a new
+  // single-parent couple is created and the person is linked as its child.
+  function quickAddParent(personId) {
     if (readonly) return;
-    closeAddMenu();
-    const p = personById(personId);
-    const nm = p ? escapeHtml(shortName(p.name)) : "this person";
-    const items = [
-      { label: "＋ Sibling", sub: "another child of the same parents", act: () => quickAddChild(unionId) },
-      { label: "＋ Spouse / partner", sub: "a couple line for " + nm, act: () => quickAddSpouse(personId) },
-      { label: "＋ Child", sub: nm + "’s child", act: () => quickAddChildOf(personId) },
-    ];
-    const menu = document.createElement("div");
-    menu.id = "addMenu"; menu.className = "add-menu";
-    menu.innerHTML = items.map((it, i) => `<button type="button" data-i="${i}"><b>${it.label}</b><span>${it.sub}</span></button>`).join("");
-    document.body.appendChild(menu);
-    const r = menu.getBoundingClientRect();
-    const x = Math.max(8, Math.min(clientX, window.innerWidth - r.width - 8));
-    const y = Math.max(8, Math.min(clientY, window.innerHeight - r.height - 8));
-    menu.style.left = x + "px"; menu.style.top = y + "px";
-    menu.querySelectorAll("button").forEach((b) => (b.onclick = () => { const it = items[+b.getAttribute("data-i")]; closeAddMenu(); it.act(); }));
-    setTimeout(() => document.addEventListener("pointerdown", onAwayAddMenu, true), 0);
+    const p = personById(personId); if (!p) return;
+    pushUndo();
+    const par = addPerson({ name: "New parent", sex: "unknown" });
+    const pu = parentLinksOfPerson(personId).map((l) => unionById(l.union)).find(Boolean);
+    if (pu && pu.b == null && pu.a !== par.id) {
+      pu.b = par.id;                                   // fill the empty second-parent slot
+      const ax = posOf(pu.a); placeAt(par.id, ax.x + COLW, ax.y);
+    } else {
+      const u = addUnion(par.id, null, "married");
+      addChild(u.id, personId, "bio");
+      const pp = posOf(personId); placeAt(par.id, pp.x, pp.y - ROWH);
+    }
+    focusNewPerson(par, "Added parent — type their name and Save");
+  }
+
+  // Route a directional + (up/down/left/right) to the matching add action.
+  function addInDirection(personId, dir) {
+    if (dir === "up") return quickAddParent(personId);
+    if (dir === "down") return quickAddChildOf(personId);
+    return quickAddSpouse(personId, dir === "left" ? "left" : "right");
+  }
+  // One directional + : a big invisible hit-circle (so it's easy to click and
+  // bridges the gap from the node — no more "disappears as you reach for it") plus
+  // the small visible badge.
+  function dirPlus(personId, dir, x, y, label) {
+    const g = el("g", { class: "add-plus dir-" + dir, "data-person": personId, "data-dir": dir, transform: `translate(${x},${y})` });
+    g.appendChild(el("circle", { class: "add-plus-hit", r: 24, cx: 0, cy: 0 }));
+    g.appendChild(el("circle", { class: "add-plus-bg", r: 11, cx: 0, cy: 0 }));
+    g.appendChild(el("line", { class: "add-plus-mark", x1: -5, y1: 0, x2: 5, y2: 0 }));
+    g.appendChild(el("line", { class: "add-plus-mark", x1: 0, y1: -5, x2: 0, y2: 5 }));
+    g.appendChild(el("title", null, txt(label)));
+    return g;
   }
 
   function renderUnion(u) {
@@ -979,12 +976,8 @@
     }
 
     if (!kids.length) {
-      // Childless couple: a transparent stub below the couple makes a hover target,
-      // and the + adds their first child.
-      if (!readonly) {
-        gu.appendChild(el("line", { class: "hit", x1: midX, y1: dropTop, x2: midX, y2: dropTop + 40 }));
-        gu.appendChild(addPlus(u.id, midX, dropTop + 34, "Add a child"));
-      }
+      // Childless couple: nothing to draw below. (Add a child from either
+      // partner's "＋ child" handle.)
       gLinks.appendChild(gu);
       return;
     }
@@ -1005,17 +998,6 @@
     childTops.forEach((c) => {
       gu.appendChild(el("line", { class: "link" + (c.type === "adopted" ? " adopt" : ""), x1: c.x, y1: busY, x2: c.x, y2: c.top, style: c.type === "adopted" ? null : cstyle }));
     });
-    // Hover targets (wide transparent lines over the whole descent) and a + to
-    // add another child, placed right BESIDE the last child — so even a lone
-    // child clearly shows where to add a sibling.
-    if (!readonly) {
-      gu.appendChild(el("line", { class: "hit", x1: dropX, y1: dropTop, x2: dropX, y2: busY }));
-      gu.appendChild(el("line", { class: "hit", x1: minX, y1: busY, x2: maxX, y2: busY }));
-      childTops.forEach((c) => gu.appendChild(el("line", { class: "hit", x1: c.x, y1: busY, x2: c.x, y2: c.top })));
-      const rightKid = kids.reduce((r, k) => (posOf(k.p.id).x > posOf(r.p.id).x ? k : r), kids[0]);
-      const rp = posOf(rightKid.p.id);
-      gu.appendChild(addPlus(u.id, rp.x + HALF + 22, rp.y, "Add sibling / spouse / child", rightKid.p.id));
-    }
     gLinks.appendChild(gu);
   }
 
@@ -1158,9 +1140,10 @@
     const hb = e.target.closest && e.target.closest(".hidden-badge");
     if (hb) { openHiddenPopup(hb.getAttribute("data-anchor")); return; }
     const plus = e.target.closest && e.target.closest(".add-plus");
-    if (plus) {
-      const uid_ = plus.getAttribute("data-union"), pid_ = plus.getAttribute("data-person");
-      if (pid_) openAddMenu(uid_, pid_, e.clientX, e.clientY); else quickAddChild(uid_);
+    if (plus && !readonly) {
+      // Directional add: swallow the pointer so it can't also start a pan/drag.
+      try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
+      addInDirection(plus.getAttribute("data-person"), plus.getAttribute("data-dir"));
       return;
     }
     const personEl = e.target.closest && e.target.closest(".person");
@@ -1346,34 +1329,6 @@
     toast("Tidied up " + moved + " " + (moved === 1 ? "person" : "people") + " (Cmd+Z to undo)");
   }
   stage.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY); }, { passive: false });
-
-  // Hovering a person reveals the "+ add sibling" button beside their family — so
-  // even a lone child obviously shows where to add another child. (The + is on the
-  // couple's line group; a short hide-delay lets you move onto it without flicker.)
-  let plusRevealTimer = null;
-  const clearPlusReveal = () => gLinks.querySelectorAll(".union.reveal-plus").forEach((g) => g.classList.remove("reveal-plus"));
-  gNodes.addEventListener("pointerover", (e) => {
-    if (readonly) return;
-    const pe = e.target.closest && e.target.closest(".person"); if (!pe) return;
-    const pid = pe.getAttribute("data-id");
-    clearTimeout(plusRevealTimer); clearPlusReveal();
-    parentLinksOfPerson(pid).forEach((l) => {
-      const g = gLinks.querySelector('.union[data-union="' + l.union + '"]'); if (!g) return;
-      g.classList.add("reveal-plus");
-      // Slide the + beside the person you're hovering and aim it at them, so the
-      // menu's "spouse / child" act on the right person (not just the last child).
-      const plus = g.querySelector(".add-plus[data-person]");
-      if (plus && posOf(pid)) {
-        const pp = posOf(pid);
-        plus.setAttribute("transform", `translate(${pp.x + HALF + 22},${pp.y})`);
-        plus.setAttribute("data-person", pid);
-      }
-    });
-  });
-  gNodes.addEventListener("pointerout", (e) => {
-    const pe = e.target.closest && e.target.closest(".person"); if (!pe) return;
-    clearTimeout(plusRevealTimer); plusRevealTimer = setTimeout(clearPlusReveal, 240);
-  });
 
   /* ============================================================ FORMS */
   function selectPerson(id) {
@@ -1926,19 +1881,19 @@
         if (confirm(lines.join("\n"))) {
           pushUndo();
           const newIds = mergeExtraction(data);
-          // Client-side date backstop: parse the pasted obituary text right here
-          // and fill the subject's exact dates — so dates land even if the server
-          // (or its model) didn't return them. Subject = the existing person this
-          // obituary is "for", else the newly-added person named earliest in it.
-          if (text) {
-            let subj = forPerson;
-            if (!subj && newIds && newIds.length) {
-              const at = (id) => { const n = personById(id); return n ? text.toLowerCase().indexOf(n.name.trim().toLowerCase()) : -1; };
-              const ranked = newIds.map((id) => ({ id, i: at(id) })).filter((x) => x.i >= 0).sort((a, b) => a.i - b.i);
-              subj = personById((ranked[0] || { id: newIds[0] }).id);
-            }
-            if (subj) applyObitDates(subj, parseObitDates(text));
+          // Who is this obituary about? The existing person it's "for", else the
+          // newly-added person named earliest in the text.
+          let subj = forPerson;
+          if (!subj && text && newIds && newIds.length) {
+            const at = (id) => { const n = personById(id); return n ? text.toLowerCase().indexOf(n.name.trim().toLowerCase()) : -1; };
+            const ranked = newIds.map((id) => ({ id, i: at(id) })).filter((x) => x.i >= 0).sort((a, b) => a.i - b.i);
+            subj = personById((ranked[0] || { id: newIds[0] }).id);
           }
+          // Client-side date backstop: parse the pasted text and fill the subject's
+          // exact dates, so dates land even if the server didn't return them.
+          if (subj && text) applyObitDates(subj, parseObitDates(text));
+          // An obituary means its subject has passed away.
+          if (subj) subj.deceased = true;
           // If this obituary is for someone already in the tree, keep a copy of it
           // on their profile too (text or link).
           if (forPerson) {
@@ -2114,6 +2069,7 @@
       if (scrapedText) doc.text = scrapedText;   // durable, searchable copy of a photo/PDF's text
       if (!person.docs) person.docs = [];
       person.docs.push(doc);
+      person.deceased = true;   // attaching an obituary means they've passed away
       // A photo obituary — or a portrait pulled from a linked obituary page —
       // also becomes this person’s picture (unless they already have one).
       let setPic = false;
