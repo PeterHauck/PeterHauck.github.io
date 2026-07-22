@@ -16,6 +16,7 @@
 import { put, list } from "@vercel/blob";
 
 const TREE = "family-tree.json";
+const COMMENTS = "comments.json";   // { [personId]: [ {id, name, text, at} ] }
 
 async function readBody(req) {
   if (req.body) return typeof req.body === "string" ? JSON.parse(req.body) : req.body;
@@ -72,6 +73,20 @@ export default async function handler(req, res) {
     try { const { blobs } = await list({ prefix: TREE, token }); const b = blobs.find((x) => x.pathname === TREE); return b ? (Date.parse(b.uploadedAt) || 0) : 0; }
     catch (e) { return 0; }
   }
+  // Comments live in one small JSON blob, read/written only through this function
+  // (never exposed as a public URL) so they aren't world-readable.
+  async function readComments() {
+    try { const { blobs } = await list({ prefix: COMMENTS, token }); const b = blobs.find((x) => x.pathname === COMMENTS); if (!b) return {}; const r = await fetch(b.downloadUrl || b.url); return JSON.parse((await r.text()) || "{}") || {}; }
+    catch (e) { return {}; }
+  }
+  // Store comments PRIVATE where the store allows it (they're only ever read back
+  // through this function), falling back to public if the store is public-only.
+  async function putComments(map) {
+    const body = JSON.stringify(map);
+    const base = { token, addRandomSuffix: false, contentType: "application/json", allowOverwrite: true };
+    try { return await put(COMMENTS, body, { ...base, access: "private" }); }
+    catch (e) { return await put(COMMENTS, body, { ...base, access: "public" }); }
+  }
 
   try {
     // Lightweight freshness probe: when was the cloud tree last written? Lets a
@@ -82,6 +97,16 @@ export default async function handler(req, res) {
       const b = blobs.find((x) => x.pathname === TREE);
       res.setHeader("Cache-Control", "no-store");
       res.status(200).json({ exists: !!b, savedAt: b ? (Date.parse(b.uploadedAt) || 0) : 0 });
+      return;
+    }
+
+    // Comments for a person (or all). Open to anyone with the link (family view).
+    if (req.method === "GET" && req.query.action === "comments") {
+      const all = await readComments();
+      res.setHeader("Cache-Control", "no-store");
+      const pid = req.query.personId;
+      if (pid) { res.status(200).json({ comments: Array.isArray(all[pid]) ? all[pid] : [] }); return; }
+      res.status(200).json({ comments: all });
       return;
     }
 
@@ -103,8 +128,34 @@ export default async function handler(req, res) {
 
     if (req.method === "POST") {
       const body = await readBody(req);
-      if (passcode && (body.passcode || "") !== passcode) { res.status(401).json({ error: "Wrong import passcode." }); return; }
       const action = body.action || "saveTree";
+      // Anyone with view access can leave a comment; everything else (saving the
+      // tree, records, deleting comments) is owner-only and needs the passcode.
+      const openAction = action === "addComment";
+      if (!openAction && passcode && (body.passcode || "") !== passcode) { res.status(401).json({ error: "Wrong import passcode." }); return; }
+
+      if (action === "addComment") {
+        const personId = (body.personId || "").toString();
+        const name = (body.name || "").toString().trim().slice(0, 60);
+        const text = (body.text || "").toString().trim().slice(0, 2000);
+        if (!personId || !name || !text) { res.status(400).json({ error: "Need a person, a name, and a comment." }); return; }
+        const all = await readComments();
+        const listp = Array.isArray(all[personId]) ? all[personId] : [];
+        if (listp.length >= 500) { res.status(400).json({ error: "Too many comments here." }); return; }
+        const comment = { id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36), name, text, at: Date.now() };
+        listp.push(comment); all[personId] = listp;
+        await putComments(all);
+        res.status(200).json({ ok: true, comment });
+        return;
+      }
+      if (action === "deleteComment") {
+        const personId = (body.personId || "").toString();
+        const id = (body.id || "").toString();
+        const all = await readComments();
+        if (Array.isArray(all[personId])) { all[personId] = all[personId].filter((c) => c.id !== id); await putComments(all); }
+        res.status(200).json({ ok: true });
+        return;
+      }
 
       if (action === "saveTree") {
         const payload = (body.payload || "").toString();

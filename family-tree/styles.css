@@ -547,6 +547,17 @@ button.btn.tiny.danger { color: var(--divorce); border-color: var(--divorce); }
 .pcard-notes-input { width: 100%; box-sizing: border-box; border: 1px solid var(--panel-border); border-radius: 8px; padding: 8px; font: inherit; font-size: 14px; background: var(--paper); color: var(--ink); resize: vertical; }
 .pcard-notes-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 .pcard-saved { font-size: 12px; color: var(--muted); }
+.pcard-comment { position: relative; padding: 8px 0; border-bottom: 1px solid var(--panel-border); }
+.pcard-comment:last-of-type { border-bottom: none; }
+.pcard-cmeta { font-size: 12px; color: var(--muted); }
+.pcard-cmeta b { color: var(--ink); font-size: 13px; }
+.pcard-cbody { font-size: 14px; margin-top: 2px; white-space: pre-wrap; word-wrap: break-word; }
+.pcard-cdel { position: absolute; top: 6px; right: 0; border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; padding: 2px 4px; }
+.pcard-cdel:hover { color: var(--divorce); }
+.pcard-comment-new { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.pcard-cname, .pcard-ctext { width: 100%; box-sizing: border-box; border: 1px solid var(--panel-border); border-radius: 8px; padding: 8px; font: inherit; font-size: 14px; background: var(--paper); color: var(--ink); }
+.pcard-ctext { resize: vertical; }
+.pcard-comment-new .btn { align-self: flex-end; }
 button.btn.small { padding: 5px 9px; font-size: 12px; }
 
 /* remove the 300ms tap delay & double-tap zoom on controls */
