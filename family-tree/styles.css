@@ -524,6 +524,31 @@ button.btn.tiny.danger { color: var(--divorce); border-color: var(--divorce); }
 .doc-view img + .scraped-label, .doc-view iframe + .scraped-label { margin-top: 12px; }
 .doc-view .scraped-label { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 6px; }
 
+/* read-only profile card (opened by tapping a person on mobile) — a bottom sheet */
+.pcard-back { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; justify-content: center; }
+.pcard { background: var(--panel); width: 100%; max-width: 560px; max-height: 88vh; overflow-y: auto; border-radius: 16px 16px 0 0; box-shadow: var(--shadow); padding: 16px 16px calc(20px + env(safe-area-inset-bottom)); }
+.pcard-head { display: flex; align-items: flex-start; gap: 12px; }
+.pcard-photo { width: 60px; height: 60px; flex: none; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 28px; background: var(--paper); border: 2px solid var(--panel-border); border-radius: 12px; }
+.pcard-photo.f { border-radius: 50%; }
+.pcard-photo img { width: 100%; height: 100%; object-fit: cover; }
+.pcard-photo.deceased { opacity: .7; }
+.pcard-headtext { flex: 1; min-width: 0; padding-top: 2px; }
+.pcard-headtext h2 { margin: 0; font-size: 18px; line-height: 1.2; }
+.pcard-dates { font-size: 13px; color: var(--muted); margin-top: 3px; }
+.pcard-x { border: none; background: transparent; font-size: 17px; color: var(--muted); cursor: pointer; padding: 4px 6px; }
+.pcard-body { margin-top: 6px; }
+.pcard-section { padding: 12px 0; border-top: 1px solid var(--panel-border); }
+.pcard-section h3 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+.pcard-rel { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.pcard-relname { flex: 1; min-width: 0; text-align: left; border: none; background: transparent; color: var(--accent-2); font-size: 14px; font-weight: 600; cursor: pointer; padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcard-rellabel { flex: none; font-size: 12px; color: var(--muted); }
+.pcard-doc { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0; font-size: 14px; }
+.pcard-subhint { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.pcard-notes-input { width: 100%; box-sizing: border-box; border: 1px solid var(--panel-border); border-radius: 8px; padding: 8px; font: inherit; font-size: 14px; background: var(--paper); color: var(--ink); resize: vertical; }
+.pcard-notes-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+.pcard-saved { font-size: 12px; color: var(--muted); }
+button.btn.small { padding: 5px 9px; font-size: 12px; }
+
 /* remove the 300ms tap delay & double-tap zoom on controls */
 button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #panelToggle, #hiddenChip { touch-action: manipulation; }
 
@@ -545,29 +570,18 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
   }
   .panel-body { padding-bottom: 80px; }
 
-  /* Mobile is for VIEWING first: the toolbar collapses to a single ☰ button.
-     Tap it to reveal the tools (they wrap into a tidy grid); tap again to hide. */
+  /* Mobile is VIEW-ONLY: keep only Fit + the zoom cluster; hide every editing
+     tool and the editor panel. Tap a person to open their read-only profile
+     card (relationships, dates, records, notes & comments). */
   #toolbar {
     top: calc(10px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left));
     padding: 5px; gap: 5px;
-    flex-wrap: wrap; max-width: calc(4 * 52px + 20px);
   }
-  #tbMenu { display: flex; }
   #toolbar button { width: 44px; height: 44px; font-size: 20px; }
-  #toolbar .zoomlabel { width: 38px; font-size: 12px; }
-  /* pinch handles zoom on touch, so drop the zoom cluster from the mobile bar */
-  #toolbar .sep, #toolbar #tbZoomIn, #toolbar #tbZoomOut, #toolbar .zoomlabel { display: none; }
-  #tbMenu.active { background: var(--accent); color: #fff; }
-  #peopleMenu { top: calc(64px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left)); width: min(320px, calc(100vw - 20px)); }
-  #panelToggle {
-    top: calc(10px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right));
-    width: 48px; height: 48px; font-size: 21px;
-  }
-  /* keep the "Show all" chip clear of the toolbar — move it to the bottom */
-  #hiddenChip {
-    top: auto; bottom: calc(12px + env(safe-area-inset-bottom));
-    left: 50%; transform: translateX(-50%);
-  }
+  #toolbar .zoomlabel { width: 42px; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+  #tbMenu, #tbImport, #tbRearrange, #tbTidy, #toolbar .sep,
+  #panelToggle, #peopleMenu, #panel, #hiddenChip { display: none !important; }
+  #tbFit, #tbZoomIn, #tbZoomOut { display: flex; }
 
   /* legend is compact and starts collapsed on phones (tap to expand) */
   #legend {

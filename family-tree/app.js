@@ -1401,8 +1401,9 @@
         } else { selection = new Set(); }
         marquee = null; updateMarquee(); render();
       }
-      // a tap on a person (no real movement) selects them
-      else if (drag && drag.mode === "pan" && drag.tapId && !drag.moved) { selectPerson(drag.tapId); }
+      // a tap on a person (no real movement): on mobile, open their read-only
+      // profile card; on desktop, select into the editor.
+      else if (drag && drag.mode === "pan" && drag.tapId && !drag.moved) { if (isMobileView()) openProfileCard(drag.tapId); else selectPerson(drag.tapId); }
       // double-tap on empty canvas zooms in on that spot (touch only)
       if (e.pointerType !== "mouse" && drag && drag.mode === "pan" && !drag.tapId && !drag.moved) {
         if (e.timeStamp - lastTap < 300) { zoomAt(1.6, e.clientX, e.clientY); lastTap = 0; }
@@ -2754,6 +2755,98 @@
     a.href = docSrc(doc);
     a.download = base + (doc.kind === "pdf" ? ".pdf" : "");
     a.click();
+  }
+
+  /* ================================================= read-only profile card (mobile) */
+  const isMobileView = () => !!(window.matchMedia && window.matchMedia("(max-width: 720px)").matches);
+  // The "owner" is a device holding the import passcode (the secret only used to
+  // save the tree). Private notes are shown/edited only for the owner.
+  const isOwner = () => { try { return !!(localStorage.getItem("familyTree.importPass") || "").trim(); } catch (e) { return false; } };
+
+  function personDatesLine(p) {
+    const parts = [];
+    if (p.birthDate) parts.push("Born " + fmtDate(p.birthDate));
+    else if (p.birth != null) parts.push("Born " + p.birth);
+    if (p.deathDate) parts.push("Died " + fmtDate(p.deathDate));
+    else if (p.death != null) parts.push("Died " + p.death);
+    else if (p.deceased) parts.push("Deceased");
+    return parts.join("  ·  ");
+  }
+  function profileRelationships(pid) {
+    const groups = [];
+    const add = (title, items) => { if (items.length) groups.push({ title, items }); };
+    const parents = [];
+    parentLinksOfPerson(pid).forEach((l) => { const u = unionById(l.union); if (!u) return; [u.a, u.b].forEach((par) => { if (par != null && personById(par)) parents.push({ id: par, label: nounParent(personById(par).sex, l.type === "adopted") }); }); });
+    add("Parents", parents);
+    add("Siblings", siblingsOf(pid).map((sid) => ({ id: sid, label: nounSibling(personById(sid).sex) })));
+    const partners = [];
+    unionsOfPerson(pid).forEach((u) => { const o = u.a === pid ? u.b : u.a; if (o != null && personById(o)) partners.push({ id: o, label: nounPartner(personById(o).sex, u.status || "married") }); });
+    add(partners.length > 1 ? "Partners" : "Partner", partners);
+    const kids = [];
+    unionsOfPerson(pid).forEach((u) => childLinksOfUnion(u.id).forEach((l) => { if (personById(l.child)) kids.push({ id: l.child, label: nounChild(personById(l.child).sex, l.type === "adopted") }); }));
+    add(kids.length > 1 ? "Children" : "Child", kids);
+    return groups;
+  }
+  function closeProfileCard() { const b = document.getElementById("profileCardBack"); if (b) b.remove(); }
+  function openProfileCard(id) {
+    const p = personById(id); if (!p) return;
+    closeProfileCard();
+    const back = document.createElement("div"); back.id = "profileCardBack"; back.className = "pcard-back";
+    const card = document.createElement("div"); card.className = "pcard"; back.appendChild(card);
+    // header
+    const head = document.createElement("div"); head.className = "pcard-head";
+    const av = document.createElement("div"); av.className = "pcard-photo " + (p.sex === "female" ? "f" : p.sex === "male" ? "m" : "u");
+    if (p.photo) { const img = document.createElement("img"); img.src = p.photo; av.appendChild(img); } else av.textContent = "👤";
+    if (isDeceased(p)) av.classList.add("deceased");
+    head.appendChild(av);
+    const hbox = document.createElement("div"); hbox.className = "pcard-headtext";
+    const h = document.createElement("h2"); h.textContent = p.name || "Unnamed"; hbox.appendChild(h);
+    const dline = personDatesLine(p); if (dline) { const d = document.createElement("div"); d.className = "pcard-dates"; d.textContent = dline; hbox.appendChild(d); }
+    head.appendChild(hbox);
+    const x = document.createElement("button"); x.className = "pcard-x"; x.setAttribute("aria-label", "Close"); x.textContent = "✕"; x.onclick = closeProfileCard; head.appendChild(x);
+    card.appendChild(head);
+    const body = document.createElement("div"); body.className = "pcard-body"; card.appendChild(body);
+    const section = (title, cls) => { const s = document.createElement("div"); s.className = "pcard-section" + (cls ? " " + cls : ""); if (title) { const t = document.createElement("h3"); t.textContent = title; s.appendChild(t); } body.appendChild(s); return s; };
+    // relationships (read-only, tap a name to jump)
+    const groups = profileRelationships(id);
+    if (groups.length) {
+      const s = section("Relationships");
+      groups.forEach((g) => g.items.forEach((it) => {
+        const row = document.createElement("div"); row.className = "pcard-rel";
+        const nm = document.createElement("button"); nm.className = "pcard-relname"; nm.textContent = (personById(it.id) || {}).name || "?";
+        nm.onclick = () => { const other = it.id; closeProfileCard(); if (!isHidden(other)) centerOn(other); openProfileCard(other); };
+        const lb = document.createElement("span"); lb.className = "pcard-rellabel"; lb.textContent = it.label;
+        row.appendChild(nm); row.appendChild(lb); s.appendChild(row);
+      }));
+    }
+    // records / obituary
+    const docs = (p.docs || []).filter(Boolean);
+    if (docs.length) {
+      const s = section(docs.length > 1 ? "Records" : "Record");
+      docs.forEach((doc) => {
+        const row = document.createElement("div"); row.className = "pcard-doc";
+        const t = document.createElement("span"); t.textContent = doc.title || "Record";
+        const v = document.createElement("button"); v.className = "btn small"; v.textContent = "View"; v.onclick = () => openDocViewer(doc);
+        row.appendChild(t); row.appendChild(v); s.appendChild(row);
+      });
+    }
+    // Notes — private to the owner
+    if (isOwner()) {
+      const s = section("Notes", "pcard-notes");
+      const hint = document.createElement("div"); hint.className = "pcard-subhint"; hint.textContent = "Private — only you can see these."; s.appendChild(hint);
+      const ta = document.createElement("textarea"); ta.className = "pcard-notes-input"; ta.rows = 4; ta.placeholder = "Add a private note about " + (p.first || p.name || "them") + "…"; ta.value = p.notes || ""; s.appendChild(ta);
+      const bar = document.createElement("div"); bar.className = "pcard-notes-bar";
+      const savedMsg = document.createElement("span"); savedMsg.className = "pcard-saved";
+      const saveBtn = document.createElement("button"); saveBtn.className = "btn primary small"; saveBtn.textContent = "Save note";
+      saveBtn.onclick = () => {
+        const v = ta.value.trim(); if (v) p.notes = v; else delete p.notes;
+        save(); try { cloudSaveTree(false); } catch (e) {}   // push so the note syncs to your other devices
+        savedMsg.textContent = "Saved ✓"; setTimeout(() => { savedMsg.textContent = ""; }, 2500);
+      };
+      bar.appendChild(savedMsg); bar.appendChild(saveBtn); s.appendChild(bar);
+    }
+    back.addEventListener("click", (e) => { if (e.target === back) closeProfileCard(); });
+    document.body.appendChild(back);
   }
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
