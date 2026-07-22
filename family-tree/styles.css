@@ -251,8 +251,14 @@ button.btn.danger { color: var(--divorce); }
 #legend .lgbody { display: contents; }             /* items flow in the same horizontal row */
 #legend .lg { display:flex; align-items:center; gap:6px; margin:0; white-space:nowrap; }
 #legend svg { width: 30px; height: 20px; flex:0 0 30px; }
+#legend .toggle { cursor:pointer; color:var(--muted); order: 99; font-size: 14px; line-height: 1; }
+/* collapsed: a small centred "pull-up" pill at the bottom, with an up chevron */
+#legend.min {
+  left: 50%; right: auto; transform: translateX(-50%);
+  cursor: pointer; padding: 6px 18px; gap: 6px;
+}
 #legend.min .lgbody { display:none; }
-#legend .toggle { cursor:pointer; color:var(--muted); order: 99; }
+#legend.min .toggle { order: -1; }   /* chevron before "Legend" → "⌃ Legend" */
 
 #panelToggle {
   top: 14px; right: 14px; width: 40px; height: 40px; border-radius: 10px;
