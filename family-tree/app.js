@@ -3515,23 +3515,31 @@
 
   /* ============================================================ LOCK SCREEN */
   function showLock(intoEditor, payload) {
-    const data = payload || window.FAMILY_TREE_DATA;
+    // Try the entered password against EVERY copy we have — the live cloud copy
+    // and any committed family-data.js snapshot — and open whichever it unlocks.
+    // This keeps your password working even if one copy is newer, older, or was
+    // saved with different settings.
+    const committed = (typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20) ? window.FAMILY_TREE_DATA : null;
+    const candidates = [];
+    if (payload) candidates.push({ src: "cloud", data: payload });
+    if (committed && committed !== payload) candidates.push({ src: "committed", data: committed });
+    if (!candidates.length && committed) candidates.push({ src: "committed", data: committed });
     const lock = $("#lock"); lock.hidden = false;
-    $("#lockForm").onsubmit = (e) => {
+    $("#lockForm").onsubmit = async (e) => {
       e.preventDefault();
       const pw = $("#lockPass").value;
       $("#lockErr").textContent = "";
-      decryptState(pw, data).then((obj) => {
-        loadObject(obj);
-        lock.hidden = true;
-        try { localStorage.setItem("familyTree.familyPass", pw); } catch (e) {}
-        // Mark this device as in sync with the cloud so it won't immediately
-        // re-pull the copy it just unlocked.
-        cloudTreeInfo().then((info) => { if (info && info.savedAt) { try { localStorage.setItem("familyTree.cloudSavedAt", String(info.savedAt)); } catch (e) {} } });
-        if (intoEditor) { readonly = false; save(); }
-        else enterReadonly();
-        boot();
-      }).catch(() => { $("#lockErr").textContent = "Wrong password — try again."; });
+      let obj = null, from = null;
+      for (const c of candidates) { try { obj = await decryptState(pw, c.data); from = c.src; break; } catch (_) {} }
+      if (!obj) { $("#lockErr").textContent = "Wrong password — try again."; return; }
+      loadObject(obj);
+      lock.hidden = true;
+      try { localStorage.setItem("familyTree.familyPass", pw); } catch (e) {}
+      // Only claim we're in sync with the cloud if the cloud copy is what opened.
+      if (from === "cloud") cloudTreeInfo().then((info) => { if (info && info.savedAt) { try { localStorage.setItem("familyTree.cloudSavedAt", String(info.savedAt)); } catch (e) {} } });
+      if (intoEditor) { readonly = false; save(); }
+      else enterReadonly();
+      boot();
     };
     $("#lockPass").focus();
   }
