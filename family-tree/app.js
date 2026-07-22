@@ -707,6 +707,52 @@
     if (m && MONTHNUM[m[2].toLowerCase()]) return mkISO(+m[3], MONTHNUM[m[2].toLowerCase()], +m[1]);
     return null;
   }
+
+  // Find the first full date anywhere in a snippet (written-out, M/D/YYYY, or ISO).
+  function firstDateIn(s) {
+    s = String(s || "");
+    let m = s.match(/([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})/);   // Month D, YYYY
+    if (m && MONTHNUM[m[1].toLowerCase()]) return mkISO(+m[3], MONTHNUM[m[1].toLowerCase()], +m[2]);
+    m = s.match(/(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\.?,?\s+(\d{4})/);        // D Month YYYY
+    if (m && MONTHNUM[m[2].toLowerCase()]) return mkISO(+m[3], MONTHNUM[m[2].toLowerCase()], +m[1]);
+    m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);                                     // M/D/YYYY
+    if (m) return mkISO(+m[3], +m[1], +m[2]);
+    m = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);                                       // YYYY-MM-DD
+    if (m) return mkISO(+m[1], +m[2], +m[3]);
+    return null;
+  }
+  // Pull a person's birth & death dates straight out of obituary TEXT, in the
+  // browser — no server, no API cost. Obituaries phrase these very consistently:
+  // a "born … <date>" clause, a "died / passed away … <date>" clause, and/or a
+  // "<date> – <date>" header. Returns ISO dates + years ("" when not stated). We
+  // never guess a day/month that isn't written; year-only stays year-only.
+  const DATE_TOKEN = "(?:[A-Za-z]{3,9}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?,?\\s+\\d{4}|\\d{1,2}\\/\\d{1,2}\\/\\d{4}|\\d{4}-\\d{1,2}-\\d{1,2})";
+  function clauseDate(text, keywords) {
+    // keyword … up to ~60 chars of anything ("on", "peacefully at home", etc.) … first date
+    const re = new RegExp("(?:" + keywords + ")[\\s\\S]{0,60}?(" + DATE_TOKEN + ")", "i");
+    const m = text.match(re);
+    return m ? firstDateIn(m[1]) : null;
+  }
+  function parseObitDates(text) {
+    text = String(text || "").replace(/\s+/g, " ");
+    const out = { birthDate: "", deathDate: "", birthYear: "", deathYear: "" };
+    if (!text) return out;
+    // 1) explicit clauses take priority (most reliable, subject-specific)
+    let birth = clauseDate(text, "born(?:\\s+on)?|date of birth|birth date");
+    let death = clauseDate(text, "died|passed away|passed on|passed|entered into (?:rest|eternal rest)|departed this life|date of death|went home to|called home|went to be with");
+    // 2) a "<date> – <date>" life-span header fills any gap
+    const range = new RegExp("(" + DATE_TOKEN + ")\\s*[\\u2010-\\u2015~-]\\s*(" + DATE_TOKEN + ")");
+    const rm = text.match(range);
+    if (rm) { if (!birth) birth = firstDateIn(rm[1]); if (!death) death = firstDateIn(rm[2]); }
+    if (birth) { out.birthDate = birth; out.birthYear = birth.slice(0, 4); }
+    if (death) { out.deathDate = death; out.deathYear = death.slice(0, 4); }
+    // 3) year-only life span "(1948 – 2025)" when no full dates were found
+    if (!out.birthYear || !out.deathYear) {
+      const yr = text.match(/\b(1[6-9]\d{2}|20\d{2})\s*[‐-―~-]\s*(1[6-9]\d{2}|20\d{2})\b/);
+      if (yr) { if (!out.birthYear) out.birthYear = yr[1]; if (!out.deathYear) out.deathYear = yr[2]; }
+    }
+    return out;
+  }
   function fmtDate(iso) {
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ""); if (!m) return iso || "";
     const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -1879,7 +1925,20 @@
         if (links) lines.push("", `…and ${links} relationship link${links === 1 ? "" : "s"}.`);
         if (confirm(lines.join("\n"))) {
           pushUndo();
-          mergeExtraction(data);
+          const newIds = mergeExtraction(data);
+          // Client-side date backstop: parse the pasted obituary text right here
+          // and fill the subject's exact dates — so dates land even if the server
+          // (or its model) didn't return them. Subject = the existing person this
+          // obituary is "for", else the newly-added person named earliest in it.
+          if (text) {
+            let subj = forPerson;
+            if (!subj && newIds && newIds.length) {
+              const at = (id) => { const n = personById(id); return n ? text.toLowerCase().indexOf(n.name.trim().toLowerCase()) : -1; };
+              const ranked = newIds.map((id) => ({ id, i: at(id) })).filter((x) => x.i >= 0).sort((a, b) => a.i - b.i);
+              subj = personById((ranked[0] || { id: newIds[0] }).id);
+            }
+            if (subj) applyObitDates(subj, parseObitDates(text));
+          }
           // If this obituary is for someone already in the tree, keep a copy of it
           // on their profile too (text or link).
           if (forPerson) {
@@ -2176,54 +2235,35 @@
       .map((d) => (d ? (d.text || (d.kind === "text" ? d.content : "")) : ""))
       .filter(Boolean).join("\n\n---\n\n").trim();
   }
-  // Retroactively fill in exact birth/death dates from every saved obituary.
-  // Only fills gaps — never overwrites a date already on a profile — and never
-  // guesses (year-only obituaries leave the exact date blank).
-  async function backfillDatesFromObits() {
-    if (readonly) return;
-    const targets = state.persons.filter((p) => (!p.birthDate || !p.deathDate) && obitTextOf(p));
-    if (!targets.length) { toast("No saved obituaries with text to read dates from"); return; }
-    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
-    if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
-    if (!pass) return;
-    try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
-    const btn = $("#backfillDatesBtn"); if (btn) btn.disabled = true;
-    let filled = 0;
-    try {
-      for (let i = 0; i < targets.length; i++) {
-        const p = targets[i];
-        if (btn) btn.textContent = "Reading dates… (" + (i + 1) + " of " + targets.length + ")";
-        let r; try { r = await callDates({ passcode: pass, name: p.name, text: obitTextOf(p) }); } catch (e) { if (/passcode/i.test(e.message || "")) throw e; continue; }
-        const b = normDate(r.birthDate), dd = normDate(r.deathDate);
-        let changed = false;
-        if (!p.birthDate && b) { p.birthDate = b; if (p.birth == null) p.birth = num(b.slice(0, 4)); changed = true; }
-        if (!p.deathDate && dd) { p.deathDate = dd; if (p.death == null) p.death = num(dd.slice(0, 4)); changed = true; }
-        // fill a year-only gap when the obituary gives just the year
-        if (p.birth == null && r.birthYear && num(r.birthYear)) { p.birth = num(r.birthYear); changed = true; }
-        if (p.death == null && r.deathYear && num(r.deathYear)) { p.death = num(r.deathYear); changed = true; }
-        if (changed) { filled++; save(); }
-      }
-      toast(filled ? ("Filled dates for " + filled + " " + (filled === 1 ? "person" : "people")) : "No new dates found in the saved obituaries");
-    } catch (e) {
-      toast((e.message || "Stopped") + (filled ? " — filled " + filled + " first" : ""));
-    } finally {
-      if (btn) { btn.disabled = false; btn.textContent = "📅 Fill dates from saved obituaries"; }
-      const cur = personById(selectedId); if (cur) fillPersonForm(cur);
-      render();
-    }
+  // Fill a person's date gaps from parsed obituary results ({birthDate, deathDate,
+  // birthYear, deathYear}). Gap-only (never overwrites) and guarded: an exact
+  // date is only accepted if its year matches any year already on the profile —
+  // so a relative's date mentioned in the same obituary can't land on the wrong
+  // person. Returns true if anything changed.
+  function applyObitDates(p, r) {
+    if (!p || !r) return false;
+    let changed = false;
+    const b = normDate(r.birthDate), dd = normDate(r.deathDate);
+    const yearOk = (existing, iso) => existing == null || existing === +iso.slice(0, 4);
+    if (!p.birthDate && b && yearOk(p.birth, b)) { p.birthDate = b; if (p.birth == null) p.birth = num(b.slice(0, 4)); changed = true; }
+    if (!p.deathDate && dd && yearOk(p.death, dd)) { p.deathDate = dd; if (p.death == null) p.death = num(dd.slice(0, 4)); changed = true; }
+    if (p.birth == null && r.birthYear && num(r.birthYear)) { p.birth = num(r.birthYear); changed = true; }
+    if (p.death == null && r.deathYear && num(r.deathYear)) { p.death = num(r.deathYear); changed = true; }
+    return changed;
   }
-
-  async function callDates(payload) {
-    let res;
-    try { res = await fetch("api/dates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); }
-    catch (e) { throw new Error("Couldn’t reach the date-reading service."); }
-    if (!res.ok) {
-      let msg = "Reading dates failed (" + res.status + ").";
-      try { msg = (await res.json()).error || msg; } catch (e) {}
-      if (res.status === 404) msg = "Reading dates from obituaries needs the Vercel site.";
-      throw new Error(msg);
-    }
-    return res.json();
+  // Retroactively fill in exact birth/death dates from every saved obituary —
+  // parsed right here in the browser (no server, no passcode, no API cost).
+  // Only fills gaps; never overwrites a date you've entered.
+  function backfillDatesFromObits() {
+    if (readonly) return;
+    const targets = state.persons.filter((p) => (!p.birthDate || !p.deathDate || p.birth == null || p.death == null) && obitTextOf(p));
+    if (!targets.length) { toast("No saved obituaries with text to read dates from"); return; }
+    let filled = 0;
+    targets.forEach((p) => { if (applyObitDates(p, parseObitDates(obitTextOf(p)))) filled++; });
+    if (filled) save();
+    const cur = personById(selectedId); if (cur) fillPersonForm(cur);
+    render();
+    toast(filled ? ("Filled dates for " + filled + " " + (filled === 1 ? "person" : "people") + " from their obituaries") : "No new dates found in the saved obituaries");
   }
 
   async function callTranscribe(payload) {
