@@ -67,20 +67,37 @@ export default async function handler(req, res) {
     try { return await put(pathname, body, { ...base, access: "public" }); }
     catch (ePub) { try { return await put(pathname, body, { ...base, access: "private" }); } catch (ePriv) { throw ePub; } }
   }
+  // The tree blob's server-set write time — the authority for "is the cloud newer?"
+  async function treeSavedAt() {
+    try { const { blobs } = await list({ prefix: TREE, token }); const b = blobs.find((x) => x.pathname === TREE); return b ? (Date.parse(b.uploadedAt) || 0) : 0; }
+    catch (e) { return 0; }
+  }
 
   try {
+    // Lightweight freshness probe: when was the cloud tree last written? Lets a
+    // device decide whether the cloud has newer data than its local copy WITHOUT
+    // downloading (or decrypting) the whole tree.
+    if (req.method === "GET" && req.query.action === "treeInfo") {
+      const { blobs } = await list({ prefix: TREE, token });
+      const b = blobs.find((x) => x.pathname === TREE);
+      res.setHeader("Cache-Control", "no-store");
+      res.status(200).json({ exists: !!b, savedAt: b ? (Date.parse(b.uploadedAt) || 0) : 0 });
+      return;
+    }
+
     if (req.method === "GET" && (req.query.action || "getTree") === "getTree") {
       const { blobs } = await list({ prefix: TREE, token });
       const b = blobs.find((x) => x.pathname === TREE);
       if (!b) { res.status(404).json({ error: "No saved tree in the cloud yet." }); return; }
       const url = b.downloadUrl || b.url;   // downloadUrl works for private blobs too
+      const savedAt = Date.parse(b.uploadedAt) || 0;
       res.setHeader("Cache-Control", "no-store");
       // A big tree would blow the function's ~4.5MB response limit — hand back the
       // blob URL and let the browser fetch it directly (Blob has no size cap).
-      if ((b.size || 0) > 3.5 * 1024 * 1024) { res.status(200).json({ url }); return; }
+      if ((b.size || 0) > 3.5 * 1024 * 1024) { res.status(200).json({ url, savedAt }); return; }
       const r = await fetch(url);
       const payload = await r.text();
-      res.status(200).json({ payload, url });
+      res.status(200).json({ payload, url, savedAt });
       return;
     }
 
@@ -93,7 +110,7 @@ export default async function handler(req, res) {
         const payload = (body.payload || "").toString();
         if (!payload || payload.length > 30 * 1024 * 1024) { res.status(400).json({ error: "Nothing to save (or too large)." }); return; }
         await putBlob(TREE, payload, "text/plain");
-        res.status(200).json({ ok: true });
+        res.status(200).json({ ok: true, savedAt: await treeSavedAt() });
         return;
       }
 
@@ -123,7 +140,7 @@ export default async function handler(req, res) {
           combined += await r.text();
         }
         await putBlob(TREE, combined, "text/plain");
-        res.status(200).json({ ok: true });
+        res.status(200).json({ ok: true, savedAt: await treeSavedAt() });
         return;
       }
 
