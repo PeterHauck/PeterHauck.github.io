@@ -24,11 +24,28 @@ async function readBody(req) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 
+// Find the Blob token. Vercel names it BLOB_READ_WRITE_TOKEN by default, but a
+// store connected under a custom name gets <PREFIX>_BLOB_READ_WRITE_TOKEN — accept
+// either so it works however the store was named.
+function blobToken() {
+  if (process.env.BLOB_READ_WRITE_TOKEN) return process.env.BLOB_READ_WRITE_TOKEN;
+  for (const k of Object.keys(process.env)) if (/BLOB_READ_WRITE_TOKEN$/.test(k) && process.env[k]) return process.env[k];
+  return null;
+}
+
 export default async function handler(req, res) {
   const passcode = process.env.IMPORT_PASSCODE;
-  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  const token = blobToken();
+
+  // Diagnostic: tells you (without revealing secrets) what the server can see —
+  // visit /api/store?action=status to check your setup.
+  if (req.method === "GET" && req.query.action === "status") {
+    res.status(200).json({ blobStoreConnected: !!token, importPasscodeSet: !!passcode });
+    return;
+  }
+
   if (!token) {
-    res.status(503).json({ error: "Cloud save isn't set up yet. In your Vercel project, go to Storage → Create → Blob — that adds the storage automatically." });
+    res.status(503).json({ error: "Cloud save isn't set up yet — the server can't see a Blob store. In Vercel: create a Blob store, make sure it's connected to THIS project, then redeploy (env vars only apply to new deployments)." });
     return;
   }
 
