@@ -2126,6 +2126,36 @@
   function todayStr() { return new Date().toISOString().slice(0, 10); }
   function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ""); } catch (e) { return "link"; } }
 
+  // Where a record's file lives for display/download: an embedded data-URL
+  // (doc.content) OR a file committed to the repo (doc.path, served next to the
+  // page). Externalising the binary to doc.path is what keeps the tree small so
+  // it scales to any number of uploads.
+  const docSrc = (doc) => (doc && (doc.content || (doc.path ? doc.path : "")));
+  const extFor = (mt) => (mt === "application/pdf" ? "pdf" : mt === "image/png" ? "png" : mt === "image/webp" ? "webp" : mt === "image/gif" ? "gif" : "jpg");
+  function shrinkImageDataUrl(dataUrl, max) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => { try { resolve(downscale(img, max)); } catch (e) { resolve(dataUrl); } };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+  }
+  // Commit a record's binary to the repo as its own file and point the doc at it
+  // (clearing the in-tree copy). Returns true on success; false means keep it
+  // embedded (repo not configured / unreachable — nothing is lost either way).
+  async function storeRecordBinary(doc, dataUrl, pass) {
+    const m = /^data:([^;]+);base64,(.*)$/.exec(dataUrl || ""); if (!m) return false;
+    const mt = m[1], b64 = m[2];
+    const path = "records/" + doc.id + "." + extFor(mt);
+    try {
+      const res = await fetch("api/save", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ passcode: pass, path, encoding: "base64", content: b64, message: "Add obituary record " + doc.id }) });
+      if (!res.ok) return false;
+      doc.path = path; doc.mediaType = mt; delete doc.content;
+      return true;
+    } catch (e) { return false; }
+  }
+
   function openAttachModal(personId) {
     const person = personById(personId); if (!person) return;
     const obitTitle = person.name + "’s Obituary";
@@ -2197,16 +2227,33 @@
 
       const doc = { id: uid(), title: obitTitle, url, capturedAt: todayStr(), kind, content };
       if (scrapedText) doc.text = scrapedText;   // durable, searchable copy of a photo/PDF's text
+
+      // Make the node picture from the image BEFORE we externalise the file (we
+      // need the pixels here; the stored record is downscaled separately).
+      let setPic = false;
+      if (!person.photo) {
+        const picSrc = kind === "image" ? content : fetchedImage;
+        if (picSrc) { const photo = await imageDataToPhoto(picSrc); if (photo) { person.photo = photo; setPic = true; } }
+      }
+
+      // Store the PDF/photo as its own repo file so the tree stays small and
+      // scales to any number of uploads. Images are downscaled first. If the repo
+      // isn't configured/reachable, the file stays embedded (still works).
+      if ((kind === "pdf" || kind === "image") && content) {
+        const toStore = kind === "image" ? await shrinkImageDataUrl(content, 1500) : content;
+        let pass2 = ""; try { pass2 = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+        let stored = false;
+        if (pass2) {
+          saveBtn.disabled = true; status.textContent = "Saving the file to your repository…";
+          stored = await storeRecordBinary(doc, toStore, pass2);
+          status.textContent = ""; saveBtn.disabled = false;
+        }
+        if (!stored) doc.content = toStore;   // keep it embedded as a fallback
+      }
+
       if (!person.docs) person.docs = [];
       person.docs.push(doc);
       person.deceased = true;   // attaching an obituary means they've passed away
-      // A photo obituary — or a portrait pulled from a linked obituary page —
-      // also becomes this person’s picture (unless they already have one).
-      let setPic = false;
-      if (!person.photo) {
-        const src = kind === "image" ? content : fetchedImage;
-        if (src) { const photo = await imageDataToPhoto(src); if (photo) { person.photo = photo; setPic = true; } }
-      }
       save(); render(); renderDocsForm(person); if (selectedId === person.id) fillPersonForm(person);
       close();
       toast(scrapedText ? "Obituary saved — text scraped" + (setPic ? " & set as their picture" : "") : (setPic ? "Obituary saved — also set as their picture" : "Obituary saved"));
@@ -2228,9 +2275,9 @@
     let changed = false;
     for (const p of state.persons) {
       if (p.photo || !Array.isArray(p.docs)) continue;
-      const imgDoc = p.docs.find((d) => d && d.kind === "image" && d.content);
+      const imgDoc = p.docs.find((d) => d && d.kind === "image" && docSrc(d));
       if (!imgDoc) continue;
-      const photo = await imageDataToPhoto(imgDoc.content);
+      const photo = await imageDataToPhoto(docSrc(imgDoc));
       if (photo) { p.photo = photo; changed = true; }
     }
     return changed;
@@ -2243,9 +2290,9 @@
   async function usePhotoFromObit(p) {
     if (!p) return;
     const docs = p.docs || [];
-    const imgDoc = docs.find((d) => d && d.kind === "image" && d.content);
+    const imgDoc = docs.find((d) => d && d.kind === "image" && docSrc(d));
     if (imgDoc) {
-      const photo = await imageDataToPhoto(imgDoc.content);
+      const photo = await imageDataToPhoto(docSrc(imgDoc));
       if (photo) { p.photo = photo; save(); render(); if (selectedId === p.id) fillPersonForm(p); toast("Set their picture from the obituary"); return; }
     }
     const urlDoc = docs.find((d) => d && d.url);
@@ -2314,6 +2361,37 @@
     }
   }
 
+  // Move every obituary file that's still embedded in the tree out to its own
+  // file in the repo, shrinking the saved tree so it scales to any number of
+  // uploads. Safe to re-run; needs GITHUB_TOKEN configured on Vercel.
+  async function migrateRecordsToRepo() {
+    if (readonly) return;
+    const targets = [];
+    state.persons.forEach((p) => (p.docs || []).forEach((d) => { if (d && (d.kind === "pdf" || d.kind === "image") && d.content && !d.path) targets.push(d); }));
+    if (!targets.length) { toast("No embedded records to move — they're already stored as files"); return; }
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
+    if (!pass) return;
+    try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
+    const btn = $("#migrateRecordsBtn"); if (btn) btn.disabled = true;
+    let moved = 0, failed = 0;
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const d = targets[i];
+        if (btn) btn.textContent = "Moving records… (" + (i + 1) + " of " + targets.length + ")";
+        const data = d.kind === "image" ? await shrinkImageDataUrl(d.content, 1500) : d.content;
+        if (await storeRecordBinary(d, data, pass)) { moved++; save(); } else { failed++; }
+      }
+      if (moved) relayoutAndSave();   // re-save the (now smaller) tree; backup is scheduled from save()
+      toast(moved ? ("Moved " + moved + " record" + (moved === 1 ? "" : "s") + " to the repo" + (failed ? " (" + failed + " couldn’t be saved)" : "")) : "Couldn’t move records — is GITHUB_TOKEN set on Vercel?");
+    } catch (e) {
+      toast(e.message || "Stopped");
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "🗄️ Move records to the repo (smaller backups)"; }
+      render();
+    }
+  }
+
   // All obituary text we hold for a person (durable text copies + scraped text
   // from uploads), concatenated so date extraction can read across records.
   function obitTextOf(p) {
@@ -2344,8 +2422,10 @@
     const text = obitTextOf(p);
     if (text) return { text };
     for (const d of docs) {
+      if (d.kind !== "pdf" && d.kind !== "image") continue;
       const m = /^data:([^;]+);base64,(.*)$/.exec(d.content || "");
-      if ((d.kind === "pdf" || d.kind === "image") && m) return { file: { mediaType: m[1], data: m[2] } };
+      if (m) return { file: { mediaType: m[1], data: m[2] } };
+      if (d.path) return { url: new URL(d.path, location.href).href };   // externalised → let the server fetch it
     }
     const link = docs.find((d) => d.url);
     if (link) return { url: link.url };
@@ -2433,10 +2513,11 @@
   }
 
   function openDocViewer(doc) {
+    const src = docSrc(doc);
     let bodyHtml;
     if (doc.kind === "text") bodyHtml = `<pre>${escapeHtml(doc.content || "")}</pre>`;
-    else if (doc.kind === "pdf") bodyHtml = `<iframe src="${doc.content}"></iframe>`;
-    else if (doc.kind === "image") bodyHtml = `<img src="${doc.content}" alt=""/>`;
+    else if (doc.kind === "pdf") bodyHtml = `<iframe src="${escapeHtml(src)}"></iframe>`;
+    else if (doc.kind === "image") bodyHtml = `<img src="${escapeHtml(src)}" alt=""/>`;
     else bodyHtml = `<p class="hint">No archived copy is saved yet — open the original above, or edit this record to paste the text or upload a PDF for a permanent copy.</p>`;
     // Text scraped from a screenshot / PDF — the durable, searchable copy.
     if (doc.text && (doc.kind === "image" || doc.kind === "pdf")) {
@@ -2459,7 +2540,7 @@
     const base = (doc.title || "record").replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase() || "record";
     if (doc.kind === "text") { downloadFile(base + ".txt", doc.content || "", "text/plain"); return; }
     const a = document.createElement("a");
-    a.href = doc.content;
+    a.href = docSrc(doc);
     a.download = base + (doc.kind === "pdf" ? ".pdf" : "");
     a.click();
   }
@@ -2889,6 +2970,7 @@
   $("#importObitBtn").onclick = openImportModal;
   $("#scrapeAllBtn").onclick = scrapeAllObits;
   $("#backfillDatesBtn").onclick = backfillDatesFromObits;
+  $("#migrateRecordsBtn").onclick = migrateRecordsToRepo;
   $("#tbImport").onclick = openImportModal;
   $("#addDocBtn").onclick = () => { const id = $("#personId").value; if (id) openAttachModal(id); };
   $("#obitPhotoBtn").onclick = () => { const id = $("#personId").value; if (id) usePhotoFromObit(personById(id)); };

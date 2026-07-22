@@ -1,9 +1,11 @@
-// Vercel serverless function: commit an (already-encrypted) backup of the family
-// tree into the repository, so the data lives durably in git — versioned and
-// loadable on any device — instead of only in one browser.
+// Vercel serverless function: commit a file into the repository — either the
+// (already-encrypted) family-tree backup, or an individual obituary RECORD
+// (PDF/image) stored as its own file so the tree itself stays small and scales
+// to any number of uploads.
 //
 // The browser encrypts the tree with the family password BEFORE sending it here,
-// so this function (and the repo) only ever hold ciphertext.
+// so this function (and the repo) only ever hold ciphertext for the backup.
+// Record files are the obituary documents themselves (not secret).
 //
 // Env vars to set in the Vercel project:
 //   IMPORT_PASSCODE  – the passcode the editor must send (required)
@@ -18,6 +20,14 @@ async function readBody(req) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 
+// Only ever write inside family-tree/: the backup file, or records/<name>.
+// Prevents the endpoint from being used to write arbitrary repo paths.
+function resolvePath(rel) {
+  if (!rel) return "family-tree/family-data.js";
+  if (/^records\/[A-Za-z0-9][A-Za-z0-9._-]*$/.test(rel) && !rel.includes("..")) return "family-tree/" + rel;
+  return null;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Use POST." }); return; }
 
@@ -29,14 +39,19 @@ export default async function handler(req, res) {
   }
   const repo = process.env.GITHUB_REPO || "PeterHauck/PeterHauck.github.io";
   const branch = process.env.GITHUB_BRANCH || "master";
-  const path = "family-tree/family-data.js";
 
   let body;
   try { body = await readBody(req); } catch (e) { res.status(400).json({ error: "Bad request body." }); return; }
   if ((body.passcode || "") !== passcode) { res.status(401).json({ error: "Wrong import passcode." }); return; }
 
-  const content = (body.content || "").toString();
-  if (!content || content.length > 20 * 1024 * 1024) { res.status(400).json({ error: "Nothing to back up (or too large)." }); return; }
+  const path = resolvePath(body.path);
+  if (!path) { res.status(400).json({ error: "Invalid path." }); return; }
+
+  // encoding: "utf8" (default) commits text as-is; "base64" commits raw bytes the
+  // client already base64-encoded (obituary PDFs/images).
+  const raw = (body.content || "").toString();
+  if (!raw || raw.length > 20 * 1024 * 1024) { res.status(400).json({ error: "Nothing to save (or too large)." }); return; }
+  const ghContent = body.encoding === "base64" ? raw : Buffer.from(raw, "utf8").toString("base64");
 
   const api = `https://api.github.com/repos/${repo}/contents/${path}`;
   const headers = { Authorization: "Bearer " + token, Accept: "application/vnd.github+json", "User-Agent": "FamilyTree backup", "X-GitHub-Api-Version": "2022-11-28" };
@@ -46,16 +61,12 @@ export default async function handler(req, res) {
     let sha;
     const cur = await fetch(api + "?ref=" + encodeURIComponent(branch), { headers });
     if (cur.ok) { try { sha = (await cur.json()).sha; } catch (e) {} }
+    else if (cur.status !== 404) { /* transient; still try the PUT */ }
 
     const put = await fetch(api, {
       method: "PUT",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message: "Back up family tree",
-        content: Buffer.from(content, "utf8").toString("base64"),
-        branch,
-        sha,
-      }),
+      body: JSON.stringify({ message: body.message || "Update family tree", content: ghContent, branch, sha }),
     });
     if (!put.ok) {
       let msg = "GitHub write failed (" + put.status + ").";
@@ -65,9 +76,9 @@ export default async function handler(req, res) {
       return;
     }
     const j = await put.json().catch(() => ({}));
-    res.status(200).json({ ok: true, commit: j.commit && j.commit.sha });
+    res.status(200).json({ ok: true, path, commit: j.commit && j.commit.sha });
   } catch (err) {
     console.error("save error", err);
-    res.status(500).json({ error: (err && err.message) || "Backup failed." });
+    res.status(500).json({ error: (err && err.message) || "Save failed." });
   }
 }
