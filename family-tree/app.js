@@ -827,6 +827,13 @@
     const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     return months[+m[2] - 1] + " " + (+m[3]) + ", " + m[1];
   }
+  const isISODate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || "");
+  // Compact date for tight spots like the marriage line ("Jun 12, 1970").
+  function fmtDateShort(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ""); if (!m) return iso || "";
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return months[+m[2] - 1] + " " + (+m[3]) + ", " + m[1];
+  }
   function dateStr(p) {
     if (p.birth != null && p.death != null) return p.birth + "–" + p.death;
     if (p.birth != null) return "b. " + p.birth + (isDeceased(p) ? " · d." : "");
@@ -1082,7 +1089,7 @@
       }
       // Marriage (and divorce) date, sitting just above the line.
       const dbits = [];
-      if (u.marriage) dbits.push((u.status === "partners" ? "" : "m. ") + u.marriage);
+      if (u.marriage) dbits.push((u.status === "partners" ? "" : "m. ") + (isISODate(u.marriage) ? fmtDateShort(u.marriage) : u.marriage));
       if (u.status === "divorced" && u.divorce) dbits.push("div. " + u.divorce);
       if (dbits.length) {
         const dlabel = dbits.join("   ");
@@ -1748,24 +1755,25 @@
         const s = personById(other).sex;
         const sel = kindSelect([["married", nounPartner(s, "married")], ["partners", nounPartner(s, "partners")], ["divorced", nounPartner(s, "divorced")]], u.status || "married", (v) => relSetStatus(u.id, v, pid));
         rowFor(other, sel, removeBtn(() => relUnlinkUnion(u.id, pid)));
-        // marriage / divorce dates for this couple, on their own line
+        // marriage (exact date) / divorce (year only) for this couple, on their own line
         const st = u.status || "married";
         const dRow = document.createElement("li"); dRow.className = "rel-dates";
-        const dateInput = (val, onCommit) => {
-          const i = document.createElement("input");
-          i.type = "text"; i.className = "rel-date"; i.placeholder = "year"; i.value = val || "";
-          i.onchange = () => onCommit(i.value);
-          i.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); i.blur(); } };
-          return i;
-        };
-        const dateField = (label, val, field) => {
+        const dateField = (label, field, type, val) => {
           const wrap = document.createElement("span"); wrap.className = "rel-date-field";
           const lab = document.createElement("span"); lab.className = "rel-date-label"; lab.textContent = label;
-          wrap.appendChild(lab); wrap.appendChild(dateInput(val, (v) => relSetUnionField(u.id, field, v, pid)));
+          const i = document.createElement("input");
+          i.type = type; i.className = "rel-date" + (type === "date" ? " rel-date-full" : "");
+          if (type === "text") i.placeholder = "year";
+          i.value = val || "";
+          i.onchange = () => relSetUnionField(u.id, field, i.value, pid);
+          i.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); i.blur(); } };
+          wrap.appendChild(lab); wrap.appendChild(i);
           return wrap;
         };
-        dRow.appendChild(dateField(st === "partners" ? "Together" : "Married", u.marriage, "marriage"));
-        if (st === "divorced") dRow.appendChild(dateField("Divorced", u.divorce, "divorce"));
+        // Marriage takes an exact date; only fill the picker from an ISO value
+        // (a legacy year-only entry can't populate a date box but still shows on the tree).
+        dRow.appendChild(dateField(st === "partners" ? "Together" : "Married", "marriage", "date", isISODate(u.marriage) ? u.marriage : ""));
+        if (st === "divorced") dRow.appendChild(dateField("Divorced", "divorce", "text", u.divorce));
         box.appendChild(dRow);
       });
     }
