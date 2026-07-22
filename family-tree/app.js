@@ -3058,7 +3058,7 @@
           await post({ action: "putPart", index: i, chunk: payload.slice(i * CHUNK, (i + 1) * CHUNK) });
           setCloudStatus("saving");
         }
-        done = await post({ action: "commitTree", total });
+        done = await post({ action: "commitTree", total, length: payload.length });
       }
       // Record the cloud's write time so this device knows it's in sync and won't
       // pull its own save back on the next load.
@@ -3083,8 +3083,8 @@
     try {
       const j = await res.json();
       payload = j.payload || ""; savedAt = j.savedAt || 0;
-      // A big tree comes back as a direct Blob URL — fetch it straight from storage.
-      if (!payload && j.url) { try { payload = await (await fetch(j.url)).text(); } catch (e) {} }
+      // A big tree comes back as a direct Blob URL — fetch it straight from storage (cache-busted).
+      if (!payload && j.url) { try { const rr = await fetch(bustUrl(j.url)); if (rr.ok) payload = await rr.text(); } catch (e) {} }
     } catch (e) {}
     if (!payload) { toast("No cloud copy found"); return false; }
     let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
@@ -3121,7 +3121,10 @@
       autoLayout(); render(); fitView();
       let when = ""; try { when = cp.savedAt ? new Date(cp.savedAt).toLocaleString() : ""; } catch (e) {}
       toast(when ? ("Showing the latest — cloud saved " + when) : "Showing the latest from your site");
-    } catch (e) { toast("That cloud copy didn’t match your password"); }
+    } catch (e) {
+      let when = ""; try { when = cp.savedAt ? new Date(cp.savedAt).toLocaleString() : ""; } catch (_) {}
+      toast("That cloud copy didn’t open with your password" + (when ? " (cloud saved " + when + ")" : ""));
+    }
   }
   // On boot, if the cloud copy is newer than what this device last synced, pull it
   // in — this is what makes edits on one device show up on the others (e.g. your
@@ -3190,6 +3193,9 @@
   }
   // The live encrypted tree from the cloud (Vercel Blob) — where edits are saved —
   // with its server write time. Null if the cloud isn't set up/reachable.
+  // Blob URLs are cache-busted (unique ts param) so the CDN can't hand back an
+  // old overwritten copy — stale bytes won't decrypt with the current password.
+  const bustUrl = (u) => u + (u.includes("?") ? "&" : "?") + "cb=" + Date.now();
   async function fetchCloudPayload() {
     try {
       const r = await fetch("api/store?action=getTree");
@@ -3200,7 +3206,7 @@
         // Fast path: the direct blob URL. Some phones/browsers block this with
         // CORS (or it 403s), so only trust a clean 200; otherwise read the tree
         // back in slices through the function instead (always works).
-        if (j.url) { try { const rr = await fetch(j.url); if (rr.ok) { const t = await rr.text(); if (t && t.length === (j.size || t.length)) return { payload: t, savedAt: j.savedAt || 0 }; } } catch (e) {} }
+        if (j.url) { try { const rr = await fetch(bustUrl(j.url)); if (rr.ok) { const t = await rr.text(); if (t && t.length === (j.size || t.length)) return { payload: t, savedAt: j.savedAt || 0 }; } } catch (e) {} }
         let out = "", total = j.size || Infinity;
         for (let s = 0; s < total; s += 3000000) {
           const pr = await fetch("api/store?action=getTreePart&start=" + s + "&len=3000000");
@@ -3212,7 +3218,7 @@
         }
         return out ? { payload: out, savedAt: j.savedAt || 0 } : null;
       }
-      if (j.url) { try { const rr = await fetch(j.url); if (!rr.ok) return null; const t = await rr.text(); return t ? { payload: t, savedAt: j.savedAt || 0 } : null; } catch (e) { return null; } }
+      if (j.url) { try { const rr = await fetch(bustUrl(j.url)); if (!rr.ok) return null; const t = await rr.text(); return t ? { payload: t, savedAt: j.savedAt || 0 } : null; } catch (e) { return null; } }
       return null;
     } catch (e) { return null; }
   }
