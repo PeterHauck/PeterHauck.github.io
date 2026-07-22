@@ -209,6 +209,8 @@
           <p class="hint" style="margin-top:6px">Reads the text out of every photo/PDF obituary already attached (that doesn’t have a text copy yet) and saves it as a durable, searchable record.</p>
           <button class="btn wide" id="backfillDatesBtn" style="margin-top:10px">📅 Fill dates from saved obituaries</button>
           <p class="hint" style="margin-top:6px">Reads every saved obituary — including uploaded photos &amp; PDFs and saved links — with Claude, and fills in each person’s exact birth &amp; death date where the obituary states it. Only fills blanks; never changes a date you’ve already entered. (Runs on the Vercel deployment.)</p>
+          <button class="btn wide" id="migrateRecordsBtn" style="margin-top:10px">🗄️ Move records to the repo (smaller backups)</button>
+          <p class="hint" style="margin-top:6px">Moves obituary PDFs &amp; photos out of the tree and into their own files in the repository, so the saved tree stays small and backs up no matter how many you add. New uploads do this automatically. (Needs GITHUB_TOKEN set on Vercel.)</p>
         </div>
 
         <div class="section">
