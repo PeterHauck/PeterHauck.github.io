@@ -3149,6 +3149,29 @@
     showLock(true, cp.payload);
     return "lock";
   }
+  // When you come back to the tab (or a phone restores a frozen page), quietly
+  // pull the latest cloud copy if it's newer — so the tree stays current without
+  // a manual refresh. Never clobbers an owner who has local edits not yet saved up.
+  let refreshingBg = false;
+  async function backgroundRefresh() {
+    if (refreshingBg || document.hidden) return;
+    if (!readonly) { try { if (localStorage.getItem("familyTree.cloudDirty") === "1") return; } catch (e) {} }
+    refreshingBg = true;
+    try {
+      let synced = 0; try { synced = +(localStorage.getItem("familyTree.cloudSavedAt") || 0); } catch (e) {}
+      const info = await cloudTreeInfo();
+      if (!info || !info.exists || !(info.savedAt > synced)) return;
+      const cp = await fetchCloudPayload();
+      if (!cp || !cp.payload) return;
+      let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
+      if (!fam) return;
+      const obj = await decryptState(fam, cp.payload);
+      loadObject(obj);
+      try { localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || info.savedAt)); } catch (e) {}
+      autoLayout(); render();
+      toast("Updated to the latest");
+    } catch (e) {} finally { refreshingBg = false; }
+  }
   // The live encrypted tree from the cloud (Vercel Blob) — where edits are saved —
   // with its server write time. Null if the cloud isn't set up/reachable.
   async function fetchCloudPayload() {
@@ -3538,6 +3561,11 @@
   /* wire toolbar + buttons */
   $("#tbFit").onclick = fitView;
   { const sb = $("#tbSync"); if (sb) sb.onclick = forcePullFromCloud; }
+  // Re-pull the latest when you return to the tab or a phone restores a frozen
+  // page — keeps the view current without a manual refresh.
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) backgroundRefresh(); });
+  window.addEventListener("pageshow", (e) => { if (e.persisted) backgroundRefresh(); });
+  window.addEventListener("focus", () => backgroundRefresh());
   $("#tbRearrange").onclick = () => setRearrange(!rearrange);
   $("#tbTidy").onclick = tidyUp;
   // ☰ opens the People list + menu (add a person, auto-arrange).
