@@ -1870,7 +1870,17 @@
     return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" }, base,
       { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   }
-  const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  // Base64-encode a buffer in chunks. Spreading a big Uint8Array into
+  // String.fromCharCode (or .apply) blows the call stack once the encrypted tree
+  // includes photos — "Maximum call stack size exceeded" on backup. Chunking
+  // keeps each call small and handles any size.
+  function b64(buf) {
+    const bytes = new Uint8Array(buf);
+    let bin = "";
+    const CHUNK = 0x8000; // 32k bytes per call — safely under the arg limit
+    for (let i = 0; i < bytes.length; i += CHUNK) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    return btoa(bin);
+  }
   const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
   async function encryptState(password) {
