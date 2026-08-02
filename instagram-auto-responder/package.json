@@ -1,0 +1,16 @@
+{
+  "name": "rinkrabbit-instagram-auto-responder",
+  "version": "1.0.0",
+  "description": "Instagram DM funnel for Rink Rabbit: welcome message -> email capture -> discount code",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
