@@ -15,7 +15,9 @@
 
 const $ = (id) => document.getElementById(id);
 
+const APP_VER = 7;
 const THUMB_SIZE = 480;
+const THUMB_VER = 2;
 const IMAGE_RE = /\.(jpe?g|png|gif|bmp|webp)$/i;
 const CAMERA_TRASH_DIR = 'DELETED';
 
@@ -104,6 +106,7 @@ async function init() {
   }
 
   wireEvents();
+  $('ver').textContent = 'v' + APP_VER;
 
   if (supportsFsAccess()) {
     $('btn-open-camera').hidden = false;
@@ -129,7 +132,7 @@ async function init() {
     showScreen('album');
     tryReconnectCamera(); // silent; updates the banner when done
   }
-  rebuildLegacyThumbs(); // background; fixes thumbs imported before dims were stored
+  repairLibrary(); // one-time visible pass; fixes thumbs from older app versions
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -171,14 +174,20 @@ function renderAlbum() {
     tile.dataset.id = p.id;
     if (state.selected.has(p.id)) tile.classList.add('selected');
 
+    // The spacer fixes the tile's shape from the photo's byte-parsed
+    // dimensions; the image stretches to fill it. Layout therefore never
+    // depends on how (or how badly) the browser decoded the thumbnail.
+    const w = p.photoW || p.thumbW || 4;
+    const h = p.photoH || p.thumbH || 3;
+    const spacer = document.createElement('div');
+    spacer.className = 'tile-spacer';
+    spacer.style.paddingTop = `${(h / w) * 100}%`;
+    tile.appendChild(spacer);
+
     const img = document.createElement('img');
     img.loading = 'lazy';
     img.decoding = 'async';
     img.alt = p.name;
-    if (p.thumbW && p.thumbH) {
-      img.width = p.thumbW;
-      img.height = p.thumbH;
-    }
     img.src = thumbUrl(p);
     tile.appendChild(img);
 
@@ -322,6 +331,7 @@ async function importFiles(files, relDirs) {
         thumbW = t.w;
         thumbH = t.h;
       } catch (e) { /* keep full image as fallback */ }
+      const dims = await jpegDims(f);
       const record = {
         id,
         name: f.name,
@@ -331,6 +341,9 @@ async function importFiles(files, relDirs) {
         thumb,
         thumbW,
         thumbH,
+        thumbVer: THUMB_VER,
+        photoW: dims ? dims.w : 0, // true pixel size, parsed from the file bytes
+        photoH: dims ? dims.h : 0,
         status: 'main',
         addedAt: Date.now(),
         relDir: relDir || null, // path segments on the camera, when known
@@ -343,6 +356,32 @@ async function importFiles(files, relDirs) {
     hideProgress();
   }
   return added;
+}
+
+/* Read a JPEG's pixel dimensions straight from its bytes (SOF marker), so
+ * layout never depends on how the browser decodes the image. Returns null
+ * for non-JPEGs or unparseable files. */
+async function jpegDims(blob) {
+  try {
+    const buf = new Uint8Array(await blob.slice(0, 256 * 1024).arrayBuffer());
+    if (buf[0] !== 0xFF || buf[1] !== 0xD8) return null; // not a JPEG
+    let p = 2;
+    while (p + 9 < buf.length) {
+      if (buf[p] !== 0xFF) { p++; continue; }
+      const marker = buf[p + 1];
+      if (marker === 0xFF) { p++; continue; }
+      if (marker === 0xD8 || (marker >= 0xD0 && marker <= 0xD9)) { p += 2; continue; }
+      const len = (buf[p + 2] << 8) | buf[p + 3];
+      // SOF0..SOF15, minus DHT (C4), JPG (C8), DAC (CC)
+      if (marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC) {
+        const h = (buf[p + 5] << 8) | buf[p + 6];
+        const w = (buf[p + 7] << 8) | buf[p + 8];
+        return (w > 0 && h > 0) ? { w, h } : null;
+      }
+      p += 2 + len;
+    }
+  } catch (e) { /* fall through */ }
+  return null;
 }
 
 function loadImageEl(file) {
@@ -395,23 +434,29 @@ async function makeThumb(file) {
   }
 }
 
-async function rebuildLegacyThumbs() {
-  const legacy = [...state.photos.values()].filter((p) => !p.thumbW || !p.thumbH);
-  if (legacy.length === 0) return;
-  let fixed = 0;
-  for (const p of legacy) {
+async function repairLibrary() {
+  const todo = [...state.photos.values()].filter((p) => p.thumbVer !== THUMB_VER);
+  if (todo.length === 0) return;
+  showProgress(`Fixing photos… 0 / ${todo.length}`);
+  let i = 0;
+  for (const p of todo) {
+    i++;
+    $('progress-text').textContent = `Fixing photos… ${i} / ${todo.length}`;
     try {
+      const dims = await jpegDims(p.blob);
+      if (dims) { p.photoW = dims.w; p.photoH = dims.h; }
       const t = await makeThumb(p.blob);
       p.thumb = t.blob;
       p.thumbW = t.w;
       p.thumbH = t.h;
-      await idbPut('photos', p);
       const url = state.thumbUrls.get(p.id);
       if (url) { URL.revokeObjectURL(url); state.thumbUrls.delete(p.id); }
-      fixed++;
     } catch (e) { /* keep whatever we had for this one */ }
+    p.thumbVer = THUMB_VER; // stamp even on failure so we don't loop forever
+    try { await idbPut('photos', p); } catch (e) { /* non-fatal */ }
   }
-  if (fixed > 0 && !$('album-screen').hidden) renderAlbum();
+  hideProgress();
+  if (!$('album-screen').hidden) renderAlbum();
 }
 
 async function afterImport(added) {

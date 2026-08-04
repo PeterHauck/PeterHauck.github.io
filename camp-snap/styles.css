@@ -184,10 +184,16 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   -webkit-touch-callout: none;
   touch-action: pan-y;
 }
-/* Tiles take each photo's natural aspect ratio (all Camp Snap shots share one). */
+/* The spacer sets the tile's shape from the photo's byte-parsed dimensions;
+ * the image stretches to fill it, so a badly decoded thumbnail still shows
+ * at the photo's true proportions. */
+.tile-spacer { display: block; }
 .tile img {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: fill;
   display: block;
   user-select: none;
   -webkit-user-select: none;
@@ -391,5 +397,16 @@ body.selecting .tile .check { display: flex; }
   animation: spin .8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.ver {
+  position: fixed;
+  right: 8px;
+  bottom: calc(4px + var(--safe-bottom));
+  z-index: 4;
+  font-size: 11px;
+  color: var(--text-dim);
+  opacity: .55;
+  pointer-events: none;
+}
 
 [hidden] { display: none !important; }
