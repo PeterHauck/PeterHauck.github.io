@@ -15,7 +15,7 @@
 
 const $ = (id) => document.getElementById(id);
 
-const APP_VER = 9;
+const APP_VER = 10;
 const THUMB_SIZE = 480;
 const THUMB_VER = 4;
 const IMAGE_RE = /\.(jpe?g|png|gif|bmp|webp)$/i;
@@ -115,11 +115,18 @@ function thumbBlobOf(p) {
 }
 
 // One aspect ratio for the whole album (Camp Snap shots all share one).
+// Median of plausible ratios, so a single odd file can't distort the grid.
 function albumAspect() {
+  const ratios = [];
   for (const p of state.photos.values()) {
-    if (p.photoW && p.photoH) return p.photoH / p.photoW;
+    if (p.photoW > 0 && p.photoH > 0) {
+      const r = p.photoH / p.photoW;
+      if (r >= 0.3 && r <= 3.5) ratios.push(r);
+    }
   }
-  return 3 / 4;
+  if (ratios.length === 0) return 3 / 4;
+  ratios.sort((a, b) => a - b);
+  return ratios[ratios.length >> 1];
 }
 
 function photosIn(tab) {
@@ -197,7 +204,9 @@ function renderAlbum() {
   const scrollTop = grid.scrollTop;
   grid.textContent = '';
 
-  const tilePad = `${albumAspect() * 100}%`;
+  const aspect = albumAspect();
+  $('ver').textContent = `v${APP_VER} · a${aspect.toFixed(2)}`;
+  const tilePad = `${aspect * 100}%`;
   const frag = document.createDocumentFragment();
   for (const p of list) {
     // A div, not a button: Safari's special button rendering mangles image
@@ -864,7 +873,10 @@ function updateViewerHeader() {
   const idx = currentViewerIndex();
   const p = viewer.list[idx];
   $('viewer-counter').textContent = viewer.list.length ? `${idx + 1} / ${viewer.list.length}` : '';
-  $('viewer-name').textContent = p ? p.name : '';
+  // Filename plus stored dimensions — the dims double as support diagnostics.
+  $('viewer-name').textContent = p
+    ? `${p.name} · ${p.photoW || '?'}×${p.photoH || '?'} · t${p.thumbW || '?'}×${p.thumbH || '?'}`
+    : '';
 }
 
 function closeViewer() {
