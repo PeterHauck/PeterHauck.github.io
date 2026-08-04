@@ -1,7 +1,7 @@
 /* Camp Snap viewer — offline cache */
 
-const CACHE = 'campsnap-v5';
-const ASSETS = ['./', 'styles.css?v=5', 'app.js?v=5', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-180.png'];
+const CACHE = 'campsnap-v6';
+const ASSETS = ['./', 'styles.css?v=6', 'app.js?v=6', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-180.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));

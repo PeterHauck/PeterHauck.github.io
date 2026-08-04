@@ -129,6 +129,7 @@ async function init() {
     showScreen('album');
     tryReconnectCamera(); // silent; updates the banner when done
   }
+  rebuildLegacyThumbs(); // background; fixes thumbs imported before dims were stored
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -161,8 +162,12 @@ function renderAlbum() {
 
   const frag = document.createDocumentFragment();
   for (const p of list) {
-    const tile = document.createElement('button');
+    // A div, not a button: Safari's special button rendering mangles image
+    // layout inside buttons on iOS.
+    const tile = document.createElement('div');
     tile.className = 'tile';
+    tile.setAttribute('role', 'button');
+    tile.tabIndex = 0;
     tile.dataset.id = p.id;
     if (state.selected.has(p.id)) tile.classList.add('selected');
 
@@ -340,34 +345,73 @@ async function importFiles(files, relDirs) {
   return added;
 }
 
-function makeThumb(file) {
+function loadImageEl(file) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
-    img.onload = () => {
-      try {
-        const scale = Math.min(1, THUMB_SIZE / Math.max(img.naturalWidth, img.naturalHeight));
-        const w = Math.max(1, Math.round(img.naturalWidth * scale));
-        const h = Math.max(1, Math.round(img.naturalHeight * scale));
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        canvas.toBlob((blob) => {
-          URL.revokeObjectURL(url);
-          blob ? resolve({ blob, w, h }) : reject(new Error('toBlob failed'));
-        }, 'image/jpeg', 0.8);
-      } catch (e) {
-        URL.revokeObjectURL(url);
-        reject(e);
-      }
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('decode failed'));
-    };
+    img.onload = () => resolve({ img, url });
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode failed')); };
     img.src = url;
   });
+}
+
+async function makeThumb(file) {
+  // Prefer createImageBitmap: it fully decodes to known pixel dimensions and
+  // avoids iOS Safari's subsampled/squashed drawImage path for large JPEGs.
+  let source = null;
+  let sw = 0;
+  let sh = 0;
+  let cleanup = () => {};
+  if (window.createImageBitmap) {
+    try {
+      try { source = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+      catch (e) { source = await createImageBitmap(file); }
+      sw = source.width;
+      sh = source.height;
+      cleanup = () => source.close && source.close();
+    } catch (e) { source = null; }
+  }
+  if (!source) {
+    const { img, url } = await loadImageEl(file);
+    source = img;
+    sw = img.naturalWidth;
+    sh = img.naturalHeight;
+    cleanup = () => URL.revokeObjectURL(url);
+  }
+  try {
+    if (!sw || !sh) throw new Error('bad dimensions');
+    const scale = Math.min(1, THUMB_SIZE / Math.max(sw, sh));
+    const w = Math.max(1, Math.round(sw * scale));
+    const h = Math.max(1, Math.round(sh * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext('2d').drawImage(source, 0, 0, w, h);
+    const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.8));
+    if (!blob) throw new Error('toBlob failed');
+    return { blob, w, h };
+  } finally {
+    cleanup();
+  }
+}
+
+async function rebuildLegacyThumbs() {
+  const legacy = [...state.photos.values()].filter((p) => !p.thumbW || !p.thumbH);
+  if (legacy.length === 0) return;
+  let fixed = 0;
+  for (const p of legacy) {
+    try {
+      const t = await makeThumb(p.blob);
+      p.thumb = t.blob;
+      p.thumbW = t.w;
+      p.thumbH = t.h;
+      await idbPut('photos', p);
+      const url = state.thumbUrls.get(p.id);
+      if (url) { URL.revokeObjectURL(url); state.thumbUrls.delete(p.id); }
+      fixed++;
+    } catch (e) { /* keep whatever we had for this one */ }
+  }
+  if (fixed > 0 && !$('album-screen').hidden) renderAlbum();
 }
 
 async function afterImport(added) {
