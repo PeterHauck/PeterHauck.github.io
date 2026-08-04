@@ -108,6 +108,17 @@ async function init() {
   if (supportsFsAccess()) {
     $('btn-open-camera').hidden = false;
     $('connect-hint').innerHTML = 'Pick the Camp&nbsp;Snap drive (or its <b>DCIM</b> folder) in the dialog. Allow editing so deletes also tidy up the camera.';
+  } else if (isIOS()) {
+    // iPhone/iPad: the folder picker is unreliable for USB drives, so use the
+    // file picker, which reaches the CampSnap drive through the Files app.
+    $('btn-pick-files').textContent = 'Import photos…';
+    $('btn-pick-files').classList.replace('btn-secondary', 'btn-primary');
+    $('connect-hint').innerHTML =
+      '<ol>'
+      + '<li>Tap <b>Import photos</b>, then <b>Choose Files</b>.</li>'
+      + '<li>Tap <b>Browse</b> and open the <b>CampSnap</b> drive, then <b>DCIM</b> and the folder inside it.</li>'
+      + '<li>Tap <b>⋯</b> (or long-press a photo) → <b>Select</b> → <b>Select All</b>, then <b>Open</b>.</li>'
+      + '</ol>';
   } else {
     if ('webkitdirectory' in document.createElement('input')) $('btn-pick-folder').hidden = false;
   }
@@ -125,6 +136,8 @@ async function init() {
 }
 
 const supportsFsAccess = () => 'showDirectoryPicker' in window;
+const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 /* ================= Screens ================= */
 
@@ -699,7 +712,12 @@ function wireEvents() {
   const onPicked = async (input) => {
     const files = [...input.files];
     input.value = '';
-    if (files.length === 0) return;
+    if (files.length === 0) {
+      // A cancelled pick usually doesn't fire change; an empty change event
+      // means the folder couldn't be read (common with USB drives on phones).
+      if (input.id === 'dir-input') toast('Couldn’t read that folder — try “Choose photos…” instead');
+      return;
+    }
     const added = await importFiles(files);
     await afterImport(added);
   };
