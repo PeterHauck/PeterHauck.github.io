@@ -170,6 +170,10 @@ function renderAlbum() {
     img.loading = 'lazy';
     img.decoding = 'async';
     img.alt = p.name;
+    if (p.thumbW && p.thumbH) {
+      img.width = p.thumbW;
+      img.height = p.thumbH;
+    }
     img.src = thumbUrl(p);
     tile.appendChild(img);
 
@@ -305,7 +309,14 @@ async function importFiles(files, relDirs) {
       if (await idbGet('tombstones', id)) continue; // purged before — don't resurrect
 
       let thumb = null;
-      try { thumb = await makeThumb(f); } catch (e) { /* keep full image as fallback */ }
+      let thumbW = 0;
+      let thumbH = 0;
+      try {
+        const t = await makeThumb(f);
+        thumb = t.blob;
+        thumbW = t.w;
+        thumbH = t.h;
+      } catch (e) { /* keep full image as fallback */ }
       const record = {
         id,
         name: f.name,
@@ -313,6 +324,8 @@ async function importFiles(files, relDirs) {
         lastModified: f.lastModified || Date.now(),
         blob: f,
         thumb,
+        thumbW,
+        thumbH,
         status: 'main',
         addedAt: Date.now(),
         relDir: relDir || null, // path segments on the camera, when known
@@ -342,7 +355,7 @@ function makeThumb(file) {
         canvas.getContext('2d').drawImage(img, 0, 0, w, h);
         canvas.toBlob((blob) => {
           URL.revokeObjectURL(url);
-          blob ? resolve(blob) : reject(new Error('toBlob failed'));
+          blob ? resolve({ blob, w, h }) : reject(new Error('toBlob failed'));
         }, 'image/jpeg', 0.8);
       } catch (e) {
         URL.revokeObjectURL(url);
