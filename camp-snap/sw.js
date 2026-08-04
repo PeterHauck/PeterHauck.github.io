@@ -1,7 +1,7 @@
 /* Camp Snap viewer — offline cache */
 
-const CACHE = 'campsnap-v4';
-const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-180.png'];
+const CACHE = 'campsnap-v5';
+const ASSETS = ['./', 'styles.css?v=5', 'app.js?v=5', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-180.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
@@ -15,11 +15,12 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// Network first (so updates land right away), cache fallback for offline.
+// Network first, revalidating past the HTTP cache so updates land right away;
+// fall back to the offline cache when there's no connection.
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: 'no-cache' })
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
