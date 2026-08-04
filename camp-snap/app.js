@@ -15,16 +15,16 @@
 
 const $ = (id) => document.getElementById(id);
 
-const APP_VER = 7;
+const APP_VER = 8;
 const THUMB_SIZE = 480;
-const THUMB_VER = 2;
+const THUMB_VER = 3;
 const IMAGE_RE = /\.(jpe?g|png|gif|bmp|webp)$/i;
 const CAMERA_TRASH_DIR = 'DELETED';
 
 /* ================= IndexedDB ================= */
 
 const DB_NAME = 'campsnap';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 let dbPromise = null;
 
 function openDb() {
@@ -36,6 +36,9 @@ function openDb() {
       if (!db.objectStoreNames.contains('photos')) db.createObjectStore('photos', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('tombstones')) db.createObjectStore('tombstones', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
+      // Full-size originals as raw ArrayBuffers: iOS Safari stores Blob/File
+      // values as references it can silently invalidate; raw bytes survive.
+      if (!db.objectStoreNames.contains('blobs')) db.createObjectStore('blobs', { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -87,6 +90,37 @@ const state = {
 };
 
 const photoId = (name, size) => `${name}|${size}`;
+
+/* ---- durable storage for image bytes ---- */
+
+async function saveOriginal(id, blob) {
+  const buf = await blob.arrayBuffer();
+  await idbPut('blobs', { id, buf, type: blob.type || 'image/jpeg' });
+}
+
+// Full-size image for a photo: the sturdy bytes copy first, then a legacy
+// stored Blob if it still reads. Null when the copy is lost (re-import heals).
+async function getOriginal(p) {
+  const sturdy = await idbGet('blobs', p.id).catch(() => null);
+  if (sturdy) return new Blob([sturdy.buf], { type: sturdy.type });
+  if (p.blob) {
+    try { await p.blob.slice(0, 4).arrayBuffer(); return p.blob; } catch (e) { /* dead */ }
+  }
+  return null;
+}
+
+function thumbBlobOf(p) {
+  if (p.thumbBuf) return new Blob([p.thumbBuf], { type: 'image/jpeg' });
+  return p.thumb || p.blob || null;
+}
+
+// One aspect ratio for the whole album (Camp Snap shots all share one).
+function albumAspect() {
+  for (const p of state.photos.values()) {
+    if (p.photoW && p.photoH) return p.photoH / p.photoW;
+  }
+  return 3 / 4;
+}
 
 function photosIn(tab) {
   const status = tab === 'trash' ? 'trash' : 'main';
@@ -163,6 +197,7 @@ function renderAlbum() {
   const scrollTop = grid.scrollTop;
   grid.textContent = '';
 
+  const tilePad = `${albumAspect() * 100}%`;
   const frag = document.createDocumentFragment();
   for (const p of list) {
     // A div, not a button: Safari's special button rendering mangles image
@@ -174,14 +209,11 @@ function renderAlbum() {
     tile.dataset.id = p.id;
     if (state.selected.has(p.id)) tile.classList.add('selected');
 
-    // The spacer fixes the tile's shape from the photo's byte-parsed
-    // dimensions; the image stretches to fill it. Layout therefore never
-    // depends on how (or how badly) the browser decoded the thumbnail.
-    const w = p.photoW || p.thumbW || 4;
-    const h = p.photoH || p.thumbH || 3;
+    // The spacer fixes the tile's shape; the image stretches to fill it, so
+    // layout never depends on how (or how badly) a thumbnail was decoded.
     const spacer = document.createElement('div');
     spacer.className = 'tile-spacer';
-    spacer.style.paddingTop = `${(h / w) * 100}%`;
+    spacer.style.paddingTop = tilePad;
     tile.appendChild(spacer);
 
     const img = document.createElement('img');
@@ -235,7 +267,9 @@ function renderAlbum() {
 function thumbUrl(p) {
   let url = state.thumbUrls.get(p.id);
   if (!url) {
-    url = URL.createObjectURL(p.thumb || p.blob);
+    const blob = thumbBlobOf(p);
+    if (!blob) return '';
+    url = URL.createObjectURL(blob);
     state.thumbUrls.set(p.id, url);
   }
   return url;
@@ -243,6 +277,12 @@ function thumbUrl(p) {
 
 function renderBanner() {
   const banner = $('cam-banner');
+  const dead = [...state.photos.values()].filter((p) => p.blobDead).length;
+  if (dead > 0) {
+    banner.hidden = false;
+    banner.innerHTML = `⚠️ ${dead} photo${dead === 1 ? '' : 's'} lost their full-size copy — plug in your Camp&nbsp;Snap and <b>tap here to re-import</b>. They'll slot back in automatically.`;
+    return;
+  }
   if (state.camConnected) {
     banner.hidden = true;
     return;
@@ -311,34 +351,50 @@ async function importFiles(files, relDirs) {
       if (done % 5 === 0 || done === candidates.length) {
         $('progress-text').textContent = `Importing… ${done} / ${candidates.length}`;
       }
-      if (state.photos.has(id)) {
-        // Already imported; remember where it lives on the camera if we just learned that.
-        const existing = state.photos.get(id);
-        if (relDir && !existing.relDir) {
-          existing.relDir = relDir;
-          await idbPut('photos', existing);
+      const existing = state.photos.get(id);
+      if (existing) {
+        if (relDir && !existing.relDir) existing.relDir = relDir;
+        // Heal records whose stored full-size copy was lost: replace the
+        // bytes and rebuild the thumbnail, keeping status (album vs Deleted).
+        if (!(await getOriginal(existing))) {
+          try {
+            await saveOriginal(id, f);
+            const t = await makeThumb(f);
+            existing.thumbBuf = await t.blob.arrayBuffer();
+            existing.thumbW = t.w;
+            existing.thumbH = t.h;
+            const dims = await jpegDims(f);
+            if (dims) { existing.photoW = dims.w; existing.photoH = dims.h; }
+            delete existing.blob;
+            delete existing.thumb;
+            existing.blobDead = false;
+            existing.thumbVer = THUMB_VER;
+            const url = state.thumbUrls.get(id);
+            if (url) { URL.revokeObjectURL(url); state.thumbUrls.delete(id); }
+            added++;
+          } catch (e) { /* keep whatever we had */ }
         }
+        await idbPut('photos', existing);
         continue;
       }
       if (await idbGet('tombstones', id)) continue; // purged before — don't resurrect
 
-      let thumb = null;
+      let thumbBuf = null;
       let thumbW = 0;
       let thumbH = 0;
       try {
         const t = await makeThumb(f);
-        thumb = t.blob;
+        thumbBuf = await t.blob.arrayBuffer();
         thumbW = t.w;
         thumbH = t.h;
-      } catch (e) { /* keep full image as fallback */ }
+      } catch (e) { /* tile will fall back to the original */ }
       const dims = await jpegDims(f);
       const record = {
         id,
         name: f.name,
         size: f.size,
         lastModified: f.lastModified || Date.now(),
-        blob: f,
-        thumb,
+        thumbBuf,
         thumbW,
         thumbH,
         thumbVer: THUMB_VER,
@@ -348,6 +404,7 @@ async function importFiles(files, relDirs) {
         addedAt: Date.now(),
         relDir: relDir || null, // path segments on the camera, when known
       };
+      await saveOriginal(id, f);
       await idbPut('photos', record);
       state.photos.set(id, record);
       added++;
@@ -437,21 +494,38 @@ async function makeThumb(file) {
 async function repairLibrary() {
   const todo = [...state.photos.values()].filter((p) => p.thumbVer !== THUMB_VER);
   if (todo.length === 0) return;
-  showProgress(`Fixing photos… 0 / ${todo.length}`);
+  showProgress(`Checking photos… 0 / ${todo.length}`);
   let i = 0;
   for (const p of todo) {
     i++;
-    $('progress-text').textContent = `Fixing photos… ${i} / ${todo.length}`;
+    $('progress-text').textContent = `Checking photos… ${i} / ${todo.length}`;
     try {
-      const dims = await jpegDims(p.blob);
-      if (dims) { p.photoW = dims.w; p.photoH = dims.h; }
-      const t = await makeThumb(p.blob);
-      p.thumb = t.blob;
-      p.thumbW = t.w;
-      p.thumbH = t.h;
-      const url = state.thumbUrls.get(p.id);
-      if (url) { URL.revokeObjectURL(url); state.thumbUrls.delete(p.id); }
-    } catch (e) { /* keep whatever we had for this one */ }
+      let original = await getOriginal(p);
+      if (original) {
+        // Move legacy Blob storage onto sturdy bytes, refresh dims + thumb.
+        if (!(await idbGet('blobs', p.id).catch(() => null))) await saveOriginal(p.id, original);
+        const dims = await jpegDims(original);
+        if (dims) { p.photoW = dims.w; p.photoH = dims.h; }
+        try {
+          const t = await makeThumb(original);
+          p.thumbBuf = await t.blob.arrayBuffer();
+          p.thumbW = t.w;
+          p.thumbH = t.h;
+          const url = state.thumbUrls.get(p.id);
+          if (url) { URL.revokeObjectURL(url); state.thumbUrls.delete(p.id); }
+        } catch (e) { /* keep the old thumb */ }
+        p.blobDead = false;
+        delete p.blob;
+      } else {
+        // The stored full-size copy is gone (iOS can invalidate stored
+        // Files). Keep the thumbnail; re-importing from the camera heals it.
+        p.blobDead = true;
+        if (p.thumb && !p.thumbBuf) {
+          try { p.thumbBuf = await p.thumb.arrayBuffer(); } catch (e) { /* thumb dead too */ }
+        }
+      }
+      if (p.thumbBuf) delete p.thumb;
+    } catch (e) { /* leave record as-is */ }
     p.thumbVer = THUMB_VER; // stamp even on failure so we don't loop forever
     try { await idbPut('photos', p); } catch (e) { /* non-fatal */ }
   }
@@ -626,6 +700,7 @@ async function purgePhotos(ids) {
     if (!p) continue;
     await cameraPurge(p);
     await idbDelete('photos', id);
+    await idbDelete('blobs', id).catch(() => {});
     await idbPut('tombstones', { id, purgedAt: Date.now() }).catch(() => {});
     state.photos.delete(id);
     const url = state.thumbUrls.get(id);
@@ -635,16 +710,18 @@ async function purgePhotos(ids) {
   renderAlbum();
 }
 
-function asFile(p) {
-  const type = p.blob.type || 'image/jpeg';
-  return p.blob instanceof File ? p.blob : new File([p.blob], p.name, { type, lastModified: p.lastModified });
-}
-
 async function savePhotos(ids) {
   const files = [];
+  let missing = 0;
   for (const id of ids) {
     const p = state.photos.get(id);
-    if (p) files.push(asFile(p));
+    if (!p) continue;
+    const blob = await getOriginal(p);
+    if (!blob) { missing++; continue; }
+    files.push(new File([blob], p.name, { type: blob.type || 'image/jpeg', lastModified: p.lastModified }));
+  }
+  if (missing > 0) {
+    toast(`${missing} photo${missing === 1 ? '' : 's'} unavailable — re-import from the camera first`);
   }
   if (files.length === 0) return;
 
@@ -714,13 +791,27 @@ function onSlideIntersect(entries) {
     const p = state.photos.get(id);
     if (!p) continue;
     if (entry.isIntersecting) {
-      if (!slide.firstChild) {
+      if (slide.firstChild || slide.dataset.loading) continue;
+      slide.dataset.loading = '1';
+      getOriginal(p).then((blob) => {
+        delete slide.dataset.loading;
+        if (slide.firstChild || !slide.isConnected) return;
         const img = document.createElement('img');
         img.decoding = 'async';
         img.alt = p.name;
-        img.src = URL.createObjectURL(p.blob);
+        if (!blob) {
+          // Full-size copy lost — show the thumbnail at the right shape
+          // rather than a broken image.
+          blob = thumbBlobOf(p);
+          if (!blob) return;
+          img.style.width = '100%';
+          img.style.height = 'auto';
+          img.style.aspectRatio = `${p.photoW || 4} / ${p.photoH || 3}`;
+          img.style.objectFit = 'fill';
+        }
+        img.src = URL.createObjectURL(blob);
         slide.appendChild(img);
-      }
+      });
     } else if (slide.firstChild) {
       URL.revokeObjectURL(slide.firstChild.src);
       slide.textContent = '';
