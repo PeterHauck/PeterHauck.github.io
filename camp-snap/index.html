@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Camp Snap</title>
+<meta name="description" content="Browse, save, and clean up photos from your Camp Snap camera.">
+<meta name="theme-color" content="#121212">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Camp Snap">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ============ Connect screen ============ -->
+<section id="connect-screen" class="screen" hidden>
+  <div class="connect-card">
+    <svg class="cam-art" viewBox="0 0 120 84" aria-hidden="true">
+      <rect x="4" y="16" width="112" height="64" rx="12" fill="#ff8a3d"/>
+      <rect x="40" y="6" width="26" height="14" rx="5" fill="#ff8a3d"/>
+      <circle cx="60" cy="48" r="21" fill="#121212"/>
+      <circle cx="60" cy="48" r="13" fill="#3a3a3a"/>
+      <circle cx="55" cy="43" r="4" fill="#7a7a7a"/>
+      <rect x="92" y="26" width="12" height="8" rx="3" fill="#121212"/>
+    </svg>
+    <h1>Connect your Camp&nbsp;Snap</h1>
+    <p class="connect-copy">
+      Plug the camera into your phone with its USB‑C cable and turn it on.
+      Then import your photos below.
+    </p>
+    <div class="connect-buttons">
+      <button id="btn-open-camera" class="btn btn-primary" hidden>Open camera folder</button>
+      <button id="btn-pick-folder" class="btn btn-primary" hidden>Import camera folder…</button>
+      <button id="btn-pick-files" class="btn btn-secondary">Choose photos…</button>
+    </div>
+    <p class="hint" id="connect-hint">
+      In the picker, tap <b>Browse</b> and choose the Camp&nbsp;Snap drive,
+      then open the <b>DCIM</b> folder.
+    </p>
+    <button id="btn-skip" class="btn-link" hidden>Skip — view my album</button>
+  </div>
+</section>
+
+<!-- ============ Album screen ============ -->
+<section id="album-screen" class="screen" hidden>
+  <header class="app-header">
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="main">Photos</button>
+      <button class="tab" data-tab="trash">Deleted <span id="trash-count" class="badge" hidden></span></button>
+    </nav>
+    <div class="header-actions">
+      <button id="btn-import" class="icon-btn" title="Import from camera" aria-label="Import from camera">
+        <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M4 19h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button id="btn-select" class="text-btn">Select</button>
+    </div>
+  </header>
+
+  <button id="cam-banner" class="cam-banner" hidden></button>
+
+  <div id="trash-tools" class="trash-tools" hidden>
+    <span id="trash-tools-label"></span>
+    <button id="btn-purge" class="text-btn danger">Purge all</button>
+  </div>
+
+  <main id="grid" class="grid"></main>
+
+  <div id="empty-state" class="empty-state" hidden>
+    <p id="empty-text"></p>
+    <button id="btn-empty-import" class="btn btn-primary" hidden>Connect camera</button>
+  </div>
+
+  <footer id="select-bar" class="action-bar" hidden>
+    <button id="btn-cancel-select" class="text-btn">Done</button>
+    <span id="select-count" class="select-count">0 selected</span>
+    <button id="btn-select-all" class="text-btn">All</button>
+    <div class="action-bar-buttons">
+      <button id="btn-sel-restore" class="btn btn-secondary" hidden>Restore</button>
+      <button id="btn-sel-delete" class="btn btn-danger">Delete</button>
+      <button id="btn-sel-save" class="btn btn-primary">Save</button>
+      <button id="btn-sel-purge" class="btn btn-danger" hidden>Delete forever</button>
+    </div>
+  </footer>
+</section>
+
+<!-- ============ Viewer screen ============ -->
+<section id="viewer-screen" class="screen" hidden>
+  <header class="viewer-header">
+    <button id="btn-close-viewer" class="icon-btn" aria-label="Back">
+      <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <span id="viewer-counter"></span>
+    <span id="viewer-name"></span>
+  </header>
+  <div id="strip" class="strip"></div>
+  <footer class="viewer-bar">
+    <button id="btn-viewer-delete" class="btn btn-danger">
+      <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0-.8 12.1a2 2 0 0 1-2 1.9H8.8a2 2 0 0 1-2-1.9L6 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span id="viewer-delete-label">Delete</span>
+    </button>
+    <button id="btn-viewer-restore" class="btn btn-secondary" hidden>
+      <svg viewBox="0 0 24 24"><path d="M4 10a8 8 0 1 1 2.3 6.3M4 10V4m0 6h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Restore
+    </button>
+    <button id="btn-viewer-save" class="btn btn-primary">
+      <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M4 19h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Save
+    </button>
+  </footer>
+</section>
+
+<!-- ============ Shared bits ============ -->
+<div id="toast" class="toast" hidden>
+  <span id="toast-text"></span>
+  <button id="toast-action" class="toast-action" hidden></button>
+</div>
+
+<div id="modal" class="modal-overlay" hidden>
+  <div class="modal">
+    <h2 id="modal-title"></h2>
+    <p id="modal-body"></p>
+    <div class="modal-buttons">
+      <button id="modal-cancel" class="btn btn-secondary">Cancel</button>
+      <button id="modal-ok" class="btn btn-danger">OK</button>
+    </div>
+  </div>
+</div>
+
+<div id="progress" class="progress-overlay" hidden>
+  <div class="progress-card">
+    <div class="spinner"></div>
+    <p id="progress-text">Importing…</p>
+  </div>
+</div>
+
+<input type="file" id="file-input" accept="image/*" multiple hidden>
+<input type="file" id="dir-input" webkitdirectory hidden>
+
+<script src="app.js"></script>
+</body>
+</html>
