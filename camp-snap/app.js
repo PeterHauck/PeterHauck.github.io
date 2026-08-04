@@ -15,9 +15,9 @@
 
 const $ = (id) => document.getElementById(id);
 
-const APP_VER = 10;
+const APP_VER = 11;
 const THUMB_SIZE = 480;
-const THUMB_VER = 4;
+const THUMB_VER = 5;
 const IMAGE_RE = /\.(jpe?g|png|gif|bmp|webp)$/i;
 const CAMERA_TRASH_DIR = 'DELETED';
 
@@ -495,11 +495,41 @@ async function makeThumb(file) {
     // measure how much actually lands and compensate (megapix-image trick).
     const squash = detectVerticalSquash(source, sh);
     canvas.getContext('2d').drawImage(source, 0, 0, sw, sh, 0, 0, w, h / squash);
-    const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.8));
+    // Belt and braces: inspect the finished canvas and re-stretch if the
+    // draw still left the bottom unpainted (the probe can be fooled; the
+    // painted result can't lie).
+    const fixed = fixVerticalCoverage(canvas);
+    const blob = await new Promise((res) => fixed.toBlob(res, 'image/jpeg', 0.8));
     if (!blob) throw new Error('toBlob failed');
     return { blob, w, h };
   } finally {
     cleanup();
+  }
+}
+
+// How many rows of the canvas were actually painted (undrawn rows have
+// alpha 0 — JPEG content is always opaque).
+function paintedHeight(canvas) {
+  const h = canvas.height;
+  const data = canvas.getContext('2d').getImageData(Math.floor(canvas.width / 2), 0, 1, h).data;
+  for (let y = h - 1; y >= 0; y--) {
+    if (data[y * 4 + 3] !== 0) return y + 1;
+  }
+  return 0;
+}
+
+function fixVerticalCoverage(canvas) {
+  try {
+    const h = canvas.height;
+    const painted = paintedHeight(canvas);
+    if (painted === 0 || painted >= h - 1) return canvas;
+    const fixed = document.createElement('canvas');
+    fixed.width = canvas.width;
+    fixed.height = h;
+    fixed.getContext('2d').drawImage(canvas, 0, 0, canvas.width, painted, 0, 0, canvas.width, h);
+    return fixed;
+  } catch (e) {
+    return canvas;
   }
 }
 
