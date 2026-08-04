@@ -15,9 +15,9 @@
 
 const $ = (id) => document.getElementById(id);
 
-const APP_VER = 8;
+const APP_VER = 9;
 const THUMB_SIZE = 480;
-const THUMB_VER = 3;
+const THUMB_VER = 4;
 const IMAGE_RE = /\.(jpe?g|png|gif|bmp|webp)$/i;
 const CAMERA_TRASH_DIR = 'DELETED';
 
@@ -482,12 +482,39 @@ async function makeThumb(file) {
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
-    canvas.getContext('2d').drawImage(source, 0, 0, w, h);
+    // iOS Safari squashes large JPEGs vertically when drawn to a canvas;
+    // measure how much actually lands and compensate (megapix-image trick).
+    const squash = detectVerticalSquash(source, sh);
+    canvas.getContext('2d').drawImage(source, 0, 0, sw, sh, 0, 0, w, h / squash);
     const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.8));
     if (!blob) throw new Error('toBlob failed');
     return { blob, w, h };
   } finally {
     cleanup();
+  }
+}
+
+function detectVerticalSquash(source, sh) {
+  try {
+    const ih = Math.min(sh, 4096);
+    const probe = document.createElement('canvas');
+    probe.width = 1;
+    probe.height = ih;
+    const ctx = probe.getContext('2d');
+    ctx.drawImage(source, 0, 0);
+    const data = ctx.getImageData(0, 0, 1, ih).data;
+    let sy = 0;
+    let ey = ih;
+    let py = ih;
+    while (py > sy) {
+      const alpha = data[(py - 1) * 4 + 3];
+      if (alpha === 0) ey = py; else sy = py;
+      py = (ey + sy) >> 1;
+    }
+    const ratio = py / ih;
+    return ratio === 0 ? 1 : ratio;
+  } catch (e) {
+    return 1;
   }
 }
 
@@ -799,17 +826,25 @@ function onSlideIntersect(entries) {
         const img = document.createElement('img');
         img.decoding = 'async';
         img.alt = p.name;
-        if (!blob) {
-          // Full-size copy lost — show the thumbnail at the right shape
-          // rather than a broken image.
-          blob = thumbBlobOf(p);
-          if (!blob) return;
+        const useThumbFallback = () => {
+          // Show the thumbnail at the photo's true shape rather than a
+          // broken image; re-importing restores full quality.
+          const t = thumbBlobOf(p);
+          if (!t) return false;
           img.style.width = '100%';
           img.style.height = 'auto';
           img.style.aspectRatio = `${p.photoW || 4} / ${p.photoH || 3}`;
           img.style.objectFit = 'fill';
+          if (img.src) URL.revokeObjectURL(img.src);
+          img.src = URL.createObjectURL(t);
+          return true;
+        };
+        if (blob) {
+          img.onerror = () => { img.onerror = null; useThumbFallback(); };
+          img.src = URL.createObjectURL(blob);
+        } else if (!useThumbFallback()) {
+          return;
         }
-        img.src = URL.createObjectURL(blob);
         slide.appendChild(img);
       });
     } else if (slide.firstChild) {
