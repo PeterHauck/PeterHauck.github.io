@@ -3115,7 +3115,7 @@
     const json = JSON.stringify(obj);
     idbSet(IDB.key, obj).catch((e) => console.warn("idb save failed", e));   // primary (roomy)
     try { localStorage.setItem(STORE_KEY, json); } catch (e) {}              // best-effort mirror (small trees)
-    try { localStorage.setItem("familyTree.cloudDirty", "1"); } catch (e) {}  // local has edits not yet in the cloud
+    try { localStorage.setItem("familyTree.cloudDirty", "1"); localStorage.setItem("familyTree.dirtyAt", String(Date.now())); } catch (e) {}  // local has edits not yet in the cloud
     scheduleCloudSave();   // durable copy to your site (Vercel Blob)
     scheduleBackup();      // optional legacy GitHub backup (only if turned on)
   }
@@ -3128,6 +3128,14 @@
   // needing to flip a separate "cloud on" switch first.
   const ownerCanCloud = () => { try { return !!((localStorage.getItem("familyTree.familyPass") || "") && (localStorage.getItem("familyTree.importPass") || "")); } catch (e) { return false; } };
   function setCloudStatus(st, msg) {
+    // The ⟳ button doubles as a sync light on every device (normal = synced,
+    // orange = saving, red = failed) so sync state is never invisible.
+    const sb = $("#tbSync");
+    if (sb) {
+      sb.classList.toggle("sync-pending", st === "pending" || st === "saving");
+      sb.classList.toggle("sync-error", st === "error");
+      sb.title = st === "error" ? ("Sync failed" + (msg ? ": " + msg : "") + " — tap to retry") : st === "pending" || st === "saving" ? "Saving to your site…" : "Refresh — pull the latest version from your site";
+    }
     const el = $("#cloudStatus"); if (!el) return;
     const map = { off: "Off — turn on to save a durable copy to your site", on: "On ✓ — saves automatically", pending: "Saving soon…", saving: "Saving to your site…", saved: "Saved to your site ✓", error: "Save failed" };
     el.textContent = (map[st] || "") + (msg ? " — " + msg : "");
@@ -3141,7 +3149,7 @@
     if (!ownerCanCloud() && (readonly || !CLOUD_ON())) return;
     clearTimeout(cloudTimer);
     setCloudStatus("pending");
-    cloudTimer = setTimeout(() => cloudSaveTree(false), 6000);   // coalesce a burst of edits
+    cloudTimer = setTimeout(() => cloudSaveTree(false), 1500);   // near-instant: every change reaches the cloud moments after it's made
   }
   async function cloudSaveTree(manual) {
     if (readonly && !ownerCanCloud()) return;
@@ -3179,9 +3187,14 @@
         }
         done = await post({ action: "commitTree", uploadId, total, length: payload.length, check });
       }
+      // Every save is length-verified: the server echoes exactly how many bytes
+      // it stored — a mismatch is treated as a failed save, never trusted.
+      const j = await done.json();
+      if (j && j.size != null && j.size !== payload.length) throw new Error("the copy stored on your site is incomplete — retrying");
       // Record the cloud's write time so this device knows it's in sync and won't
       // pull its own save back on the next load.
-      try { const j = await done.json(); if (j && j.savedAt) localStorage.setItem("familyTree.cloudSavedAt", String(j.savedAt)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
+      try { if (j && j.savedAt) localStorage.setItem("familyTree.cloudSavedAt", String(j.savedAt)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
+      cloudRetries = 0;
       // Keep the shared viewer password working: wrap the family password under it
       // and store the wrap (ciphertext) so viewers can unlock with their password.
       try {
@@ -3206,9 +3219,11 @@
       // exactly what leaves other devices (your phone) stuck on an old copy.
       const now = Date.now();
       if (manual || now - lastCloudErrToast > 20000) { lastCloudErrToast = now; toast("Couldn’t save to your site: " + (e.message || "error")); }
+      // Auto-saves retry themselves (a network blip must not strand an edit).
+      if (!manual && cloudRetries < 5) { cloudRetries++; setTimeout(() => cloudSaveTree(false), 15000); }
     }
   }
-  let lastCloudErrToast = 0;
+  let lastCloudErrToast = 0, cloudRetries = 0;
   // Owner: pull the latest encrypted tree from the cloud and load it into the editor.
   async function cloudLoadTree() {
     let res; try { res = await fetch("api/store?action=getTree"); } catch (e) { toast("Couldn’t reach your site"); return false; }
@@ -3788,7 +3803,12 @@
   { const sb = $("#tbSync"); if (sb) sb.onclick = forcePullFromCloud; }
   // Re-pull the latest when you return to the tab or a phone restores a frozen
   // page — keeps the view current without a manual refresh.
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) backgroundRefresh(); });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) { backgroundRefresh(); return; }
+    // Leaving the tab with an edit still in the save window: push NOW instead of
+    // waiting out the debounce, so closing the tab can't strand a change.
+    try { if (localStorage.getItem("familyTree.cloudDirty") === "1" && ownerCanCloud()) { clearTimeout(cloudTimer); cloudSaveTree(false); } } catch (e) {}
+  });
   window.addEventListener("pageshow", (e) => { if (e.persisted) backgroundRefresh(); });
   window.addEventListener("focus", () => backgroundRefresh());
   // A tab left open (e.g. the phone sitting on the tree) checks for a newer cloud
@@ -4062,13 +4082,27 @@
     if (ownerCanCloud()) {
       let dirty = ""; try { dirty = localStorage.getItem("familyTree.cloudDirty") || ""; } catch (e) {}
       if (dirty === "1") setTimeout(async () => {
-        let synced = 0; try { synced = +(localStorage.getItem("familyTree.cloudSavedAt") || 0); } catch (e) {}
+        let synced = 0, dirtyAt = 0;
+        try { synced = +(localStorage.getItem("familyTree.cloudSavedAt") || 0); dirtyAt = +(localStorage.getItem("familyTree.dirtyAt") || 0); } catch (e) {}
         const info = await cloudTreeInfo();
-        if (info && info.exists && info.savedAt > synced) {
-          toast("Your site has newer data than this device's unsaved changes — tap ⟳ to load the latest, or Save to overwrite it with this device's copy.");
-          return;
+        // Conflict (both this device and the cloud moved since our last sync):
+        // resolve AUTOMATICALLY — the most recently edited side wins, and the
+        // losing copy is always retained (the cloud keeps its last versions;
+        // this device stashes a local backup) so nothing can be destroyed.
+        if (info && info.exists && info.savedAt > synced && info.savedAt > dirtyAt) {
+          try { await idbSet("tree.v1.conflictBackup", exportObject()); } catch (e) {}
+          const cp = await fetchCloudPayload();
+          const r = cp && cp.payload ? await decryptWithKnown(cp.payload) : null;
+          if (r) {
+            loadObject(r.obj);
+            try { localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || info.savedAt)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
+            try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}
+            autoLayout(); render();
+            toast("Synced to the latest from your site");
+            return;
+          }
         }
-        cloudSaveTree(false);
+        cloudSaveTree(false);   // our edits are newest (or the cloud copy is unreadable) — push
       }, 1200);
     }
   }
