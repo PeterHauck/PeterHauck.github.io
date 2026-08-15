@@ -3162,16 +3162,19 @@
         if (!res.ok) { let msg = "failed (" + res.status + ")"; try { msg = (await res.json()).error || msg; } catch (e) {} if (res.status === 404) msg = "needs the Vercel site + a Blob store"; throw new Error(msg); }
         return res;
       };
+      // Tiny password-check ciphertext saved next to the tree: lets any device
+      // tell "wrong password" apart from "damaged file" when a pull fails.
+      let check = ""; try { check = await encryptText(fam, "familytree-pass-ok"); } catch (e) {}
       let done;
       if (payload.length <= CHUNK) {
-        done = await post({ action: "saveTree", payload });
+        done = await post({ action: "saveTree", payload, check });
       } else {
         const total = Math.ceil(payload.length / CHUNK);
         for (let i = 0; i < total; i++) {
           await post({ action: "putPart", index: i, chunk: payload.slice(i * CHUNK, (i + 1) * CHUNK) });
           setCloudStatus("saving");
         }
-        done = await post({ action: "commitTree", total, length: payload.length });
+        done = await post({ action: "commitTree", total, length: payload.length, check });
       }
       // Record the cloud's write time so this device knows it's in sync and won't
       // pull its own save back on the next load.
@@ -3182,8 +3185,18 @@
         const vp = localStorage.getItem("familyTree.viewerPass") || "";
         if (vp) { const wrap = await encryptText(vp, fam); await fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "saveViewerKey", passcode: pass, wrap }) }); }
       } catch (e) {}
+      // Manual saves verify the round-trip: download the copy back and decrypt it
+      // with the same password, so "Saved ✓" genuinely means other devices can
+      // open what's up there.
+      if (manual) {
+        setCloudStatus("saving", "verifying");
+        const vcp = await fetchCloudPayload();
+        let ok = false;
+        if (vcp && vcp.payload) { try { await decryptState(fam, vcp.payload); ok = true; } catch (e) {} }
+        if (!ok) throw new Error("saved, but the copy on your site couldn’t be read back — please click Save again");
+      }
       setCloudStatus("saved");
-      if (manual) toast("Saved to your site ✓");
+      if (manual) toast("Saved & verified ✓ — other devices can open this copy");
     } catch (e) {
       setCloudStatus("error", e.message);
       // Surface the failure even for automatic saves — a silent push failure is
@@ -3249,10 +3262,27 @@
     }
     return null;
   }
+  // Does this password match the one the cloud was last saved with? Uses the tiny
+  // pass-check ciphertext stored beside the tree. "right" / "wrong" / "unknown"
+  // (unknown = no check saved yet, e.g. before the first save on current code).
+  async function passVerdict(pw) {
+    if (!pw) return "unknown";
+    try {
+      const res = await fetch("api/store?action=passCheck");
+      if (!res.ok) return "unknown";
+      const j = await res.json();
+      if (!j || !j.check) return "unknown";
+      try { await decryptText(pw, j.check); return "right"; } catch (_) {}
+      const wrap = await fetchViewerWrap();
+      if (wrap) { try { const fam = await decryptText(pw, wrap); await decryptText(fam, j.check); return "right"; } catch (_) {} }
+      return "wrong";
+    } catch (e) { return "unknown"; }
+  }
   async function forcePullFromCloud() {
     toast("Checking your site for the latest…");
     const cp = await fetchCloudPayload();
     if (!cp || !cp.payload) { toast("No cloud copy found (your site may still be catching up)"); return; }
+    let pw = ""; try { pw = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
     let r = await decryptWithKnown(cp.payload);
     // Stored password didn't open it (or none stored) — ask and try again, both
     // as the family password and as the viewer password. Self-healing instead of
@@ -3260,11 +3290,17 @@
     if (!r) {
       const typed = prompt("Password to open the cloud copy (your family or viewer password):") || "";
       if (!typed) return;
+      pw = typed;
       r = await decryptWithKnown(cp.payload, typed);
     }
     if (!r) {
+      // The password-check marker tells us WHICH problem this is, so the fix is
+      // never a guessing game: wrong password vs. a damaged cloud file.
+      const verdict = await passVerdict(pw);
       let when = ""; try { when = cp.savedAt ? new Date(cp.savedAt).toLocaleString() : ""; } catch (_) {}
-      toast("That cloud copy didn’t open with that password" + (when ? " (cloud saved " + when + ")" : ""));
+      if (verdict === "right") toast("Your password is right, but the cloud file won’t open — it looks damaged. On your computer: Save & back up → ‘Save to my site now’, then tap ⟳ here again.");
+      else if (verdict === "wrong") toast("That password doesn’t match the one the cloud copy was locked with" + (when ? " (cloud saved " + when + ")" : "") + ". On your computer, set the Family password box and Save to re-lock it.");
+      else toast("That cloud copy didn’t open with that password" + (when ? " (cloud saved " + when + ")" : ""));
       return;
     }
     loadObject(r.obj);

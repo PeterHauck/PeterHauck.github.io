@@ -18,6 +18,7 @@ import { put, list } from "@vercel/blob";
 const TREE = "family-tree.json";
 const COMMENTS = "comments.json";   // { [personId]: [ {id, name, text, at} ] }
 const VIEWERKEY = "viewer-key.json"; // family password wrapped (encrypted) under the shared viewer password
+const PASSCHECK = "pass-check.json"; // tiny ciphertext saved with each tree write — lets a device tell "wrong password" apart from "damaged file"
 
 async function readBody(req) {
   if (req.body) return typeof req.body === "string" ? JSON.parse(req.body) : req.body;
@@ -104,6 +105,18 @@ export default async function handler(req, res) {
       const b = blobs.find((x) => x.pathname === TREE);
       res.setHeader("Cache-Control", "no-store");
       res.status(200).json({ exists: !!b, savedAt: b ? (Date.parse(b.uploadedAt) || 0) : 0 });
+      return;
+    }
+
+    // The tiny password-check ciphertext written with each tree save. Safe to
+    // serve — it's encrypted; it only confirms whether a password matches.
+    if (req.method === "GET" && req.query.action === "passCheck") {
+      const { blobs } = await list({ prefix: PASSCHECK, token });
+      const b = blobs.find((x) => x.pathname === PASSCHECK);
+      res.setHeader("Cache-Control", "no-store");
+      if (!b) { res.status(404).json({ error: "No password check saved yet." }); return; }
+      const r = await fetch(fresh(b.downloadUrl || b.url));
+      res.status(200).json({ check: await r.text() });
       return;
     }
 
@@ -197,6 +210,7 @@ export default async function handler(req, res) {
         const payload = (body.payload || "").toString();
         if (!payload || payload.length > 30 * 1024 * 1024) { res.status(400).json({ error: "Nothing to save (or too large)." }); return; }
         await putBlob(TREE, payload, "text/plain");
+        if (body.check) { try { await putBlob(PASSCHECK, String(body.check).slice(0, 5000), "application/json"); } catch (e) {} }
         res.status(200).json({ ok: true, savedAt: await treeSavedAt() });
         return;
       }
@@ -232,6 +246,7 @@ export default async function handler(req, res) {
         const expected = parseInt(body.length, 10);
         if (expected > 0 && combined.length !== expected) { res.status(409).json({ error: "The upload didn't reassemble cleanly — please try saving again." }); return; }
         await putBlob(TREE, combined, "text/plain");
+        if (body.check) { try { await putBlob(PASSCHECK, String(body.check).slice(0, 5000), "application/json"); } catch (e) {} }
         res.status(200).json({ ok: true, savedAt: await treeSavedAt() });
         return;
       }
