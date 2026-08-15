@@ -1571,11 +1571,11 @@
     // Offer to pull a picture out of an obituary when there's one to pull from
     // (an uploaded photo, or a linked page we can fetch the portrait off).
     if (photoBtn) {
-      const canPhoto = docs.some((d) => d && ((d.kind === "image" && d.content) || d.url));
+      const canPhoto = docs.some((d) => isObitDoc(d) && ((d.kind === "image" && d.content) || d.url));
       photoBtn.hidden = !canPhoto;
       photoBtn.textContent = p.photo ? "📷 Replace picture from obituary" : "📷 Use photo from obituary";
     }
-    if (!docs.length) hint.textContent = "Attach an obituary — paste the text, upload a PDF/photo, or save a link. Kept with the tree so it survives even if the original goes offline.";
+    if (!docs.length) hint.textContent = "Attach an obituary or any other record (an article, award, certificate…) — paste the text, upload a PDF/photo, or save a link. Kept with the tree so it survives even if the original goes offline.";
     else hint.textContent = "";
     docs.forEach((doc) => {
       const li = document.createElement("li");
@@ -2390,10 +2390,12 @@
     const obitTitle = person.name + "’s Obituary";
     const back = document.createElement("div");
     back.className = "modal-backdrop";
-    back.innerHTML = `<div class="modal"><h2>Attach ${escapeHtml(obitTitle)}</h2>
-      <div class="hint">Paste a link and I’ll fetch the text and keep a durable copy — so it stays even if the original goes offline. Or paste the text yourself, or upload a photo / PDF. A photo also becomes ${escapeHtml(person.name)}’s picture in the tree.</div>
-      <label class="field"><span>Link to the obituary</span><input type="text" id="dUrl" placeholder="https://…"/></label>
-      <label class="field"><span>…or paste the text</span><textarea id="dText" rows="5" placeholder="Paste the obituary text here…"></textarea></label>
+    back.innerHTML = `<div class="modal"><h2>Attach to ${escapeHtml(person.name)}</h2>
+      <div class="attach-choice"><button type="button" id="dTypeObit" class="active">Obituary</button><button type="button" id="dTypeRecord">Other record</button></div>
+      <div class="hint" id="dTypeHint">An obituary marks ${escapeHtml(person.name)} as deceased, and its photo becomes their picture in the tree.</div>
+      <label class="field" id="dTitleField" hidden><span>What is this record?</span><input type="text" id="dTitle" placeholder="e.g. South Dakota Basketball Hall of Fame"/></label>
+      <label class="field"><span>Link to it</span><input type="text" id="dUrl" placeholder="https://…"/></label>
+      <label class="field"><span>…or paste the text</span><textarea id="dText" rows="5" placeholder="Paste the text here…"></textarea></label>
       <label class="field"><span>…or upload a photo / PDF</span><input type="file" id="dFile" accept="application/pdf,image/*,.txt,.html"/></label>
       <div class="err" id="dErr" style="color:var(--divorce);font-size:12.5px;min-height:16px"></div>
       <div class="hint" id="dStatus"></div>
@@ -2404,6 +2406,22 @@
     back.addEventListener("click", (e) => { if (e.target === back) close(); });
     const err = back.querySelector("#dErr"), status = back.querySelector("#dStatus");
     const saveBtn = back.querySelector("#dSave");
+    // Obituary vs. other record (a news article, an award, a hall-of-fame page…).
+    // Only an obituary marks the person deceased — a record of a living relative
+    // must never do that.
+    let docType = "obituary";
+    const typeBtns = { obituary: back.querySelector("#dTypeObit"), record: back.querySelector("#dTypeRecord") };
+    const setType = (t) => {
+      docType = t;
+      typeBtns.obituary.classList.toggle("active", t === "obituary");
+      typeBtns.record.classList.toggle("active", t === "record");
+      back.querySelector("#dTitleField").hidden = t !== "record";
+      back.querySelector("#dTypeHint").textContent = t === "obituary"
+        ? `An obituary marks ${person.name} as deceased, and its photo becomes their picture in the tree.`
+        : `A record is anything worth keeping — an article, award, certificate… It does NOT mark ${person.name} as deceased.`;
+    };
+    typeBtns.obituary.onclick = () => setType("obituary");
+    typeBtns.record.onclick = () => setType("record");
 
     saveBtn.onclick = async () => {
       err.textContent = "";
@@ -2454,13 +2472,16 @@
         } else { kind = "link"; content = ""; toast("Saved the link"); }
       } else { err.textContent = "Add a link, paste the text, or upload a file."; return; }
 
-      const doc = { id: uid(), title: obitTitle, url, capturedAt: todayStr(), kind, content };
+      const recTitle = (back.querySelector("#dTitle").value || "").trim();
+      const title = docType === "record" ? (recTitle || "Record") : obitTitle;
+      const doc = { id: uid(), title, docType, url, capturedAt: todayStr(), kind, content };
       if (scrapedText) doc.text = scrapedText;   // durable, searchable copy of a photo/PDF's text
 
       // Make the node picture from the image BEFORE we externalise the file (we
       // need the pixels here; the stored record is downscaled separately).
+      // Obituaries only — a scan of an article/award shouldn't become someone's face.
       let setPic = false;
-      if (!person.photo) {
+      if (docType === "obituary" && !person.photo) {
         const picSrc = kind === "image" ? content : fetchedImage;
         if (picSrc) { const photo = await imageDataToPhoto(picSrc); if (photo) { person.photo = photo; setPic = true; } }
       }
@@ -2482,10 +2503,12 @@
 
       if (!person.docs) person.docs = [];
       person.docs.push(doc);
-      person.deceased = true;   // attaching an obituary means they've passed away
+      // Only an obituary means they've passed away — a record never flips this.
+      if (docType === "obituary") person.deceased = true;
       save(); render(); renderDocsForm(person); if (selectedId === person.id) fillPersonForm(person);
       close();
-      toast(scrapedText ? "Obituary saved — text scraped" + (setPic ? " & set as their picture" : "") : (setPic ? "Obituary saved — also set as their picture" : "Obituary saved"));
+      const what = docType === "record" ? "Record" : "Obituary";
+      toast(scrapedText ? what + " saved — text scraped" + (setPic ? " & set as their picture" : "") : (setPic ? what + " saved — also set as their picture" : what + " saved"));
     };
   }
 
@@ -2504,7 +2527,7 @@
     let changed = false;
     for (const p of state.persons) {
       if (p.photo || !Array.isArray(p.docs)) continue;
-      const imgDoc = p.docs.find((d) => d && d.kind === "image" && docSrc(d));
+      const imgDoc = p.docs.find((d) => isObitDoc(d) && d.kind === "image" && docSrc(d));
       if (!imgDoc) continue;
       const photo = await imageDataToPhoto(docSrc(imgDoc));
       if (photo) { p.photo = photo; changed = true; }
@@ -2518,7 +2541,7 @@
   // retroactively for obituaries that are already attached.
   async function usePhotoFromObit(p) {
     if (!p) return;
-    const docs = p.docs || [];
+    const docs = (p.docs || []).filter(isObitDoc);   // obituaries only — never a record scan
     const imgDoc = docs.find((d) => d && d.kind === "image" && docSrc(d));
     if (imgDoc) {
       const photo = await imageDataToPhoto(docSrc(imgDoc));
@@ -2623,9 +2646,13 @@
 
   // All obituary text we hold for a person (durable text copies + scraped text
   // from uploads), concatenated so date extraction can read across records.
+  // Only obituary-type docs (docs saved before types existed are all obituaries).
+  // Records — articles, awards — must never feed the date reader or the
+  // photo-from-obituary flow.
+  const isObitDoc = (d) => d && (!d.docType || d.docType === "obituary");
   function obitTextOf(p) {
-    return (p.docs || [])
-      .map((d) => (d ? (d.text || (d.kind === "text" ? d.content : "")) : ""))
+    return (p.docs || []).filter(isObitDoc)
+      .map((d) => (d.text || (d.kind === "text" ? d.content : "")))
       .filter(Boolean).join("\n\n---\n\n").trim();
   }
   // Fill a person's date gaps from parsed obituary results ({birthDate, deathDate,
@@ -2647,7 +2674,7 @@
   // The best source we can hand the AI date-reader for a person: their obituary
   // text if we have it, else the raw PDF/image file, else a link to fetch.
   function obitSourceOf(p) {
-    const docs = (p.docs || []).filter(Boolean);
+    const docs = (p.docs || []).filter(isObitDoc);
     const text = obitTextOf(p);
     if (text) return { text };
     for (const d of docs) {
