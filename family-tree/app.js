@@ -3226,27 +3226,55 @@
   // and shows it — non-destructive: it never overwrites this device's saved copy,
   // so an owner can peek at the cloud without losing local edits. Also reports the
   // cloud's last-saved time so you can see how fresh it is.
+  // Decrypt a cloud payload with whatever password this device knows: the stored
+  // password used directly as the family password, or — when what's stored is
+  // the shared VIEWER password — via the wrapped family key. The unlock screen
+  // always supported both; the refresh/pull paths didn't, which made ⟳ fail
+  // with "didn't open with your password" on a device unlocked the viewer way.
+  let unwrappedFamCache = "";   // in-memory only; the real family password is never stored on a viewer device
+  async function decryptWithKnown(payload, pwOverride) {
+    let pw = pwOverride || "";
+    if (!pw) { try { pw = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {} }
+    if (!pw) return null;
+    try { return { obj: await decryptState(pw, payload), pw }; } catch (_) {}
+    if (unwrappedFamCache) { try { return { obj: await decryptState(unwrappedFamCache, payload), pw }; } catch (_) {} }
+    const wrap = await fetchViewerWrap();
+    if (wrap) {
+      try {
+        const fam = await decryptText(pw, wrap);
+        const obj = await decryptState(fam, payload);
+        unwrappedFamCache = fam;
+        return { obj, pw };
+      } catch (_) {}
+    }
+    return null;
+  }
   async function forcePullFromCloud() {
     toast("Checking your site for the latest…");
     const cp = await fetchCloudPayload();
     if (!cp || !cp.payload) { toast("No cloud copy found (your site may still be catching up)"); return; }
-    let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
-    if (!fam) fam = prompt("Family password:") || "";
-    if (!fam) return;
-    try {
-      const obj = await decryptState(fam, cp.payload);
-      loadObject(obj);
-      try { localStorage.setItem("familyTree.familyPass", fam); localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || 0)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
-      // Persist what we pulled — without this, ⟳ showed fresh data but the next
-      // visit regressed to the old local copy.
-      try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}
-      autoLayout(); render(); fitView();
-      let when = ""; try { when = cp.savedAt ? new Date(cp.savedAt).toLocaleString() : ""; } catch (e) {}
-      toast(when ? ("Showing the latest — cloud saved " + when) : "Showing the latest from your site");
-    } catch (e) {
-      let when = ""; try { when = cp.savedAt ? new Date(cp.savedAt).toLocaleString() : ""; } catch (_) {}
-      toast("That cloud copy didn’t open with your password" + (when ? " (cloud saved " + when + ")" : ""));
+    let r = await decryptWithKnown(cp.payload);
+    // Stored password didn't open it (or none stored) — ask and try again, both
+    // as the family password and as the viewer password. Self-healing instead of
+    // a dead end.
+    if (!r) {
+      const typed = prompt("Password to open the cloud copy (your family or viewer password):") || "";
+      if (!typed) return;
+      r = await decryptWithKnown(cp.payload, typed);
     }
+    if (!r) {
+      let when = ""; try { when = cp.savedAt ? new Date(cp.savedAt).toLocaleString() : ""; } catch (_) {}
+      toast("That cloud copy didn’t open with that password" + (when ? " (cloud saved " + when + ")" : ""));
+      return;
+    }
+    loadObject(r.obj);
+    try { localStorage.setItem("familyTree.familyPass", r.pw); localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || 0)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
+    // Persist what we pulled — without this, ⟳ showed fresh data but the next
+    // visit regressed to the old local copy.
+    try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}
+    autoLayout(); render(); fitView();
+    let when = ""; try { when = cp.savedAt ? new Date(cp.savedAt).toLocaleString() : ""; } catch (e) {}
+    toast(when ? ("Showing the latest — cloud saved " + when) : "Showing the latest from your site");
   }
   // On boot, if the cloud copy is newer than what this device last synced, pull it
   // in — this is what makes edits on one device show up on the others (e.g. your
@@ -3274,13 +3302,12 @@
     const savedAt = cp.savedAt || info.savedAt;
     let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
     if (fam) {
-      try {
-        const obj = await decryptState(fam, cp.payload);
-        loadObject(obj);
-        try { localStorage.setItem("familyTree.cloudSavedAt", String(savedAt)); } catch (e) {}
-        try { await idbSet(IDB.key, exportObject()); } catch (e) {}   // refresh the local cache (no re-upload)
-        return true;
-      } catch (e) { return false; }   // wrong stored password → fall back to local
+      const r = await decryptWithKnown(cp.payload);   // family password OR viewer password (via the wrap)
+      if (!r) return false;                            // stored password doesn't open it → fall back to local
+      loadObject(r.obj);
+      try { localStorage.setItem("familyTree.cloudSavedAt", String(savedAt)); } catch (e) {}
+      try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}   // refresh the local cache (no re-upload)
+      return true;
     }
     // Newer cloud data but no password on this device: unlock it into the editor.
     try { localStorage.setItem("familyTree.cloudSavedAt", String(savedAt)); } catch (e) {}
@@ -3300,10 +3327,9 @@
       if (!safeToPull(info)) return;
       const cp = await fetchCloudPayload();
       if (!cp || !cp.payload) return;
-      let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
-      if (!fam) return;
-      const obj = await decryptState(fam, cp.payload);
-      loadObject(obj);
+      const r = await decryptWithKnown(cp.payload);   // family password OR viewer password (via the wrap)
+      if (!r) return;
+      loadObject(r.obj);
       try { localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || info.savedAt)); } catch (e) {}
       try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}   // persist so it survives the next visit
       autoLayout(); render();
