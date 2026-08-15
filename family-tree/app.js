@@ -3297,6 +3297,21 @@
       r = await decryptWithKnown(cp.payload, typed);
     }
     if (!r) {
+      // The cloud copy won't open — but the PUBLISHED snapshot might. Offer it,
+      // so a phone stuck on an old local copy can still catch up to the last
+      // published data even while the cloud copy is broken.
+      const committed = (typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20) ? window.FAMILY_TREE_DATA : null;
+      if (committed) {
+        const rc = await decryptWithKnown(committed, pw);
+        if (rc && confirm("The cloud copy can’t be opened, but the published copy of the tree can. Show the published copy on this device instead?")) {
+          loadObject(rc.obj);
+          try { localStorage.setItem("familyTree.familyPass", rc.pw); } catch (e) {}
+          try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}
+          autoLayout(); render(); fitView();
+          toast("Showing the published copy of the tree");
+          return;
+        }
+      }
       // The password-check marker tells us WHICH problem this is, so the fix is
       // never a guessing game: wrong password vs. a damaged cloud file.
       const verdict = await passVerdict(pw);
