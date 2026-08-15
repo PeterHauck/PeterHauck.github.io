@@ -249,7 +249,7 @@ export default async function handler(req, res) {
         const payload = (body.payload || "").toString();
         if (!payload || payload.length > 30 * 1024 * 1024) { res.status(400).json({ error: "Nothing to save (or too large)." }); return; }
         const written = await writeTree(payload, body.check);
-        res.status(200).json({ ok: true, savedAt: Date.parse(written.uploadedAt) || Date.now() });
+        res.status(200).json({ ok: true, savedAt: Date.parse(written.uploadedAt) || Date.now(), size: payload.length });
         return;
       }
 
@@ -289,7 +289,7 @@ export default async function handler(req, res) {
         if (expected > 0 && combined.length !== expected) { res.status(409).json({ error: "The upload didn't reassemble cleanly — please try saving again." }); return; }
         const written = await writeTree(combined, body.check);
         try { if (blobs.length) await del(blobs.map((b) => b.url), { token }); } catch (e) {}   // clean up this upload's chunks
-        res.status(200).json({ ok: true, savedAt: Date.parse(written.uploadedAt) || Date.now() });
+        res.status(200).json({ ok: true, savedAt: Date.parse(written.uploadedAt) || Date.now(), size: combined.length });
         return;
       }
 
