@@ -1575,6 +1575,11 @@
       photoBtn.hidden = !canPhoto;
       photoBtn.textContent = p.photo ? "📷 Replace picture from obituary" : "📷 Use photo from obituary";
     }
+    // Offer to (re)read birth & death dates when an obituary is attached but the
+    // exact dates are still missing — fixes people uploaded before the automatic
+    // date reading existed.
+    const datesBtn = $("#obitDatesBtn");
+    if (datesBtn) datesBtn.hidden = !(docs.some(isObitDoc) && (!p.birthDate || !p.deathDate));
     if (!docs.length) hint.textContent = "Attach an obituary or any other record (an article, award, certificate…) — paste the text, upload a PDF/photo, or save a link. Kept with the tree so it survives even if the original goes offline.";
     else hint.textContent = "";
     docs.forEach((doc) => {
@@ -1582,7 +1587,7 @@
       li.innerHTML = `<span class="badge">${docIcon(doc.kind)}</span>
         <span class="t">${escapeHtml(doc.title || "Untitled")} <span class="kind">${doc.kind === "link" ? "link only" : doc.kind}</span></span>
         <button data-view>View</button><button class="rm" data-rm>✕</button>`;
-      li.querySelector("[data-view]").onclick = () => openDocViewer(doc);
+      li.querySelector("[data-view]").onclick = () => openDocViewer(doc, p.id);
       li.querySelector("[data-rm]").onclick = () => {
         if (confirm("Remove this record?")) { p.docs = docs.filter((x) => x.id !== doc.id); save(); render(); renderDocsForm(p); }
       };
@@ -2428,10 +2433,10 @@
       const url = back.querySelector("#dUrl").value.trim();
       const text = back.querySelector("#dText").value.trim();
       const file = back.querySelector("#dFile").files[0];
-      let kind = "link", content = "", fetchedImage = "", scrapedText = "";
+      let kind = "link", content = "", fetchedImage = "", scrapedText = "", fileB64 = "", fileMt = "";
       if (file) {
         if (file.size > 8 * 1024 * 1024) { err.textContent = "File is too large (max 8 MB)."; return; }
-        let fileB64 = "", fileMt = file.type;
+        fileMt = file.type;
         if (file.type === "application/pdf") { kind = "pdf"; fileB64 = await fileToBase64(file); content = "data:application/pdf;base64," + fileB64; }
         else if (file.type.startsWith("image/")) { kind = "image"; fileB64 = await fileToBase64(file); content = "data:" + file.type + ";base64," + fileB64; }
         else { kind = "text"; content = await file.text(); }
@@ -2505,10 +2510,36 @@
       person.docs.push(doc);
       // Only an obituary means they've passed away — a record never flips this.
       if (docType === "obituary") person.deceased = true;
+
+      // Read the exact birth & death dates out of the obituary (the AI reader —
+      // reliable on real prose, PDFs and photos) and fill any gaps on the profile.
+      // This step was missing from the upload flow, which is why dates weren't
+      // being imported on attach.
+      let gotDates = false, triedDates = false;
+      if (docType === "obituary" && (!person.birthDate || !person.deathDate)) {
+        let pass3 = ""; try { pass3 = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+        const dsrc = scrapedText ? { text: scrapedText }
+          : (kind === "text" && content ? { text: content }
+          : (fileB64 ? { file: { mediaType: fileMt, data: fileB64 } }
+          : (url ? { url } : null)));
+        if (pass3 && dsrc) {
+          triedDates = true;
+          saveBtn.disabled = true; status.textContent = "Reading " + person.name + "’s birth & death dates…";
+          try { gotDates = applyObitDates(person, await callDates(Object.assign({ passcode: pass3, name: person.name }, dsrc))); }
+          catch (e3) { const t = scrapedText || (kind === "text" ? content : ""); if (t) { try { gotDates = applyObitDates(person, parseObitDates(t)); } catch (_) {} } }
+          status.textContent = ""; saveBtn.disabled = false;
+        }
+      }
+
       save(); render(); renderDocsForm(person); if (selectedId === person.id) fillPersonForm(person);
       close();
       const what = docType === "record" ? "Record" : "Obituary";
-      toast(scrapedText ? what + " saved — text scraped" + (setPic ? " & set as their picture" : "") : (setPic ? what + " saved — also set as their picture" : what + " saved"));
+      const extras = [];
+      if (scrapedText) extras.push("text scraped");
+      if (setPic) extras.push("set as their picture");
+      if (gotDates) extras.push("birth & death dates filled in");
+      toast(what + " saved" + (extras.length ? " — " + extras.join(", ") : ""));
+      if (triedDates && !gotDates) toast("Couldn’t read exact dates from this one — you can set them in the profile");
     };
   }
 
@@ -2539,6 +2570,26 @@
   // obituary if there is one, otherwise fetch the portrait from a linked
   // obituary page. Used by the "Use photo from obituary" button, so it works
   // retroactively for obituaries that are already attached.
+  // Fill missing birth/death dates from an already-attached obituary — the same
+  // AI reader the upload flow uses, so it works retroactively.
+  async function readDatesFromObit(p) {
+    if (!p) return;
+    const src = obitSourceOf(p);
+    if (!src) { toast("No obituary attached to read from"); return; }
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
+    if (!pass) return;
+    try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
+    const btn = $("#obitDatesBtn"); if (btn) btn.disabled = true;
+    toast("Reading " + p.name + "’s dates…");
+    try {
+      const changed = applyObitDates(p, await callDates(Object.assign({ passcode: pass, name: p.name }, src)));
+      if (changed) { save(); render(); if (selectedId === p.id) fillPersonForm(p); toast("Birth & death dates filled in ✓"); }
+      else toast("No usable dates found in the obituary");
+    } catch (e) { toast(e.message || "Couldn’t read the dates"); }
+    if (btn) btn.disabled = false;
+  }
+
   async function usePhotoFromObit(p) {
     if (!p) return;
     const docs = (p.docs || []).filter(isObitDoc);   // obituaries only — never a record scan
@@ -2768,7 +2819,7 @@
     });
   }
 
-  function openDocViewer(doc) {
+  function openDocViewer(doc, personId) {
     const src = docSrc(doc);
     let bodyHtml;
     if (doc.kind === "text") bodyHtml = `<pre>${escapeHtml(doc.content || "")}</pre>`;
@@ -2782,16 +2833,30 @@
     const srcLine = (doc.url ? `<a href="${escapeHtml(doc.url)}" target="_blank" rel="noopener">View original listing ↗</a> · ` : "") + "saved " + (doc.capturedAt || "");
     // Only ever one record viewer open, and it sits ABOVE the profile card.
     const prev = document.getElementById("docViewerBack"); if (prev) prev.remove();
+    const media = doc.kind === "pdf" || doc.kind === "image";
     const back = document.createElement("div");
     back.className = "modal-backdrop docview-backdrop"; back.id = "docViewerBack";
-    back.innerHTML = `<div class="modal doc-view"><h2>${escapeHtml(doc.title || "Record")}</h2>
+    back.innerHTML = `<div class="modal doc-view${media ? " media" : ""}"><h2>${escapeHtml(doc.title || "Record")}</h2>
       <div class="src">${srcLine}</div>${bodyHtml}
-      <div class="btn-row">${doc.kind !== "link" ? '<button class="btn" data-dl>⬇︎ Download</button>' : ""}<button class="btn primary" data-cancel>Close</button></div></div>`;
+      <div class="btn-row">${media ? '<button class="btn" data-max>⤢ Larger</button>' : ""}${doc.kind !== "link" ? '<button class="btn" data-dl>⬇︎ Download</button>' : ""}<button class="btn primary" data-cancel>Close</button></div></div>`;
     document.body.appendChild(back);
-    back.querySelector("[data-cancel]").onclick = () => back.remove();
-    back.addEventListener("click", (e) => { if (e.target === back) back.remove(); });
+    const close = () => { back.remove(); document.removeEventListener("keydown", esc); };
+    function esc(ev) { if (ev.key === "Escape") close(); }
+    document.addEventListener("keydown", esc);
+    back.querySelector("[data-cancel]").onclick = close;
+    back.addEventListener("click", (e) => { if (e.target === back) close(); });
     const dl = back.querySelector("[data-dl]");
     if (dl) dl.onclick = () => downloadDoc(doc);
+    const mx = back.querySelector("[data-max]");
+    if (mx) mx.onclick = () => { const m = back.querySelector(".doc-view"); const on = m.classList.toggle("max"); mx.textContent = on ? "⤡ Smaller" : "⤢ Larger"; };
+    // Desktop: the viewer floats over the tree instead of blocking the page, and
+    // the person's profile opens in the side panel — so you can read the
+    // obituary and edit their details at the same time.
+    if (!isMobileView()) {
+      if (personId && !readonly) { const panel = $("#panel"); if (panel) panel.classList.remove("collapsed"); selectPerson(personId); }
+      const panel = $("#panel");
+      if (panel && !panel.classList.contains("collapsed")) back.style.paddingRight = panel.offsetWidth + "px";
+    }
   }
 
   function downloadDoc(doc) {
@@ -2960,7 +3025,7 @@
       docs.forEach((doc) => {
         const row = document.createElement("div"); row.className = "pcard-doc";
         const t = document.createElement("span"); t.textContent = doc.title || "Record";
-        const v = document.createElement("button"); v.className = "btn small"; v.textContent = "View"; v.onclick = () => openDocViewer(doc);
+        const v = document.createElement("button"); v.className = "btn small"; v.textContent = "View"; v.onclick = () => openDocViewer(doc, id);
         row.appendChild(t); row.appendChild(v); s.appendChild(row);
       });
     }
@@ -3687,6 +3752,7 @@
   $("#tbImport").onclick = openImportModal;
   $("#addDocBtn").onclick = () => { const id = $("#personId").value; if (id) openAttachModal(id); };
   $("#obitPhotoBtn").onclick = () => { const id = $("#personId").value; if (id) usePhotoFromObit(personById(id)); };
+  { const db = $("#obitDatesBtn"); if (db) db.onclick = () => { const id = $("#personId").value; if (id) readDatesFromObit(personById(id)); }; }
   $("#hideAboveBtn").onclick = () => {
     const id = $("#personId").value; if (!id) return;
     const p = personById(id);
