@@ -8,17 +8,32 @@
 // BLOB_READ_WRITE_TOKEN to the project automatically. IMPORT_PASSCODE gates
 // writes so only you can save.
 //
+// WRITE-ONCE STORAGE: Vercel Blob overwrites are eventually consistent — after
+// rewriting a file at the same path, reads can return the OLD bytes for up to a
+// minute (and the CDN can cache them far longer). Overwriting in place is what
+// kept corrupting the tree (mixed-generation chunks) and serving stale copies.
+// So every save now writes to a FRESH, unique path under tree-v/ (and upload
+// chunks under a per-upload folder); readers always pick the newest complete
+// copy. Old copies are pruned best-effort, keeping the last few as backups.
+//
 // Actions:
-//   GET  ?action=getTree                      → { payload } (the encrypted tree, or 404)
-//   POST { action:'saveTree', passcode, payload }
-//   POST { action:'putRecord', passcode, name, base64, contentType } → { url }
+//   GET  ?action=getTree                      → { payload | big+size+url, savedAt, v }
+//   GET  ?action=getTreePart&start&len&v      → { chunk, size } (one slice of version v)
+//   GET  ?action=treeInfo | passCheck | viewerKey | comments | status
+//   POST { action:'saveTree', passcode, payload, check }
+//   POST { action:'putPart', passcode, uploadId, index, chunk }
+//   POST { action:'commitTree', passcode, uploadId, total, length, check }
+//   POST { action:'putRecord' | 'saveViewerKey' | 'addComment' | 'deleteComment', ... }
 
-import { put, list } from "@vercel/blob";
+import { put, list, del } from "@vercel/blob";
 
-const TREE = "family-tree.json";
+const TREE = "family-tree.json"; // legacy single-file location (read fallback only)
+const TREEDIR = "tree-v/";       // versioned, write-once tree copies: tree-v/<id>.json + <id>.check
+const PARTSDIR = "tree-parts/";  // upload chunks: tree-parts/<uploadId>/part-<i> (legacy: tree-parts/part-<i>)
 const COMMENTS = "comments.json";   // { [personId]: [ {id, name, text, at} ] }
 const VIEWERKEY = "viewer-key.json"; // family password wrapped (encrypted) under the shared viewer password
-const PASSCHECK = "pass-check.json"; // tiny ciphertext saved with each tree write — lets a device tell "wrong password" apart from "damaged file"
+const PASSCHECK = "pass-check.json"; // legacy password-check location (read fallback only)
+const KEEP_COPIES = 3;
 
 async function readBody(req) {
   if (req.body) return typeof req.body === "string" ? JSON.parse(req.body) : req.body;
@@ -37,8 +52,6 @@ const clean = (v) => String(v == null ? "" : v).trim().replace(/^['"]+|['"]+$/g,
 function blobToken() {
   const direct = clean(process.env.BLOB_READ_WRITE_TOKEN);
   if (direct.startsWith("vercel_blob_rw_")) return direct;
-  // Match by var name (custom-named store) OR by the token's own value prefix,
-  // so it's found however the variable ended up named — and cleaned either way.
   for (const [k, v] of Object.entries(process.env)) {
     const t = clean(v);
     if (t && (/BLOB_READ_WRITE_TOKEN$/.test(k) || t.startsWith("vercel_blob_rw_"))) return t;
@@ -62,36 +75,57 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Try a public blob first (stable, directly-fetchable URL); if this store only
-  // allows private blobs, fall back to private. The tree is read back through
-  // this function, so a private tree blob is fine.
-  // Vercel Blob serves files through a CDN that caches aggressively: an
-  // overwritten blob can keep serving its OLD bytes for up to 30 days at the
-  // same URL. Every read of a mutable blob must bust that cache with a unique
-  // query param, or devices keep downloading an ancient copy (which then fails
-  // to decrypt with the current password — the "stale phone" bug).
+  // Cache-buster for reads of the few remaining OVERWRITTEN blobs (comments,
+  // viewer key, legacy files). Versioned tree copies are write-once, so their
+  // content can never be stale — but busting is harmless there too.
   const fresh = (u) => u + (u.includes("?") ? "&" : "?") + "ts=" + Date.now();
   async function putBlob(pathname, body, contentType) {
     const base = { token, addRandomSuffix: false, contentType, allowOverwrite: true, cacheControlMaxAge: 60 };
     try { return await put(pathname, body, { ...base, access: "public" }); }
     catch (ePub) { try { return await put(pathname, body, { ...base, access: "private" }); } catch (ePriv) { throw ePub; } }
   }
-  // The tree blob's server-set write time — the authority for "is the cloud newer?"
-  async function treeSavedAt() {
-    try { const { blobs } = await list({ prefix: TREE, token }); const b = blobs.find((x) => x.pathname === TREE); return b ? (Date.parse(b.uploadedAt) || 0) : 0; }
-    catch (e) { return 0; }
+
+  // The newest complete tree copy: versioned first, legacy single file as a
+  // fallback for data saved by older versions of the app.
+  async function newestTree() {
+    try {
+      const { blobs } = await list({ prefix: TREEDIR, token });
+      const trees = blobs.filter((b) => b.pathname.endsWith(".json"));
+      if (trees.length) return trees.reduce((a, b) => (Date.parse(a.uploadedAt) >= Date.parse(b.uploadedAt) ? a : b));
+    } catch (e) {}
+    try { const { blobs } = await list({ prefix: TREE, token }); return blobs.find((x) => x.pathname === TREE) || null; } catch (e) { return null; }
   }
+  // Find one specific version by pathname (so multi-slice reads never mix
+  // versions). Only tree paths are allowed.
+  async function treeByPath(v) {
+    if (!v || !(v.startsWith(TREEDIR) || v === TREE)) return null;
+    try { const { blobs } = await list({ prefix: v, token }); return blobs.find((x) => x.pathname === v) || null; } catch (e) { return null; }
+  }
+  // Write a NEW tree copy (never overwrites) + its password-check sibling, then
+  // prune old copies, keeping the newest few as backups. Returns the new blob.
+  async function writeTree(payload, check) {
+    const id = TREEDIR + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+    const written = await putBlob(id + ".json", payload, "text/plain");
+    if (check) { try { await putBlob(id + ".check", String(check).slice(0, 5000), "application/json"); } catch (e) {} }
+    try {
+      const { blobs } = await list({ prefix: TREEDIR, token });
+      const trees = blobs.filter((b) => b.pathname.endsWith(".json")).sort((a, b) => Date.parse(b.uploadedAt) - Date.parse(a.uploadedAt));
+      const keep = new Set(trees.slice(0, KEEP_COPIES).map((b) => b.pathname.replace(/\.json$/, "")));
+      const gone = blobs.filter((b) => !keep.has(b.pathname.replace(/\.(json|check)$/, "")));
+      if (gone.length) await del(gone.map((b) => b.url), { token });
+    } catch (e) {}
+    return written;
+  }
+
   // Comments live in one small JSON blob, read/written only through this function
   // (never exposed as a public URL) so they aren't world-readable.
   async function readComments() {
     try { const { blobs } = await list({ prefix: COMMENTS, token }); const b = blobs.find((x) => x.pathname === COMMENTS); if (!b) return {}; const r = await fetch(fresh(b.downloadUrl || b.url)); return JSON.parse((await r.text()) || "{}") || {}; }
     catch (e) { return {}; }
   }
-  // Store comments PRIVATE where the store allows it (they're only ever read back
-  // through this function), falling back to public if the store is public-only.
   async function putComments(map) {
     const body = JSON.stringify(map);
-    const base = { token, addRandomSuffix: false, contentType: "application/json", allowOverwrite: true };
+    const base = { token, addRandomSuffix: false, contentType: "application/json", allowOverwrite: true, cacheControlMaxAge: 60 };
     try { return await put(COMMENTS, body, { ...base, access: "private" }); }
     catch (e) { return await put(COMMENTS, body, { ...base, access: "public" }); }
   }
@@ -101,8 +135,7 @@ export default async function handler(req, res) {
     // device decide whether the cloud has newer data than its local copy WITHOUT
     // downloading (or decrypting) the whole tree.
     if (req.method === "GET" && req.query.action === "treeInfo") {
-      const { blobs } = await list({ prefix: TREE, token });
-      const b = blobs.find((x) => x.pathname === TREE);
+      const b = await newestTree();
       res.setHeader("Cache-Control", "no-store");
       res.status(200).json({ exists: !!b, savedAt: b ? (Date.parse(b.uploadedAt) || 0) : 0 });
       return;
@@ -111,11 +144,18 @@ export default async function handler(req, res) {
     // The tiny password-check ciphertext written with each tree save. Safe to
     // serve — it's encrypted; it only confirms whether a password matches.
     if (req.method === "GET" && req.query.action === "passCheck") {
-      const { blobs } = await list({ prefix: PASSCHECK, token });
-      const b = blobs.find((x) => x.pathname === PASSCHECK);
       res.setHeader("Cache-Control", "no-store");
-      if (!b) { res.status(404).json({ error: "No password check saved yet." }); return; }
-      const r = await fetch(fresh(b.downloadUrl || b.url));
+      const b = await newestTree();
+      if (b && b.pathname.startsWith(TREEDIR)) {
+        const base = b.pathname.replace(/\.json$/, "");
+        const { blobs } = await list({ prefix: base + ".check", token });
+        const cb = blobs.find((x) => x.pathname === base + ".check");
+        if (cb) { const r = await fetch(fresh(cb.downloadUrl || cb.url)); res.status(200).json({ check: await r.text() }); return; }
+      }
+      const { blobs } = await list({ prefix: PASSCHECK, token });   // legacy location
+      const lb = blobs.find((x) => x.pathname === PASSCHECK);
+      if (!lb) { res.status(404).json({ error: "No password check saved yet." }); return; }
+      const r = await fetch(fresh(lb.downloadUrl || lb.url));
       res.status(200).json({ check: await r.text() });
       return;
     }
@@ -144,23 +184,22 @@ export default async function handler(req, res) {
 
     // Read one slice of the tree back through the function (used for big trees so
     // every device can read them without a direct-to-Blob fetch, which can be
-    // blocked by CORS on some phones/browsers).
+    // blocked by CORS on some phones/browsers). Pass v=<pathname> so every slice
+    // of a multi-slice read comes from the SAME write-once version.
     if (req.method === "GET" && req.query.action === "getTreePart") {
-      const { blobs } = await list({ prefix: TREE, token });
-      const b = blobs.find((x) => x.pathname === TREE);
+      const b = (await treeByPath(req.query.v)) || (await newestTree());
       if (!b) { res.status(404).json({ error: "No saved tree in the cloud yet." }); return; }
       const r = await fetch(fresh(b.downloadUrl || b.url));
       const text = await r.text();
       const start = Math.max(0, parseInt(req.query.start, 10) || 0);
       const len = Math.min(Math.max(1, parseInt(req.query.len, 10) || 3000000), 4000000);
       res.setHeader("Cache-Control", "no-store");
-      res.status(200).json({ chunk: text.slice(start, start + len), size: text.length });
+      res.status(200).json({ chunk: text.slice(start, start + len), size: text.length, v: b.pathname });
       return;
     }
 
     if (req.method === "GET" && (req.query.action || "getTree") === "getTree") {
-      const { blobs } = await list({ prefix: TREE, token });
-      const b = blobs.find((x) => x.pathname === TREE);
+      const b = await newestTree();
       if (!b) { res.status(404).json({ error: "No saved tree in the cloud yet." }); return; }
       const url = b.downloadUrl || b.url;   // downloadUrl works for private blobs too
       const savedAt = Date.parse(b.uploadedAt) || 0;
@@ -168,10 +207,10 @@ export default async function handler(req, res) {
       // A big tree would blow the function's ~4.5MB response limit. Tell the client
       // its size so it can read it back in slices through getTreePart (robust), and
       // also hand over the direct blob URL (cache-busted) as a fast path / fallback.
-      if ((b.size || 0) > 3.5 * 1024 * 1024) { res.status(200).json({ big: true, size: b.size || 0, url: fresh(url), savedAt }); return; }
+      if ((b.size || 0) > 3.5 * 1024 * 1024) { res.status(200).json({ big: true, size: b.size || 0, url: fresh(url), savedAt, v: b.pathname }); return; }
       const r = await fetch(fresh(url));
       const payload = await r.text();
-      res.status(200).json({ payload, url: fresh(url), savedAt });
+      res.status(200).json({ payload, url: fresh(url), savedAt, v: b.pathname });
       return;
     }
 
@@ -209,21 +248,23 @@ export default async function handler(req, res) {
       if (action === "saveTree") {
         const payload = (body.payload || "").toString();
         if (!payload || payload.length > 30 * 1024 * 1024) { res.status(400).json({ error: "Nothing to save (or too large)." }); return; }
-        await putBlob(TREE, payload, "text/plain");
-        if (body.check) { try { await putBlob(PASSCHECK, String(body.check).slice(0, 5000), "application/json"); } catch (e) {} }
-        res.status(200).json({ ok: true, savedAt: await treeSavedAt() });
+        const written = await writeTree(payload, body.check);
+        res.status(200).json({ ok: true, savedAt: Date.parse(written.uploadedAt) || Date.now() });
         return;
       }
 
       // Large trees are uploaded in pieces so no single request hits Vercel's
-      // ~4.5MB body limit: the browser POSTs each part, then asks us to commit —
-      // we stitch the parts back together and write the one tree blob.
+      // ~4.5MB body limit. Each upload gets its OWN folder of chunks (write-once,
+      // so eventual-consistency can never mix chunks from different saves), then
+      // commitTree stitches them into a new versioned tree copy.
       if (action === "putPart") {
         const index = parseInt(body.index, 10);
         if (!(index >= 0 && index < 10000)) { res.status(400).json({ error: "Bad part index." }); return; }
         const chunk = (body.chunk || "").toString();
         if (!chunk || chunk.length > 5 * 1024 * 1024) { res.status(400).json({ error: "Empty or too-large part." }); return; }
-        await putBlob("tree-parts/part-" + index, chunk, "text/plain");
+        const up = (body.uploadId || "").toString();
+        const dir = /^[a-z0-9-]{4,40}$/.test(up) ? PARTSDIR + up + "/" : PARTSDIR;   // legacy clients: shared folder
+        await putBlob(dir + "part-" + index, chunk, "text/plain");
         res.status(200).json({ ok: true });
         return;
       }
@@ -231,23 +272,24 @@ export default async function handler(req, res) {
       if (action === "commitTree") {
         const total = parseInt(body.total, 10);
         if (!(total > 0 && total <= 10000)) { res.status(400).json({ error: "Bad part count." }); return; }
-        const { blobs } = await list({ prefix: "tree-parts/part-", token });
+        const up = (body.uploadId || "").toString();
+        const dir = /^[a-z0-9-]{4,40}$/.test(up) ? PARTSDIR + up + "/" : PARTSDIR;
+        const { blobs } = await list({ prefix: dir + "part-", token });
         const byName = {}; blobs.forEach((x) => (byName[x.pathname] = x));
         let combined = "";
         for (let i = 0; i < total; i++) {
-          const part = byName["tree-parts/part-" + i];
+          const part = byName[dir + "part-" + i];
           if (!part) { res.status(400).json({ error: "Missing part " + i + " — please try saving again." }); return; }
           const r = await fetch(fresh(part.downloadUrl || part.url));
           combined += await r.text();
         }
         // Integrity check: the stitched tree must be exactly as long as what the
-        // browser uploaded. Catches a stale CDN-cached part sneaking into the mix
-        // (which would corrupt the ciphertext and make it undecryptable).
+        // browser uploaded — a corrupted save is rejected here, never stored.
         const expected = parseInt(body.length, 10);
         if (expected > 0 && combined.length !== expected) { res.status(409).json({ error: "The upload didn't reassemble cleanly — please try saving again." }); return; }
-        await putBlob(TREE, combined, "text/plain");
-        if (body.check) { try { await putBlob(PASSCHECK, String(body.check).slice(0, 5000), "application/json"); } catch (e) {} }
-        res.status(200).json({ ok: true, savedAt: await treeSavedAt() });
+        const written = await writeTree(combined, body.check);
+        try { if (blobs.length) await del(blobs.map((b) => b.url), { token }); } catch (e) {}   // clean up this upload's chunks
+        res.status(200).json({ ok: true, savedAt: Date.parse(written.uploadedAt) || Date.now() });
         return;
       }
 
