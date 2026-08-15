@@ -3169,12 +3169,15 @@
       if (payload.length <= CHUNK) {
         done = await post({ action: "saveTree", payload, check });
       } else {
+        // Each upload gets a unique id: its chunks live in their own write-once
+        // folder on the server, so chunks from different saves can never mix.
+        const uploadId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
         const total = Math.ceil(payload.length / CHUNK);
         for (let i = 0; i < total; i++) {
-          await post({ action: "putPart", index: i, chunk: payload.slice(i * CHUNK, (i + 1) * CHUNK) });
+          await post({ action: "putPart", uploadId, index: i, chunk: payload.slice(i * CHUNK, (i + 1) * CHUNK) });
           setCloudStatus("saving");
         }
-        done = await post({ action: "commitTree", total, length: payload.length, check });
+        done = await post({ action: "commitTree", uploadId, total, length: payload.length, check });
       }
       // Record the cloud's write time so this device knows it's in sync and won't
       // pull its own save back on the next load.
@@ -3388,15 +3391,19 @@
         // CORS (or it 403s), so only trust a clean 200; otherwise read the tree
         // back in slices through the function instead (always works).
         if (j.url) { try { const rr = await fetch(bustUrl(j.url)); if (rr.ok) { const t = await rr.text(); if (t && t.length === (j.size || t.length)) return { payload: t, savedAt: j.savedAt || 0 }; } } catch (e) {} }
+        // Pin every slice to the SAME write-once version (v) so a save landing
+        // mid-read can never mix two generations into one corrupted payload.
+        const vq = j.v ? "&v=" + encodeURIComponent(j.v) : "";
         let out = "", total = j.size || Infinity;
         for (let s = 0; s < total; s += 3000000) {
-          const pr = await fetch("api/store?action=getTreePart&start=" + s + "&len=3000000");
+          const pr = await fetch("api/store?action=getTreePart&start=" + s + "&len=3000000" + vq);
           if (!pr.ok) return null;
           const pj = await pr.json();
           if (typeof pj.size === "number") total = pj.size;
           if (!pj.chunk) break;
           out += pj.chunk;
         }
+        if (out.length !== (j.size || out.length)) return null;   // incomplete read — don't hand back a torn copy
         return out ? { payload: out, savedAt: j.savedAt || 0 } : null;
       }
       if (j.url) { try { const rr = await fetch(bustUrl(j.url)); if (!rr.ok) return null; const t = await rr.text(); return t ? { payload: t, savedAt: j.savedAt || 0 } : null; } catch (e) { return null; } }
