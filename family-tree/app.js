@@ -3134,13 +3134,17 @@
     el.className = "hint backup-" + st;
   }
   function scheduleCloudSave() {
-    if (readonly || (!CLOUD_ON() && !ownerCanCloud())) return;
+    // Ownership (having both passwords) is what allows pushing — NOT the view
+    // mode. A read-only phone that adds a note/photo must still push it, or its
+    // "unsynced edits" flag never clears and blocks every future pull (the
+    // "phone stuck on an old version" bug).
+    if (!ownerCanCloud() && (readonly || !CLOUD_ON())) return;
     clearTimeout(cloudTimer);
     setCloudStatus("pending");
     cloudTimer = setTimeout(() => cloudSaveTree(false), 6000);   // coalesce a burst of edits
   }
   async function cloudSaveTree(manual) {
-    if (readonly) return;
+    if (readonly && !ownerCanCloud()) return;
     let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
     if (!fam) { if (!manual) return; fam = prompt("Choose a family password (used to encrypt your saved tree):") || ""; if (!fam) return; try { localStorage.setItem("familyTree.familyPass", fam); } catch (e) {} }
     let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
@@ -3232,7 +3236,10 @@
     try {
       const obj = await decryptState(fam, cp.payload);
       loadObject(obj);
-      try { localStorage.setItem("familyTree.familyPass", fam); localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || 0)); } catch (e) {}
+      try { localStorage.setItem("familyTree.familyPass", fam); localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || 0)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
+      // Persist what we pulled — without this, ⟳ showed fresh data but the next
+      // visit regressed to the old local copy.
+      try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}
       autoLayout(); render(); fitView();
       let when = ""; try { when = cp.savedAt ? new Date(cp.savedAt).toLocaleString() : ""; } catch (e) {}
       toast(when ? ("Showing the latest — cloud saved " + when) : "Showing the latest from your site");
@@ -3245,20 +3252,23 @@
   // in — this is what makes edits on one device show up on the others (e.g. your
   // phone) instead of a stale browser copy sticking around. Returns true if it
   // loaded fresh cloud data (or took over the unlock flow).
+  // When is it SAFE to replace this device's saved tree with the cloud copy?
+  //  - a viewer's local is only a cache → replace whenever the cloud is newer.
+  //  - the OWNER's local can hold real edits → only replace when there are no
+  //    unsynced edits (dirty flag) AND we've synced with this cloud at least
+  //    once before — which stops a reload from pulling an older or foreign
+  //    cloud copy over the owner's current work.
+  function safeToPull(info) {
+    let synced = 0, dirtyFlag = "";
+    try { synced = +(localStorage.getItem("familyTree.cloudSavedAt") || 0); dirtyFlag = localStorage.getItem("familyTree.cloudDirty") || ""; } catch (e) {}
+    const newer = info.savedAt > synced;
+    if (!ownerCanCloud()) return newer;
+    return newer && dirtyFlag !== "1" && (synced > 0 || dirtyFlag === "0");
+  }
   async function syncFromCloudIfNewer() {
-    let synced = 0; try { synced = +(localStorage.getItem("familyTree.cloudSavedAt") || 0); } catch (e) {}
-    let dirty = false; try { dirty = localStorage.getItem("familyTree.cloudDirty") === "1"; } catch (e) {}
     const info = await cloudTreeInfo();
     if (!info || !info.exists) return false;
-    const newer = info.savedAt > synced;
-    // When is it SAFE to replace this device's saved tree with the cloud copy?
-    //  - a viewer's local is only a cache → replace whenever the cloud is newer.
-    //  - the OWNER's local can hold real edits → only replace when we've genuinely
-    //    tracked a newer cloud save (synced>0) AND have no unsynced local edits.
-    //    This is what stops a reload from pulling an older/other cloud copy over
-    //    the owner's current work.
-    const safe = ownerCanCloud() ? (synced > 0 && newer && !dirty) : newer;
-    if (!safe) return false;
+    if (!safeToPull(info)) return false;
     const cp = await fetchCloudPayload();
     if (!cp || !cp.payload) return false;
     const savedAt = cp.savedAt || info.savedAt;
@@ -3283,18 +3293,11 @@
   let refreshingBg = false;
   async function backgroundRefresh() {
     if (refreshingBg || document.hidden) return;
-    if (!readonly) { try { if (localStorage.getItem("familyTree.cloudDirty") === "1") return; } catch (e) {} }
     refreshingBg = true;
     try {
-      let synced = 0; try { synced = +(localStorage.getItem("familyTree.cloudSavedAt") || 0); } catch (e) {}
-      let dirty = false; try { dirty = localStorage.getItem("familyTree.cloudDirty") === "1"; } catch (e) {}
       const info = await cloudTreeInfo();
       if (!info || !info.exists) return;
-      const newer = info.savedAt > synced;
-      // Same safety rule as syncFromCloudIfNewer: never replace the owner's local
-      // tree unless the cloud is genuinely newer than our last tracked sync.
-      const safe = ownerCanCloud() ? (synced > 0 && newer && !dirty) : newer;
-      if (!safe) return;
+      if (!safeToPull(info)) return;
       const cp = await fetchCloudPayload();
       if (!cp || !cp.payload) return;
       let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
@@ -3302,6 +3305,7 @@
       const obj = await decryptState(fam, cp.payload);
       loadObject(obj);
       try { localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || info.savedAt)); } catch (e) {}
+      try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}   // persist so it survives the next visit
       autoLayout(); render();
       toast("Updated to the latest");
     } catch (e) {} finally { refreshingBg = false; }
@@ -3703,6 +3707,9 @@
   document.addEventListener("visibilitychange", () => { if (!document.hidden) backgroundRefresh(); });
   window.addEventListener("pageshow", (e) => { if (e.persisted) backgroundRefresh(); });
   window.addEventListener("focus", () => backgroundRefresh());
+  // A tab left open (e.g. the phone sitting on the tree) checks for a newer cloud
+  // copy about once a minute — a cheap metadata probe unless something changed.
+  setInterval(() => backgroundRefresh(), 60000);
   $("#tbRearrange").onclick = () => setRearrange(!rearrange);
   $("#tbTidy").onclick = tidyUp;
   // ☰ opens the People list + menu (add a person, auto-arrange).
@@ -3963,13 +3970,22 @@
     }
     else if (hasLocalData()) loadLocal();
     boot();
-    // Owner's editing device: if there are local edits that haven't reached the
-    // cloud, push them once now so other devices — your phone — can pull the
-    // latest. Only when this device actually has unsynced edits, so a device
-    // holding a stale copy can never push it over good cloud data.
-    if (!readonly && ownerCanCloud()) {
+    // Any owner device (editing desktop OR read-only phone) with local edits
+    // that haven't reached the cloud pushes them once now, so other devices can
+    // pull the latest — and so the unsynced-edits flag clears instead of
+    // wedging this device's pulls forever. Conflict guard: if the cloud has
+    // moved past what this device last synced, don't blind-push over it — ask.
+    if (ownerCanCloud()) {
       let dirty = ""; try { dirty = localStorage.getItem("familyTree.cloudDirty") || ""; } catch (e) {}
-      if (dirty === "1") setTimeout(() => cloudSaveTree(false), 1200);
+      if (dirty === "1") setTimeout(async () => {
+        let synced = 0; try { synced = +(localStorage.getItem("familyTree.cloudSavedAt") || 0); } catch (e) {}
+        const info = await cloudTreeInfo();
+        if (info && info.exists && info.savedAt > synced) {
+          toast("Your site has newer data than this device's unsaved changes — tap ⟳ to load the latest, or Save to overwrite it with this device's copy.");
+          return;
+        }
+        cloudSaveTree(false);
+      }, 1200);
     }
   }
 
