@@ -1157,10 +1157,18 @@
         .filter((q) => q.x > left.x && q.x < right.x && Math.abs(q.y - (left.y + right.y) / 2) < HALF * 1.5);
       let segX1, segX2, segY;   // the long horizontal stretch (labels, ticks, + live here)
       if (!blockers.length) {
-        segX1 = x1; segX2 = x2; segY = Math.min(yL, yR);
-        const d = yL === yR
-          ? `M ${x1} ${yL} L ${x2} ${yR}`
-          : `M ${x1} ${yL} L ${(x1 + x2) / 2} ${yL} L ${(x1 + x2) / 2} ${yR} L ${x2} ${yR}`;
+        // A clear run stays ONE straight line: at the couple's average height
+        // when neither side needs a fan (shapes dragged slightly off-level must
+        // not create a jog), or at the fanned side's height when one side has
+        // several spouses. Only two fanned sides ever need a mid-line step.
+        let yA = yL, yB = yR;
+        if (fL.k <= 1 && fR.k <= 1) yA = yB = (left.y + right.y) / 2;
+        else if (fL.k > 1 && fR.k <= 1) yB = yA;
+        else if (fR.k > 1 && fL.k <= 1) yA = yB;
+        segX1 = x1; segX2 = x2; segY = Math.min(yA, yB);
+        const d = yA === yB
+          ? `M ${x1} ${yA} L ${x2} ${yB}`
+          : `M ${x1} ${yA} L ${(x1 + x2) / 2} ${yA} L ${(x1 + x2) / 2} ${yB} L ${x2} ${yB}`;
         gu.appendChild(el("path", { class: "link", d, fill: "none", "stroke-dasharray": dash }));
         midX = (x1 + x2) / 2; midY = segY; dropTop = segY;
       } else {
