@@ -59,6 +59,8 @@ function blobToken() {
   return direct || null;
 }
 
+export const config = { maxDuration: 60 };
+
 export default async function handler(req, res) {
   const passcode = process.env.IMPORT_PASSCODE;
   const token = blobToken();
@@ -79,6 +81,16 @@ export default async function handler(req, res) {
   // viewer key, legacy files). Versioned tree copies are write-once, so their
   // content can never be stale — but busting is harmless there too.
   const fresh = (u) => u + (u.includes("?") ? "&" : "?") + "ts=" + Date.now();
+  // Read a blob's content, retrying briefly: a JUST-written blob can be
+  // unreadable (404) for a few seconds while it propagates, and a failed read
+  // must never be mistaken for content — that's what corrupted reassembly.
+  async function fetchBlobText(u) {
+    for (let a = 0; a < 5; a++) {
+      if (a) await new Promise((resolve) => setTimeout(resolve, 1500));
+      try { const r = await fetch(fresh(u)); if (r.ok) return await r.text(); } catch (e) {}
+    }
+    return null;
+  }
   async function putBlob(pathname, body, contentType) {
     const base = { token, addRandomSuffix: false, contentType, allowOverwrite: true, cacheControlMaxAge: 60 };
     try { return await put(pathname, body, { ...base, access: "public" }); }
@@ -120,7 +132,7 @@ export default async function handler(req, res) {
   // Comments live in one small JSON blob, read/written only through this function
   // (never exposed as a public URL) so they aren't world-readable.
   async function readComments() {
-    try { const { blobs } = await list({ prefix: COMMENTS, token }); const b = blobs.find((x) => x.pathname === COMMENTS); if (!b) return {}; const r = await fetch(fresh(b.downloadUrl || b.url)); return JSON.parse((await r.text()) || "{}") || {}; }
+    try { const { blobs } = await list({ prefix: COMMENTS, token }); const b = blobs.find((x) => x.pathname === COMMENTS); if (!b) return {}; const t = await fetchBlobText(b.downloadUrl || b.url); return JSON.parse(t || "{}") || {}; }
     catch (e) { return {}; }
   }
   async function putComments(map) {
@@ -150,13 +162,14 @@ export default async function handler(req, res) {
         const base = b.pathname.replace(/\.json$/, "");
         const { blobs } = await list({ prefix: base + ".check", token });
         const cb = blobs.find((x) => x.pathname === base + ".check");
-        if (cb) { const r = await fetch(fresh(cb.downloadUrl || cb.url)); res.status(200).json({ check: await r.text() }); return; }
+        if (cb) { const t = await fetchBlobText(cb.downloadUrl || cb.url); if (t) { res.status(200).json({ check: t }); return; } }
       }
       const { blobs } = await list({ prefix: PASSCHECK, token });   // legacy location
       const lb = blobs.find((x) => x.pathname === PASSCHECK);
       if (!lb) { res.status(404).json({ error: "No password check saved yet." }); return; }
-      const r = await fetch(fresh(lb.downloadUrl || lb.url));
-      res.status(200).json({ check: await r.text() });
+      const lt = await fetchBlobText(lb.downloadUrl || lb.url);
+      if (lt == null) { res.status(503).json({ error: "Password check unreadable — try again shortly." }); return; }
+      res.status(200).json({ check: lt });
       return;
     }
 
@@ -167,8 +180,9 @@ export default async function handler(req, res) {
       const b = blobs.find((x) => x.pathname === VIEWERKEY);
       res.setHeader("Cache-Control", "no-store");
       if (!b) { res.status(404).json({ error: "No viewer password is set." }); return; }
-      const r = await fetch(fresh(b.downloadUrl || b.url));
-      res.status(200).json({ wrap: await r.text() });
+      const wt = await fetchBlobText(b.downloadUrl || b.url);
+      if (wt == null) { res.status(503).json({ error: "Viewer key unreadable — try again shortly." }); return; }
+      res.status(200).json({ wrap: wt });
       return;
     }
 
@@ -189,8 +203,8 @@ export default async function handler(req, res) {
     if (req.method === "GET" && req.query.action === "getTreePart") {
       const b = (await treeByPath(req.query.v)) || (await newestTree());
       if (!b) { res.status(404).json({ error: "No saved tree in the cloud yet." }); return; }
-      const r = await fetch(fresh(b.downloadUrl || b.url));
-      const text = await r.text();
+      const text = await fetchBlobText(b.downloadUrl || b.url);
+      if (text == null) { res.status(503).json({ error: "The tree copy isn't readable yet — try again shortly." }); return; }
       const start = Math.max(0, parseInt(req.query.start, 10) || 0);
       const len = Math.min(Math.max(1, parseInt(req.query.len, 10) || 3000000), 4000000);
       res.setHeader("Cache-Control", "no-store");
@@ -208,8 +222,8 @@ export default async function handler(req, res) {
       // its size so it can read it back in slices through getTreePart (robust), and
       // also hand over the direct blob URL (cache-busted) as a fast path / fallback.
       if ((b.size || 0) > 3.5 * 1024 * 1024) { res.status(200).json({ big: true, size: b.size || 0, url: fresh(url), savedAt, v: b.pathname }); return; }
-      const r = await fetch(fresh(url));
-      const payload = await r.text();
+      const payload = await fetchBlobText(url);
+      if (payload == null) { res.status(503).json({ error: "The tree copy isn't readable yet — try again shortly." }); return; }
       res.status(200).json({ payload, url: fresh(url), savedAt, v: b.pathname });
       return;
     }
@@ -280,7 +294,7 @@ export default async function handler(req, res) {
         // consistent — a chunk read moments after writing can be stale. For
         // them, retry assembly a few times before giving up; new clients use
         // write-once folders and assemble correctly on the first pass.
-        const attempts = dir === PARTSDIR ? 4 : 1;
+        const attempts = 3;
         let combined = "", failure = "";
         for (let a = 0; a < attempts; a++) {
           if (a) await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -290,8 +304,9 @@ export default async function handler(req, res) {
           for (let i = 0; i < total; i++) {
             const part = byName[dir + "part-" + i];
             if (!part) { failure = "Missing part " + i + " — please try saving again."; break; }
-            const r = await fetch(fresh(part.downloadUrl || part.url));
-            combined += await r.text();
+            const t = await fetchBlobText(part.downloadUrl || part.url);
+            if (t == null) { failure = "Part " + i + " isn't readable yet — please try saving again."; break; }
+            combined += t;
           }
           // Integrity check: the stitched tree must be exactly as long as what
           // the browser uploaded — a corrupted save is never stored.
