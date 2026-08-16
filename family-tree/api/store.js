@@ -25,7 +25,7 @@
 //   POST { action:'commitTree', passcode, uploadId, total, length, check }
 //   POST { action:'putRecord' | 'saveViewerKey' | 'addComment' | 'deleteComment', ... }
 
-import { put, list, del } from "@vercel/blob";
+import { put, list, del, get } from "@vercel/blob";
 
 const TREE = "family-tree.json"; // legacy single-file location (read fallback only)
 const TREEDIR = "tree-v/";       // versioned, write-once tree copies: tree-v/<id>.json + <id>.check
@@ -81,15 +81,30 @@ export default async function handler(req, res) {
   // viewer key, legacy files). Versioned tree copies are write-once, so their
   // content can never be stale — but busting is harmless there too.
   const fresh = (u) => u + (u.includes("?") ? "&" : "?") + "ts=" + Date.now();
-  // Read a blob's content, retrying briefly: a JUST-written blob can be
-  // unreadable (404) for a few seconds while it propagates, and a failed read
-  // must never be mistaken for content — that's what corrupted reassembly.
-  async function fetchBlobText(u) {
+  // Read a blob's content AUTHENTICATED (SDK get() sends the store token). A
+  // plain fetch of a blob URL returns "Forbidden" on a PRIVATE Blob store —
+  // which is exactly what corrupted reassembly and served unreadable trees.
+  // Bypass the CDN cache and retry briefly: a JUST-written blob can 404 for a
+  // few seconds while it propagates, and a failed read must never be mistaken
+  // for content.
+  async function fetchBlobBytes(u) {
+    const url = String(u || "").split("?")[0];
     for (let a = 0; a < 5; a++) {
       if (a) await new Promise((resolve) => setTimeout(resolve, 1500));
-      try { const r = await fetch(fresh(u)); if (r.ok) return await r.text(); } catch (e) {}
+      try {
+        const r = await get(url, { access: "private", token, useCache: false });
+        if (r && r.statusCode === 200 && r.stream) {
+          const chunks = [];
+          for await (const c of r.stream) chunks.push(Buffer.from(c));
+          return { bytes: Buffer.concat(chunks), contentType: (r.blob && r.blob.contentType) || "" };
+        }
+      } catch (e) {}
     }
     return null;
+  }
+  async function fetchBlobText(u) {
+    const r = await fetchBlobBytes(u);
+    return r ? r.bytes.toString("utf8") : null;
   }
   async function putBlob(pathname, body, contentType) {
     const base = { token, addRandomSuffix: false, contentType, allowOverwrite: true, cacheControlMaxAge: 60 };
@@ -212,10 +227,26 @@ export default async function handler(req, res) {
       return;
     }
 
+    // Serve a stored record (obituary PDF/photo) through the function, so it
+    // works even when the Blob store is private (direct blob URLs would 403).
+    if (req.method === "GET" && req.query.action === "getRecord") {
+      const p = (req.query.p || "").toString();
+      if (!/^records\/[A-Za-z0-9][A-Za-z0-9._-]*$/.test(p)) { res.status(400).json({ error: "Bad record path." }); return; }
+      const { blobs } = await list({ prefix: p, token });
+      const b = blobs.find((x) => x.pathname === p);
+      if (!b) { res.status(404).json({ error: "No such record." }); return; }
+      const r = await fetchBlobBytes(b.downloadUrl || b.url);
+      if (!r) { res.status(503).json({ error: "The record isn't readable yet — try again shortly." }); return; }
+      res.setHeader("Content-Type", r.contentType || "application/octet-stream");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.status(200).send(r.bytes);
+      return;
+    }
+
     if (req.method === "GET" && (req.query.action || "getTree") === "getTree") {
       const b = await newestTree();
       if (!b) { res.status(404).json({ error: "No saved tree in the cloud yet." }); return; }
-      const url = b.downloadUrl || b.url;   // downloadUrl works for private blobs too
+      const url = b.downloadUrl || b.url;   // direct-URL fast path (public stores only; clients fall back to slices)
       const savedAt = Date.parse(b.uploadedAt) || 0;
       res.setHeader("Cache-Control", "no-store");
       // A big tree would blow the function's ~4.5MB response limit. Tell the client
@@ -333,8 +364,10 @@ export default async function handler(req, res) {
         if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) { res.status(400).json({ error: "Bad record name." }); return; }
         const bytes = Buffer.from((body.base64 || "").toString(), "base64");
         if (!bytes.length || bytes.length > 20 * 1024 * 1024) { res.status(400).json({ error: "Empty or too-large file." }); return; }
-        const r = await put("records/" + name, bytes, { access: "public", token, addRandomSuffix: false, contentType: body.contentType || "application/octet-stream", allowOverwrite: true });
-        res.status(200).json({ ok: true, url: r.url });
+        await putBlob("records/" + name, bytes, body.contentType || "application/octet-stream");
+        // Hand back a same-site proxy URL rather than the direct blob URL: on a
+        // private Blob store the direct URL isn't publicly fetchable.
+        res.status(200).json({ ok: true, url: "api/store?action=getRecord&p=" + encodeURIComponent("records/" + name) });
         return;
       }
 
