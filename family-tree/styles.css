@@ -625,3 +625,34 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
   .modal { padding: 18px; width: min(460px, 96vw); }
   .modal-backdrop { padding: 10px; }
 }
+
+/* GitHub-key expiry banner: amber = expiring soon, red = expired */
+.token-banner {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 90;
+  background: #fff7e6; color: #7a4b12; border-bottom: 1px solid #e5c37a;
+  padding: 10px 14px; font-size: 14px; line-height: 1.45;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  box-shadow: var(--shadow);
+}
+.token-banner.expired { background: #fdeaea; color: #8c2f39; border-bottom-color: #e3a0a0; }
+.token-banner button {
+  border: 1px solid currentColor; background: transparent; color: inherit;
+  border-radius: 7px; padding: 4px 10px; cursor: pointer; font-size: 13px;
+}
+.token-banner .tb-close { border: none; font-size: 15px; padding: 4px 6px; margin-left: auto; }
+.token-banner .tb-steps { flex-basis: 100%; background: rgba(255, 255, 255, .6); border-radius: 8px; padding: 8px 12px; }
+.token-banner .tb-steps ol { margin: 6px 0 2px 18px; padding: 0; }
+.token-banner .tb-steps li { margin: 4px 0; }
+
+/* profile-card Details + Notes: read-only views, editing behind explicit buttons */
+.pcard-detline { font-size: 14px; margin: 3px 0; }
+.pcard-editform { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.pcard-field { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.pcard-field span { color: var(--muted); font-size: 12px; }
+.pcard-field input { padding: 8px; border: 1px solid var(--panel-border); border-radius: 8px; font-size: 15px; background: var(--paper); }
+.pcard-check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.pcard-notes-view { font-size: 14px; white-space: pre-wrap; background: var(--paper); border: 1px solid var(--panel-border); border-radius: 8px; padding: 8px 10px; }
+.pcard-notes-view.empty { color: var(--muted); font-style: italic; }
+.notes-view { font-size: 13.5px; white-space: pre-wrap; background: var(--paper); border: 1px solid var(--panel-border); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; }
+.notes-view.empty { color: var(--muted); font-style: italic; }
+#notesText { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid var(--panel-border); border-radius: 8px; font: inherit; font-size: 13.5px; }
