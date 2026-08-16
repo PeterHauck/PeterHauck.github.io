@@ -656,3 +656,12 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 .notes-view { font-size: 13.5px; white-space: pre-wrap; background: var(--paper); border: 1px solid var(--panel-border); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; }
 .notes-view.empty { color: var(--muted); font-style: italic; }
 #notesText { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid var(--panel-border); border-radius: 8px; font: inherit; font-size: 13.5px; }
+
+/* group-selection action bar (Rearrange mode) — sits above the legend */
+#selBar {
+  position: fixed; bottom: 66px; left: 50%; transform: translateX(-50%); z-index: 46;
+  display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 14px;
+  background: var(--accent); color: #fff; border-radius: 999px; box-shadow: var(--shadow); font-size: 13px;
+}
+#selBar button { flex: none; background: #fff; color: var(--accent); border: none; padding: 5px 11px; font-size: 12.5px; border-radius: 999px; cursor: pointer; }
+#selBar #sbClear { background: transparent; color: #fff; border: 1px solid rgba(255, 255, 255, .6); }
