@@ -297,11 +297,14 @@
   <div id="toast" class="toast"></div>
 
   <!-- Load the scripts with a per-load cache-buster (in order) so the newest
-       code and data always win over anything the browser cached. -->
+       code always wins over anything the browser cached. The multi-megabyte
+       published snapshot (family-data.js) is deliberately NOT loaded here:
+       the app fetches it on demand, only when a device has no saved copy —
+       that's what makes opening the app fast. -->
   <script>
     (function () {
       var v = Date.now();
-      document.write('<script src="family-data.js?v=' + v + '"><\/script>');
+      window.FAMILY_DATA_VERSION = v;
       document.write('<script src="starter.js?v=' + v + '"><\/script>');
       document.write('<script src="app.js?v=' + v + '"><\/script>');
     })();
