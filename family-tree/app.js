@@ -104,7 +104,7 @@
 
   /* ================================================================ MODEL */
   // Name parts <-> the display string on the tree.
-  // Display order: First [Middle] ["Nickname"] [(Maiden)] Last.
+  // Display order: First [Middle] ["Nickname"] [(Maiden)] Last [Suffix].
   function composeName(p) {
     const bits = [];
     if (p.first) bits.push(p.first);
@@ -112,6 +112,7 @@
     if (p.nickname) bits.push('"' + p.nickname + '"');
     if (p.maiden) bits.push("(" + p.maiden + ")");
     if (p.last) bits.push(p.last);
+    if (p.suffix) bits.push(p.suffix);
     return bits.join(" ").replace(/\s+/g, " ").trim();
   }
   // Compact label for the tree: the middle name is shortened to just its first
@@ -122,27 +123,29 @@
     if (p.first == null && p.last == null && p.middle == null) return p.name || "";
     const mid = (p.middle || "").trim();
     const initial = mid ? mid.charAt(0).toUpperCase() + "." : "";
-    return composeName({ first: p.first, middle: initial, last: p.last, nickname: p.nickname, maiden: p.maiden }) || p.name || "";
+    return composeName({ first: p.first, middle: initial, last: p.last, nickname: p.nickname, maiden: p.maiden, suffix: p.suffix }) || p.name || "";
   }
-  // Split a written name into parts: pull a "nickname" and a (maiden), then take
-  // the first token as first name, the last token as last name, the rest middle.
+  // Split a written name into parts: pull a "nickname" and a (maiden), peel a
+  // trailing generational suffix (Jr., Sr., III, …), then take the first token
+  // as first name, the last token as last name, the rest middle.
   function parseName(full) {
     let s = String(full || "");
-    let nickname = "", maiden = "";
+    let nickname = "", maiden = "", suffix = "";
     const nick = s.match(/["“”'‘’]([^"“”'‘’]+)["“”'‘’]/); if (nick) { nickname = nick[1].trim(); s = s.replace(nick[0], " "); }
     const maid = s.match(/\(([^)]+)\)/); if (maid) { maiden = maid[1].trim(); s = s.replace(maid[0], " "); }
-    const toks = s.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+    const toks = s.replace(/,/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+    if (toks.length > 2 && /^(jr|sr|ii|iii|iv|v|vi|vii)\.?$/i.test(toks[toks.length - 1])) suffix = toks.pop();
     const first = toks.shift() || "";
     const last = toks.length ? toks.pop() : "";
     const middle = toks.join(" ");
-    return { first, middle, last, nickname, maiden };
+    return { first, middle, last, nickname, maiden, suffix };
   }
   // Resolve a person's name parts + display name from either explicit parts or a
   // plain `name` string.
   function nameParts(d) {
-    const has = d.first || d.middle || d.last || d.nickname || d.maiden;
+    const has = d.first || d.middle || d.last || d.nickname || d.maiden || d.suffix;
     const parts = has
-      ? { first: d.first || "", middle: d.middle || "", last: d.last || "", nickname: d.nickname || "", maiden: d.maiden || "" }
+      ? { first: d.first || "", middle: d.middle || "", last: d.last || "", nickname: d.nickname || "", maiden: d.maiden || "", suffix: d.suffix || "" }
       : parseName(d.name || "");
     parts.name = composeName(parts) || String(d.name || "").trim() || "Unnamed";
     return parts;
@@ -154,14 +157,14 @@
     state.persons.forEach((p) => {
       if (p.first === undefined && p.last === undefined) {
         const np = parseName(p.name || "");
-        p.first = np.first; p.middle = np.middle; p.last = np.last; p.nickname = np.nickname; p.maiden = np.maiden;
+        p.first = np.first; p.middle = np.middle; p.last = np.last; p.nickname = np.nickname; p.maiden = np.maiden; p.suffix = np.suffix;
       }
     });
   }
 
   function addPerson(data) {
     const np = nameParts(data);
-    const p = { id: uid(), name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate || null, deathDate: data.deathDate || null, deceased: !!data.deceased, sex: data.sex || "unknown", color: data.color || null, photo: data.photo || null, docs: data.docs || [] };
+    const p = { id: uid(), name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate || null, deathDate: data.deathDate || null, deceased: !!data.deceased, sex: data.sex || "unknown", color: data.color || null, photo: data.photo || null, docs: data.docs || [] };
     state.persons.push(p);
     // Anyone added while inside a hidden branch stays hidden from the main tree.
     if (hiddenScope) { if (!state.hidden) state.hidden = {}; state.hidden[p.id] = true; }
@@ -1518,6 +1521,7 @@
     $("#pLast").value = np.last || "";
     $("#pNick").value = np.nickname || "";
     $("#pMaiden").value = np.maiden || "";
+    $("#pSuffix").value = np.suffix || "";
     $("#pName").value = p.name || "";
     $("#pBirth").value = p.birth == null ? "" : p.birth;
     $("#pDeath").value = p.death == null ? "" : p.death;
@@ -1875,11 +1879,11 @@
     // A full date wins over the year box, so the tree year always matches the exact date.
     const birthYear = birthDate ? birthDate.slice(0, 4) : $("#pBirth").value;
     const deathYear = deathDate ? deathDate.slice(0, 4) : $("#pDeath").value;
-    const np = nameParts({ first: $("#pFirst").value.trim(), middle: $("#pMiddle").value.trim(), last: $("#pLast").value.trim(), nickname: $("#pNick").value.trim(), maiden: formSex === "female" ? $("#pMaiden").value.trim() : "" });
-    const data = { name: np.name, birth: birthYear, death: deathYear, birthDate, deathDate, deceased: $("#pDeceased").checked, sex: formSex, color: formColor, photo: pendingPhoto };
+    const np = nameParts({ first: $("#pFirst").value.trim(), middle: $("#pMiddle").value.trim(), last: $("#pLast").value.trim(), nickname: $("#pNick").value.trim(), maiden: formSex === "female" ? $("#pMaiden").value.trim() : "", suffix: $("#pSuffix").value.trim() });
+    const data = { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: birthYear, death: deathYear, birthDate, deathDate, deceased: $("#pDeceased").checked, sex: formSex, color: formColor, photo: pendingPhoto };
     if (id) {
       const p = personById(id);
-      Object.assign(p, { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate, deathDate: data.deathDate, deceased: data.deceased, sex: data.sex, color: data.color || null, photo: data.photo });
+      Object.assign(p, { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate, deathDate: data.deathDate, deceased: data.deceased, sex: data.sex, color: data.color || null, photo: data.photo });
     } else {
       const p = addPerson(data); selectedId = p.id;
     }
