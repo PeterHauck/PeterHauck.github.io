@@ -3419,7 +3419,7 @@
       // The cloud copy won't open — but the PUBLISHED snapshot might. Offer it,
       // so a phone stuck on an old local copy can still catch up to the last
       // published data even while the cloud copy is broken.
-      const committed = (typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20) ? window.FAMILY_TREE_DATA : null;
+      const committed = await loadCommittedSnapshot();
       if (committed) {
         const rc = await decryptWithKnown(committed, pw);
         if (rc && confirm("The cloud copy can’t be opened, but the published copy of the tree can. Show the published copy on this device instead? (This replaces what this device currently shows — a backup of it is kept.)")) {
@@ -3469,7 +3469,7 @@
     if (!ownerCanCloud()) return newer;
     return newer && dirtyFlag !== "1" && (synced > 0 || dirtyFlag === "0");
   }
-  async function syncFromCloudIfNewer() {
+  async function syncFromCloudIfNewer(background) {
     const info = await cloudTreeInfo();
     if (!info || !info.exists) return false;
     if (!safeToPull(info)) return false;
@@ -3485,7 +3485,9 @@
       try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}   // refresh the local cache (no re-upload)
       return true;
     }
-    // Newer cloud data but no password on this device: unlock it into the editor.
+    // Newer cloud data but no password on this device: unlock it into the editor —
+    // unless we're refreshing quietly behind an already-visible tree.
+    if (background) return false;
     try { localStorage.setItem("familyTree.cloudSavedAt", String(savedAt)); } catch (e) {}
     showLock(true, cp.payload);
     return "lock";
@@ -3554,8 +3556,22 @@
   async function getPublishedPayload() {
     const cloud = await fetchCloudPayload();
     if (cloud) return cloud.payload;
-    if (typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20) return window.FAMILY_TREE_DATA;
-    return null;
+    return await loadCommittedSnapshot();
+  }
+  // The committed family-data.js snapshot is multi-megabyte, so it is no longer
+  // loaded with the page — fetch it here, once, only when actually needed
+  // (a device with no saved copy, or as a fallback when the cloud won't open).
+  let committedLoadP = null;
+  function loadCommittedSnapshot() {
+    if (typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20) return Promise.resolve(window.FAMILY_TREE_DATA);
+    if (!committedLoadP) committedLoadP = new Promise((resolve) => {
+      const s = document.createElement("script");
+      s.src = "family-data.js?v=" + (window.FAMILY_DATA_VERSION || Date.now());
+      s.onload = () => resolve(typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20 ? window.FAMILY_TREE_DATA : null);
+      s.onerror = () => resolve(null);
+      document.head.appendChild(s);
+    });
+    return committedLoadP;
   }
 
   /* -------- optional legacy backup: commit the encrypted tree to a GitHub repo -- */
@@ -4006,13 +4022,21 @@
     // password may be the family password directly, or the shared viewer
     // password (which unwraps the family password but only ever opens the
     // read-only view).
-    const committed = (typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20) ? window.FAMILY_TREE_DATA : null;
     const candidates = [];
     if (payload) candidates.push({ src: "cloud", data: payload });
-    if (committed && committed !== payload) candidates.push({ src: "committed", data: committed });
+    // The committed snapshot is only downloaded if the copies at hand won't
+    // open — keeps the lock screen (and first paint) fast.
+    async function addCommittedCandidate() {
+      if (candidates.some((c) => c.src === "committed")) return;
+      const committed = await loadCommittedSnapshot();
+      if (committed && committed !== payload) candidates.push({ src: "committed", data: committed });
+    }
     async function tryUnlock(pw) {
       if (!pw) return null;
       for (const c of candidates) { try { return { obj: await decryptState(pw, c.data), from: c.src, viewer: false }; } catch (_) {} }
+      await addCommittedCandidate();
+      const tried = candidates.filter((c) => c.src === "committed");
+      for (const c of tried) { try { return { obj: await decryptState(pw, c.data), from: c.src, viewer: false }; } catch (_) {} }
       const wrap = await fetchViewerWrap();
       if (wrap) {
         try {
@@ -4188,12 +4212,16 @@
     // the cloud has a newer one (e.g. edits made on another device) and pull it in
     // so the tree isn't a stale local snapshot. This is what makes updates show up
     // on your phone.
+    // …but never make the first paint WAIT on the network: this device's saved
+    // copy shows instantly, and if the cloud turns out to have something newer
+    // it's swapped in (and re-drawn) seconds later.
     if (hasLocalData()) {
-      try {
-        const r = await syncFromCloudIfNewer();
-        if (r === "lock") return;             // unlocking newer cloud data took over
-        if (r === true) { boot(); return; }   // loaded fresh cloud data
-      } catch (e) {}
+      setTimeout(async () => {
+        try {
+          const r = await syncFromCloudIfNewer(true);
+          if (r === true) { autoLayout(); render(); toast("Updated to the latest from your site"); }
+        } catch (e) {}
+      }, 250);
     }
     // The published tree can come from a committed family-data.js OR the cloud
     // copy (Vercel Blob) — so the family view and cross-device editing work with
