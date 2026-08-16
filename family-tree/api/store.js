@@ -61,19 +61,43 @@ function blobToken() {
 
 export const config = { maxDuration: 60 };
 
+/* ===================== GitHub-backed storage (primary) =====================
+   Vercel Blob's free tier allows only 2,000 "advanced operations" a month —
+   the tree's instant-save + freshness polling burns through that in a day or
+   two, after which Vercel pauses the store for 30 days. GitHub has no such
+   metering, the repo token is already configured (it powered the old backup
+   feature), and the data is ciphertext anyway. So when GITHUB_TOKEN is set,
+   ALL cloud storage lives on an orphan branch of the repo (default
+   "family-data") that keeps NO history — every save force-replaces the single
+   commit, so the repo never grows. Files on that branch:
+     family-cipher.json  – the encrypted tree (same payload the client sends)
+     meta.json           – { savedAt, size, check, blobSha }
+     comments.json, viewer-key.json, records/<name>
+   Client-facing actions are unchanged; putPart returns a part `sha` that the
+   client passes back to commitTree. Vercel Blob remains as a fallback backend
+   when no GitHub token is configured, and as a read-fallback during migration. */
+
+const GH_REPO = process.env.GITHUB_REPO || "PeterHauck/PeterHauck.github.io";
+const GH_BRANCH = process.env.GITHUB_DATA_BRANCH || "family-data";
+const GH_BASE = process.env.GITHUB_API_BASE || "https://api.github.com";
+
 export default async function handler(req, res) {
   const passcode = process.env.IMPORT_PASSCODE;
   const token = blobToken();
+  const ghToken = clean(process.env.GITHUB_TOKEN);
 
   // Diagnostic: tells you (without revealing secrets) what the server can see —
   // visit /api/store?action=status to check your setup.
   if (req.method === "GET" && req.query.action === "status") {
-    res.status(200).json({ blobStoreConnected: !!token, importPasscodeSet: !!passcode });
+    res.status(200).json({ githubConnected: !!ghToken, blobStoreConnected: !!token, importPasscodeSet: !!passcode });
     return;
   }
 
+  // GitHub-backed storage takes over whenever its token is available.
+  if (ghToken) { await handleGitHub(req, res, passcode, ghToken); return; }
+
   if (!token) {
-    res.status(503).json({ error: "Cloud save isn't set up yet — the server can't see a Blob store. In Vercel: create a Blob store, make sure it's connected to THIS project, then redeploy (env vars only apply to new deployments)." });
+    res.status(503).json({ error: "Cloud save isn't set up yet — the server can't see a Blob store or a GitHub token. In Vercel: add GITHUB_TOKEN (Contents read+write on the repo), then redeploy." });
     return;
   }
 
@@ -378,6 +402,249 @@ export default async function handler(req, res) {
     res.status(405).json({ error: "Use GET or POST." });
   } catch (err) {
     console.error("store error", err);
+    res.status(500).json({ error: (err && err.message) || "Cloud storage failed." });
+  }
+}
+
+/* ======================= GitHub storage engine ======================= */
+
+async function handleGitHub(req, res, passcode, ghToken) {
+  const hdr = (extra) => ({ Authorization: "Bearer " + ghToken, "User-Agent": "FamilyTree store", "X-GitHub-Api-Version": "2022-11-28", ...extra });
+  // JSON API call; 404 → null, other failures → throw with GitHub's message.
+  async function gh(method, path, body) {
+    const r = await fetch(GH_BASE + path, {
+      method,
+      headers: hdr({ Accept: "application/vnd.github+json", ...(body ? { "Content-Type": "application/json" } : {}) }),
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (r.status === 404) return null;
+    if (!r.ok) {
+      let m = "GitHub request failed (" + r.status + ")";
+      try { m = (await r.json()).message || m; } catch (e) {}
+      if (r.status === 401 || r.status === 403) m = "The GitHub token is missing, expired, or lacks Contents read+write permission.";
+      throw new Error(m);
+    }
+    return await r.json();
+  }
+  // Raw content read; 404 → null.
+  async function ghRawBytes(path) {
+    const r = await fetch(GH_BASE + path, { headers: hdr({ Accept: "application/vnd.github.raw+json" }) });
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error("GitHub read failed (" + r.status + ")");
+    return Buffer.from(await r.arrayBuffer());
+  }
+  const repo = "/repos/" + GH_REPO;
+  const ghFile = (p) => ghRawBytes(repo + "/contents/" + p + "?ref=" + encodeURIComponent(GH_BRANCH));
+  const ghGitBlob = (sha) => ghRawBytes(repo + "/git/blobs/" + sha);
+  const ghMakeBlob = async (content, encoding) => (await gh("POST", repo + "/git/blobs", { content, encoding: encoding || "utf-8" })).sha;
+  async function ghHeadSha() {
+    const j = await gh("GET", repo + "/git/ref/heads/" + GH_BRANCH);
+    return (j && j.object && j.object.sha) || null;
+  }
+  // Commit a set of already-uploaded blobs onto the data branch as a fresh
+  // ORPHAN commit (no parents) that force-replaces the branch head. base_tree
+  // carries over every file not being changed (records, comments, …), and the
+  // no-history design means the repo never grows with each save.
+  async function ghCommitFiles(entries, message) {
+    const head = await ghHeadSha();
+    let baseTree;
+    if (head) { const c = await gh("GET", repo + "/git/commits/" + head); baseTree = c && c.tree && c.tree.sha; }
+    // First commit on the data branch: include a vercel.json that turns off
+    // deployments for pushes of this branch — otherwise every save would
+    // trigger a site build. base_tree carries it forward on later saves.
+    if (!head) entries = entries.concat([{ path: "vercel.json", blobSha: await ghMakeBlob('{"git":{"deploymentEnabled":false}}') }]);
+    const tree = await gh("POST", repo + "/git/trees", {
+      ...(baseTree ? { base_tree: baseTree } : {}),
+      tree: entries.map((e) => ({ path: e.path, mode: "100644", type: "blob", sha: e.blobSha })),
+    });
+    const commit = await gh("POST", repo + "/git/commits", { message, tree: tree.sha, parents: [] });
+    if (head) await gh("PATCH", repo + "/git/refs/heads/" + GH_BRANCH, { sha: commit.sha, force: true });
+    else await gh("POST", repo + "/git/refs", { ref: "refs/heads/" + GH_BRANCH, sha: commit.sha });
+    return commit.sha;
+  }
+  async function readMeta() {
+    const b = await ghFile("meta.json");
+    if (!b) return null;
+    try { return JSON.parse(b.toString("utf8")); } catch (e) { return null; }
+  }
+  async function readCommentsGh() {
+    const b = await ghFile("comments.json");
+    if (!b) return {};
+    try { return JSON.parse(b.toString("utf8")) || {}; } catch (e) { return {}; }
+  }
+  const commitComments = async (all) => ghCommitFiles([{ path: "comments.json", blobSha: await ghMakeBlob(JSON.stringify(all)) }], "Update comments");
+  // Store a fresh tree payload (+ its metadata) in one commit.
+  async function commitTreePayload(payload, check) {
+    const savedAt = Date.now();
+    const blobSha = await ghMakeBlob(payload);
+    const meta = { savedAt, size: payload.length, check: String(check || "").slice(0, 5000), blobSha };
+    const metaSha = await ghMakeBlob(JSON.stringify(meta));
+    await ghCommitFiles([{ path: "family-cipher.json", blobSha }, { path: "meta.json", blobSha: metaSha }], "Save family tree");
+    return meta;
+  }
+  const recordType = (name) => (/\.pdf$/i.test(name) ? "application/pdf" : /\.png$/i.test(name) ? "image/png" : /\.webp$/i.test(name) ? "image/webp" : /\.gif$/i.test(name) ? "image/gif" : /\.jpe?g$/i.test(name) ? "image/jpeg" : "application/octet-stream");
+
+  try {
+    if (req.method === "GET" && req.query.action === "treeInfo") {
+      const meta = await readMeta();
+      res.setHeader("Cache-Control", "no-store");
+      res.status(200).json({ exists: !!meta, savedAt: meta ? meta.savedAt : 0 });
+      return;
+    }
+
+    if (req.method === "GET" && req.query.action === "passCheck") {
+      const meta = await readMeta();
+      res.setHeader("Cache-Control", "no-store");
+      if (!meta || !meta.check) { res.status(404).json({ error: "No password check saved yet." }); return; }
+      res.status(200).json({ check: meta.check });
+      return;
+    }
+
+    if (req.method === "GET" && req.query.action === "viewerKey") {
+      const b = await ghFile("viewer-key.json");
+      res.setHeader("Cache-Control", "no-store");
+      if (!b) { res.status(404).json({ error: "No viewer password is set." }); return; }
+      res.status(200).json({ wrap: b.toString("utf8") });
+      return;
+    }
+
+    if (req.method === "GET" && req.query.action === "comments") {
+      const all = await readCommentsGh();
+      res.setHeader("Cache-Control", "no-store");
+      const pid = req.query.personId;
+      if (pid) { res.status(200).json({ comments: Array.isArray(all[pid]) ? all[pid] : [] }); return; }
+      res.status(200).json({ comments: all });
+      return;
+    }
+
+    if (req.method === "GET" && req.query.action === "getRecord") {
+      const p = (req.query.p || "").toString();
+      if (!/^records\/[A-Za-z0-9][A-Za-z0-9._-]*$/.test(p)) { res.status(400).json({ error: "Bad record path." }); return; }
+      const b = await ghFile(p);
+      if (!b) { res.status(404).json({ error: "No such record." }); return; }
+      res.setHeader("Content-Type", recordType(p));
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.status(200).send(b);
+      return;
+    }
+
+    if (req.method === "GET" && req.query.action === "getTreePart") {
+      const meta = await readMeta();
+      const v = (req.query.v || "").toString() || (meta && meta.blobSha) || "";
+      if (!/^[0-9a-f]{40,64}$/.test(v)) { res.status(404).json({ error: "No saved tree in the cloud yet." }); return; }
+      const b = await ghGitBlob(v);
+      if (!b) { res.status(404).json({ error: "That tree version is gone — reload to get the newest." }); return; }
+      const text = b.toString("utf8");
+      const start = Math.max(0, parseInt(req.query.start, 10) || 0);
+      const len = Math.min(Math.max(1, parseInt(req.query.len, 10) || 3000000), 4000000);
+      // A slice is pinned to an immutable content hash — cache it at the edge so
+      // repeat loads don't re-download from GitHub.
+      res.setHeader("Cache-Control", req.query.v ? "public, s-maxage=31536000, immutable" : "no-store");
+      res.status(200).json({ chunk: text.slice(start, start + len), size: text.length, v });
+      return;
+    }
+
+    if (req.method === "GET" && (req.query.action || "getTree") === "getTree") {
+      const meta = await readMeta();
+      if (!meta) { res.status(404).json({ error: "No saved tree in the cloud yet." }); return; }
+      res.setHeader("Cache-Control", "no-store");
+      if ((meta.size || 0) > 3.5 * 1024 * 1024) { res.status(200).json({ big: true, size: meta.size || 0, savedAt: meta.savedAt, v: meta.blobSha }); return; }
+      const b = await ghFile("family-cipher.json");
+      if (!b) { res.status(503).json({ error: "The tree copy isn't readable yet — try again shortly." }); return; }
+      res.status(200).json({ payload: b.toString("utf8"), savedAt: meta.savedAt, v: meta.blobSha });
+      return;
+    }
+
+    if (req.method === "POST") {
+      const body = await readBody(req);
+      const action = body.action || "saveTree";
+      const openAction = action === "addComment";
+      if (!openAction && passcode && (body.passcode || "") !== passcode) { res.status(401).json({ error: "Wrong import passcode." }); return; }
+
+      if (action === "addComment") {
+        const personId = (body.personId || "").toString();
+        const name = (body.name || "").toString().trim().slice(0, 60);
+        const text = (body.text || "").toString().trim().slice(0, 2000);
+        if (!personId || !name || !text) { res.status(400).json({ error: "Need a person, a name, and a comment." }); return; }
+        const all = await readCommentsGh();
+        const listp = Array.isArray(all[personId]) ? all[personId] : [];
+        if (listp.length >= 500) { res.status(400).json({ error: "Too many comments here." }); return; }
+        const comment = { id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36), name, text, at: Date.now() };
+        listp.push(comment); all[personId] = listp;
+        await commitComments(all);
+        res.status(200).json({ ok: true, comment });
+        return;
+      }
+      if (action === "deleteComment") {
+        const personId = (body.personId || "").toString();
+        const id = (body.id || "").toString();
+        const all = await readCommentsGh();
+        if (Array.isArray(all[personId])) { all[personId] = all[personId].filter((c) => c.id !== id); await commitComments(all); }
+        res.status(200).json({ ok: true });
+        return;
+      }
+
+      if (action === "saveTree") {
+        const payload = (body.payload || "").toString();
+        if (!payload || payload.length > 30 * 1024 * 1024) { res.status(400).json({ error: "Nothing to save (or too large)." }); return; }
+        const meta = await commitTreePayload(payload, body.check);
+        res.status(200).json({ ok: true, savedAt: meta.savedAt, size: payload.length });
+        return;
+      }
+
+      if (action === "putPart") {
+        const index = parseInt(body.index, 10);
+        if (!(index >= 0 && index < 10000)) { res.status(400).json({ error: "Bad part index." }); return; }
+        const chunk = (body.chunk || "").toString();
+        if (!chunk || chunk.length > 5 * 1024 * 1024) { res.status(400).json({ error: "Empty or too-large part." }); return; }
+        const sha = await ghMakeBlob(chunk);
+        res.status(200).json({ ok: true, sha });
+        return;
+      }
+
+      if (action === "commitTree") {
+        const total = parseInt(body.total, 10);
+        if (!(total > 0 && total <= 10000)) { res.status(400).json({ error: "Bad part count." }); return; }
+        const shas = Array.isArray(body.shas) ? body.shas.filter((s) => /^[0-9a-f]{40,64}$/.test(String(s))) : [];
+        if (shas.length !== total) { res.status(409).json({ error: "Your app just updated — reload the page, then save again." }); return; }
+        const expected = parseInt(body.length, 10);
+        let combined = "";
+        for (let i = 0; i < total; i++) {
+          const b = await ghGitBlob(shas[i]);
+          if (!b) { res.status(409).json({ error: "Part " + i + " isn't readable yet — please try saving again." }); return; }
+          combined += b.toString("utf8");
+        }
+        if (expected > 0 && combined.length !== expected) { res.status(409).json({ error: "The upload didn't reassemble cleanly — please try saving again." }); return; }
+        const meta = await commitTreePayload(combined, body.check);
+        res.status(200).json({ ok: true, savedAt: meta.savedAt, size: combined.length });
+        return;
+      }
+
+      if (action === "saveViewerKey") {
+        const wrap = (body.wrap || "").toString();
+        if (!wrap || wrap.length > 10000) { res.status(400).json({ error: "Bad viewer key." }); return; }
+        await ghCommitFiles([{ path: "viewer-key.json", blobSha: await ghMakeBlob(wrap) }], "Update viewer key");
+        res.status(200).json({ ok: true });
+        return;
+      }
+
+      if (action === "putRecord") {
+        const name = (body.name || "").toString();
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) { res.status(400).json({ error: "Bad record name." }); return; }
+        const b64 = (body.base64 || "").toString();
+        if (!b64 || b64.length > 28 * 1024 * 1024) { res.status(400).json({ error: "Empty or too-large file." }); return; }
+        await ghCommitFiles([{ path: "records/" + name, blobSha: await ghMakeBlob(b64, "base64") }], "Add record " + name);
+        res.status(200).json({ ok: true, url: "api/store?action=getRecord&p=" + encodeURIComponent("records/" + name) });
+        return;
+      }
+
+      res.status(400).json({ error: "Unknown action." });
+      return;
+    }
+
+    res.status(405).json({ error: "Use GET or POST." });
+  } catch (err) {
+    console.error("store github error", err);
     res.status(500).json({ error: (err && err.message) || "Cloud storage failed." });
   }
 }

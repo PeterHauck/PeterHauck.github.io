@@ -3191,11 +3191,14 @@
         // folder on the server, so chunks from different saves can never mix.
         const uploadId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
         const total = Math.ceil(payload.length / CHUNK);
+        const shas = [];
         for (let i = 0; i < total; i++) {
-          await post({ action: "putPart", uploadId, index: i, chunk: payload.slice(i * CHUNK, (i + 1) * CHUNK) });
+          const pr = await post({ action: "putPart", uploadId, index: i, chunk: payload.slice(i * CHUNK, (i + 1) * CHUNK) });
+          // GitHub-backed storage identifies each part by a hash; pass them along.
+          try { const pj = await pr.json(); if (pj && pj.sha) shas[i] = pj.sha; } catch (e) {}
           setCloudStatus("saving");
         }
-        done = await post({ action: "commitTree", uploadId, total, length: payload.length, check });
+        done = await post({ action: "commitTree", uploadId, total, shas, length: payload.length, check });
       }
       // Every save is length-verified: the server echoes exactly how many bytes
       // it stored — a mismatch is treated as a failed save, never trusted.

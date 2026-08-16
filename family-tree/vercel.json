@@ -1,4 +1,7 @@
 {
+  "git": {
+    "deploymentEnabled": { "family-data": false }
+  },
   "headers": [
     {
       "source": "/",
