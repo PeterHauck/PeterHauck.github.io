@@ -274,21 +274,33 @@ export default async function handler(req, res) {
         if (!(total > 0 && total <= 10000)) { res.status(400).json({ error: "Bad part count." }); return; }
         const up = (body.uploadId || "").toString();
         const dir = /^[a-z0-9-]{4,40}$/.test(up) ? PARTSDIR + up + "/" : PARTSDIR;
-        const { blobs } = await list({ prefix: dir + "part-", token });
-        const byName = {}; blobs.forEach((x) => (byName[x.pathname] = x));
-        let combined = "";
-        for (let i = 0; i < total; i++) {
-          const part = byName[dir + "part-" + i];
-          if (!part) { res.status(400).json({ error: "Missing part " + i + " — please try saving again." }); return; }
-          const r = await fetch(fresh(part.downloadUrl || part.url));
-          combined += await r.text();
-        }
-        // Integrity check: the stitched tree must be exactly as long as what the
-        // browser uploaded — a corrupted save is rejected here, never stored.
         const expected = parseInt(body.length, 10);
-        if (expected > 0 && combined.length !== expected) { res.status(409).json({ error: "The upload didn't reassemble cleanly — please try saving again." }); return; }
+        // Old clients (loaded before the write-once rework) still upload chunks
+        // to the SHARED legacy folder, where overwrites are eventually
+        // consistent — a chunk read moments after writing can be stale. For
+        // them, retry assembly a few times before giving up; new clients use
+        // write-once folders and assemble correctly on the first pass.
+        const attempts = dir === PARTSDIR ? 4 : 1;
+        let combined = "", failure = "";
+        for (let a = 0; a < attempts; a++) {
+          if (a) await new Promise((resolve) => setTimeout(resolve, 2000));
+          const { blobs } = await list({ prefix: dir + "part-", token });
+          const byName = {}; blobs.forEach((x) => (byName[x.pathname] = x));
+          combined = ""; failure = "";
+          for (let i = 0; i < total; i++) {
+            const part = byName[dir + "part-" + i];
+            if (!part) { failure = "Missing part " + i + " — please try saving again."; break; }
+            const r = await fetch(fresh(part.downloadUrl || part.url));
+            combined += await r.text();
+          }
+          // Integrity check: the stitched tree must be exactly as long as what
+          // the browser uploaded — a corrupted save is never stored.
+          if (!failure && expected > 0 && combined.length !== expected) failure = "The upload didn't reassemble cleanly — please try saving again.";
+          if (!failure) break;
+        }
+        if (failure) { res.status(409).json({ error: failure }); return; }
         const written = await writeTree(combined, body.check);
-        try { if (blobs.length) await del(blobs.map((b) => b.url), { token }); } catch (e) {}   // clean up this upload's chunks
+        try { const { blobs } = await list({ prefix: dir + "part-", token }); if (blobs.length) await del(blobs.map((b) => b.url), { token }); } catch (e) {}   // clean up this upload's chunks
         res.status(200).json({ ok: true, savedAt: Date.parse(written.uploadedAt) || Date.now(), size: combined.length });
         return;
       }
