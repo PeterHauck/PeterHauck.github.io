@@ -673,6 +673,31 @@
     updatePeopleList();
     $("#peopleCount").textContent = state.persons.length;
     updateHiddenChip();
+    updateSelBar();
+  }
+
+  // Floating action bar for a group selection (Rearrange mode: drag a box
+  // around people, or shift-click them). Lets the whole group be hidden at once.
+  function updateSelBar() {
+    let bar = document.getElementById("selBar");
+    const show = rearrange && !readonly && !hiddenScope && selection.size > 0;
+    if (!show) { if (bar) bar.remove(); return; }
+    if (!bar) {
+      bar = document.createElement("div"); bar.id = "selBar";
+      bar.innerHTML = '<span class="sb-text"></span><button type="button" id="sbHide">Hide group</button><button type="button" id="sbClear">Clear</button>';
+      document.body.appendChild(bar);
+      bar.querySelector("#sbHide").onclick = () => {
+        pushUndo();
+        if (!state.hidden) state.hidden = {};
+        const n = selection.size;
+        selection.forEach((id) => { state.hidden[id] = true; if (id === selectedId) { selectedId = null; resetPersonForm(); } });
+        selection = new Set();
+        relayoutAndSave(); fitView();
+        toast("Hid " + n + " people — the counter chip at the top brings everyone back");
+      };
+      bar.querySelector("#sbClear").onclick = () => { selection = new Set(); render(); };
+    }
+    bar.querySelector(".sb-text").innerHTML = "<b>" + selection.size + "</b> selected";
   }
 
   function el(tag, attrs, children) {
