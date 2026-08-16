@@ -2362,7 +2362,13 @@
   // (doc.content) OR a file committed to the repo (doc.path, served next to the
   // page). Externalising the binary to doc.path is what keeps the tree small so
   // it scales to any number of uploads.
-  const docSrc = (doc) => (doc && (doc.content || (doc.path ? doc.path : "")));
+  // A doc.path saved as a DIRECT blob URL is rerouted through the site's own
+  // record proxy: on a private Blob store the direct URL isn't fetchable.
+  const recordSrc = (path) => {
+    const m = /^https:\/\/[^/]*\.blob\.vercel-storage\.com\/([^?]+)/.exec(path || "");
+    return m ? "api/store?action=getRecord&p=" + encodeURIComponent(m[1]) : path;
+  };
+  const docSrc = (doc) => (doc && (doc.content || (doc.path ? recordSrc(doc.path) : "")));
   const extFor = (mt) => (mt === "application/pdf" ? "pdf" : mt === "image/png" ? "png" : mt === "image/webp" ? "webp" : mt === "image/gif" ? "gif" : "jpg");
   function shrinkImageDataUrl(dataUrl, max) {
     return new Promise((resolve) => {
@@ -2385,7 +2391,7 @@
       if (!res.ok) return false;
       const j = await res.json();
       if (!j || !j.url) return false;
-      doc.path = j.url; doc.mediaType = mt; delete doc.content;   // path = public blob URL
+      doc.path = j.url; doc.mediaType = mt; delete doc.content;   // path = same-site record URL
       return true;
     } catch (e) { return false; }
   }
@@ -2732,7 +2738,7 @@
       if (d.kind !== "pdf" && d.kind !== "image") continue;
       const m = /^data:([^;]+);base64,(.*)$/.exec(d.content || "");
       if (m) return { file: { mediaType: m[1], data: m[2] } };
-      if (d.path) return { url: new URL(d.path, location.href).href };   // externalised → let the server fetch it
+      if (d.path) return { url: new URL(recordSrc(d.path), location.href).href };   // externalised → let the server fetch it
     }
     const link = docs.find((d) => d.url);
     if (link) return { url: link.url };
