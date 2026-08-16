@@ -485,6 +485,19 @@ async function handleGitHub(req, res, passcode, ghToken) {
   const recordType = (name) => (/\.pdf$/i.test(name) ? "application/pdf" : /\.png$/i.test(name) ? "image/png" : /\.webp$/i.test(name) ? "image/webp" : /\.gif$/i.test(name) ? "image/gif" : /\.jpe?g$/i.test(name) ? "image/jpeg" : "application/octet-stream");
 
   try {
+    // GitHub reports a fine-grained token's expiry on every authenticated
+    // request; surface it so the app can warn the owner BEFORE saves break.
+    if (req.method === "GET" && req.query.action === "tokenHealth") {
+      res.setHeader("Cache-Control", "no-store");
+      const r = await fetch(GH_BASE + repo, { headers: hdr({ Accept: "application/vnd.github+json" }) });
+      if (r.status === 401 || r.status === 403) { res.status(200).json({ ok: false, auth: false }); return; }
+      const h = (r.headers.get("github-authentication-token-expiration") || "").trim();
+      let expiresAt = null;
+      if (h) { const t = Date.parse(h.replace(" UTC", "Z").replace(" ", "T")); if (!isNaN(t)) expiresAt = t; }
+      res.status(200).json({ ok: r.ok, expiresAt });
+      return;
+    }
+
     if (req.method === "GET" && req.query.action === "treeInfo") {
       const meta = await readMeta();
       res.setHeader("Cache-Control", "no-store");

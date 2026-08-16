@@ -1522,6 +1522,7 @@
     $("#pNick").value = np.nickname || "";
     $("#pMaiden").value = np.maiden || "";
     $("#pSuffix").value = np.suffix || "";
+    renderNotesPanel(p);
     $("#pName").value = p.name || "";
     $("#pBirth").value = p.birth == null ? "" : p.birth;
     $("#pDeath").value = p.death == null ? "" : p.death;
@@ -1558,7 +1559,33 @@
     $("#hideOneBtn").textContent = "Hide this person";
     renderDocsForm(null);
     renderRelationships(null);
+    renderNotesPanel(null);
   }
+
+  // Private notes in the editor panel: read-only text until "Edit notes" is
+  // clicked, so a stray keystroke can't change a saved note.
+  function renderNotesPanel(p) {
+    const sec = $("#notesSection"); if (!sec) return;
+    sec.hidden = !p;
+    if (!p) return;
+    $("#notesEditBox").hidden = true;
+    $("#notesEditBtn").hidden = false;
+    const v = $("#notesView");
+    v.textContent = p.notes || "No notes yet.";
+    v.classList.toggle("empty", !p.notes);
+    v.hidden = false;
+  }
+  $("#notesEditBtn").addEventListener("click", () => {
+    const p = personById($("#personId").value); if (!p) return;
+    $("#notesText").value = p.notes || "";
+    $("#notesEditBox").hidden = false; $("#notesEditBtn").hidden = true; $("#notesView").hidden = true;
+  });
+  $("#notesCancelBtn").addEventListener("click", () => renderNotesPanel(personById($("#personId").value)));
+  $("#notesSaveBtn").addEventListener("click", () => {
+    const p = personById($("#personId").value); if (!p) return;
+    const v = $("#notesText").value.trim(); if (v) p.notes = v; else delete p.notes;
+    save(); renderNotesPanel(p); toast("Notes saved");
+  });
 
   const docIcon = (k) => ({ link: "🔗", text: "📄", pdf: "📕", image: "🖼️" }[k] || "📄");
   function renderDocsForm(p) {
@@ -2400,7 +2427,7 @@
     } catch (e) { return false; }
   }
 
-  function openAttachModal(personId) {
+  function openAttachModal(personId, onDone) {
     const person = personById(personId); if (!person) return;
     const obitTitle = person.name + "’s Obituary";
     const back = document.createElement("div");
@@ -2543,6 +2570,7 @@
 
       save(); render(); renderDocsForm(person); if (selectedId === person.id) fillPersonForm(person);
       close();
+      if (onDone) { try { onDone(); } catch (e) {} }
       const what = docType === "record" ? "Record" : "Obituary";
       const extras = [];
       if (scrapedText) extras.push("text scraped");
@@ -3016,6 +3044,54 @@
       }
       s.appendChild(fileInput);
     }
+    // Details — birth/death dates and records, view-only until the owner
+    // explicitly taps Edit (so nothing gets changed by a stray touch). Adding
+    // NEW people stays desktop-only on purpose.
+    if (isOwner()) {
+      const s = section("Details", "pcard-details");
+      const view = document.createElement("div");
+      const line = (label, val) => { const d = document.createElement("div"); d.className = "pcard-detline"; d.innerHTML = "<b>" + label + ":</b> "; d.appendChild(document.createTextNode(val)); view.appendChild(d); };
+      const fmt = (exact, year) => exact ? new Date(exact + "T12:00:00").toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : (year != null ? String(year) : "—");
+      line("Born", fmt(p.birthDate, p.birth));
+      line(isDeceased(p) ? "Died" : "Status", isDeceased(p) ? fmt(p.deathDate, p.death) : "Living");
+      s.appendChild(view);
+      const bar = document.createElement("div"); bar.className = "pcard-notes-bar";
+      const editBtn = document.createElement("button"); editBtn.className = "btn small"; editBtn.textContent = "✏️ Edit details";
+      const attachBtn = document.createElement("button"); attachBtn.className = "btn small"; attachBtn.textContent = "📄 Add obituary / record";
+      attachBtn.onclick = () => openAttachModal(id, () => { closeProfileCard(); openProfileCard(id); });
+      bar.appendChild(editBtn); bar.appendChild(attachBtn); s.appendChild(bar);
+      editBtn.onclick = () => {
+        bar.hidden = true; view.hidden = true;
+        const f = document.createElement("div"); f.className = "pcard-editform";
+        const field = (label, input) => { const w = document.createElement("label"); w.className = "pcard-field"; const t = document.createElement("span"); t.textContent = label; w.appendChild(t); w.appendChild(input); f.appendChild(w); return input; };
+        const num = (v) => { const i = document.createElement("input"); i.type = "number"; i.value = v == null ? "" : v; return i; };
+        const date = (v) => { const i = document.createElement("input"); i.type = "date"; i.value = v || ""; return i; };
+        const bYear = field("Born (year)", num(p.birth));
+        const bDate = field("Exact birth date (optional)", date(p.birthDate));
+        const dYear = field("Died (year, if applicable)", num(p.death));
+        const dDate = field("Exact death date (optional)", date(p.deathDate));
+        const dec = document.createElement("input"); dec.type = "checkbox"; dec.checked = isDeceased(p);
+        const decWrap = document.createElement("label"); decWrap.className = "pcard-check"; decWrap.appendChild(dec); decWrap.appendChild(document.createTextNode(" Has passed away"));
+        f.appendChild(decWrap);
+        const btns = document.createElement("div"); btns.className = "pcard-notes-bar";
+        const cancel = document.createElement("button"); cancel.className = "btn small"; cancel.textContent = "Cancel";
+        const saveB = document.createElement("button"); saveB.className = "btn primary small"; saveB.textContent = "Save details";
+        btns.appendChild(cancel); btns.appendChild(saveB); f.appendChild(btns);
+        s.appendChild(f);
+        cancel.onclick = () => { f.remove(); bar.hidden = false; view.hidden = false; };
+        saveB.onclick = () => {
+          const birthDate = bDate.value || null, deathDate = dDate.value || null;
+          // Exactly like the desktop editor: a full date wins over the year box.
+          const by = birthDate ? parseInt(birthDate.slice(0, 4), 10) : (bYear.value ? parseInt(bYear.value, 10) : null);
+          const dy = deathDate ? parseInt(deathDate.slice(0, 4), 10) : (dYear.value ? parseInt(dYear.value, 10) : null);
+          p.birth = isNaN(by) ? null : by; p.birthDate = birthDate;
+          p.death = isNaN(dy) ? null : dy; p.deathDate = deathDate;
+          p.deceased = !!(dec.checked || dy || deathDate);
+          save(); try { cloudSaveTree(false); } catch (e) {}
+          render(); closeProfileCard(); openProfileCard(id); toast("Details saved");
+        };
+      };
+    }
     // relationships (read-only, tap a name to jump)
     const groups = profileRelationships(id);
     if (groups.length) {
@@ -3039,20 +3115,35 @@
         row.appendChild(t); row.appendChild(v); s.appendChild(row);
       });
     }
-    // Notes — private to the owner
+    // Notes — private to the owner. Read-only until Edit is tapped, so a stray
+    // touch can never change (or wipe) a saved note.
     if (isOwner()) {
       const s = section("Notes", "pcard-notes");
       const hint = document.createElement("div"); hint.className = "pcard-subhint"; hint.textContent = "Private — only you can see these."; s.appendChild(hint);
-      const ta = document.createElement("textarea"); ta.className = "pcard-notes-input"; ta.rows = 4; ta.placeholder = "Add a private note about " + (p.first || p.name || "them") + "…"; ta.value = p.notes || ""; s.appendChild(ta);
+      const view = document.createElement("div"); view.className = "pcard-notes-view";
+      const renderView = () => { view.textContent = p.notes || ""; view.classList.toggle("empty", !p.notes); if (!p.notes) view.textContent = "No notes yet."; };
+      renderView(); s.appendChild(view);
       const bar = document.createElement("div"); bar.className = "pcard-notes-bar";
       const savedMsg = document.createElement("span"); savedMsg.className = "pcard-saved";
-      const saveBtn = document.createElement("button"); saveBtn.className = "btn primary small"; saveBtn.textContent = "Save note";
-      saveBtn.onclick = () => {
-        const v = ta.value.trim(); if (v) p.notes = v; else delete p.notes;
-        save(); try { cloudSaveTree(false); } catch (e) {}   // push so the note syncs to your other devices
-        savedMsg.textContent = "Saved ✓"; setTimeout(() => { savedMsg.textContent = ""; }, 2500);
+      const editBtn = document.createElement("button"); editBtn.className = "btn small"; editBtn.textContent = "✏️ Edit notes";
+      bar.appendChild(savedMsg); bar.appendChild(editBtn); s.appendChild(bar);
+      editBtn.onclick = () => {
+        bar.hidden = true; view.hidden = true;
+        const ta = document.createElement("textarea"); ta.className = "pcard-notes-input"; ta.rows = 4; ta.placeholder = "Add a private note about " + (p.first || p.name || "them") + "…"; ta.value = p.notes || "";
+        const ebar = document.createElement("div"); ebar.className = "pcard-notes-bar";
+        const cancel = document.createElement("button"); cancel.className = "btn small"; cancel.textContent = "Cancel";
+        const saveBtn = document.createElement("button"); saveBtn.className = "btn primary small"; saveBtn.textContent = "Save notes";
+        ebar.appendChild(cancel); ebar.appendChild(saveBtn);
+        s.appendChild(ta); s.appendChild(ebar);
+        const done = () => { ta.remove(); ebar.remove(); bar.hidden = false; view.hidden = false; renderView(); };
+        cancel.onclick = done;
+        saveBtn.onclick = () => {
+          const v = ta.value.trim(); if (v) p.notes = v; else delete p.notes;
+          save(); try { cloudSaveTree(false); } catch (e) {}   // push so the note syncs to your other devices
+          done();
+          savedMsg.textContent = "Saved ✓"; setTimeout(() => { savedMsg.textContent = ""; }, 2500);
+        };
       };
-      bar.appendChild(savedMsg); bar.appendChild(saveBtn); s.appendChild(bar);
     }
     // Comments — anyone with view access can leave one (prompted for a name)
     {
@@ -4037,11 +4128,59 @@
     if (focus.length) focusView(focus); else fitView();
   }
 
+  /* ---- GitHub key expiry banner: warn the owner BEFORE cloud saves break ---- */
+  function showTokenBanner(kind, expiresAt) {
+    if (document.getElementById("tokenBanner")) return;
+    const b = document.createElement("div");
+    b.id = "tokenBanner";
+    b.className = "token-banner" + (kind === "expired" ? " expired" : "");
+    const when = expiresAt ? new Date(expiresAt).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : "";
+    const msg = kind === "expired"
+      ? "Your site's GitHub key has expired (or was revoked) — saving to your site is stopped until you replace it."
+      : "Your site's GitHub key expires on " + when + " — renew it before then so saving keeps working.";
+    b.innerHTML = `<span class="tb-msg">🔑 ${msg}</span>
+      <button type="button" class="tb-how">Show me how</button>
+      ${kind === "expired" ? "" : '<button type="button" class="tb-snooze">Remind me in a week</button>'}
+      <button type="button" class="tb-close" aria-label="Dismiss">✕</button>
+      <div class="tb-steps" hidden>
+        <b>Takes about 5 minutes:</b>
+        <ol>
+          <li>On <b>github.com</b>: your profile photo → Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b> → Generate new token. Expiration: <b>1 year</b>. Repository access: <b>Only select repositories</b> → your family-tree repository. Permissions → Contents: <b>Read and write</b>. Generate it and copy the value.</li>
+          <li>On <b>vercel.com</b>: your project → Settings → <b>Environment Variables</b> → edit <b>GITHUB_TOKEN</b> → paste the new value (keep <b>Production</b> checked) → Save.</li>
+          <li>Deployments tab → <b>⋯</b> on the newest deployment → <b>Redeploy</b>. This banner goes away on its own once the new key is live.</li>
+        </ol>
+      </div>`;
+    b.querySelector(".tb-how").onclick = () => { const s = b.querySelector(".tb-steps"); s.hidden = !s.hidden; };
+    const snooze = b.querySelector(".tb-snooze");
+    if (snooze) snooze.onclick = () => { try { localStorage.setItem("familyTree.tokenSnoozeUntil", String(Date.now() + 7 * 86400000)); } catch (e) {} b.remove(); };
+    b.querySelector(".tb-close").onclick = () => b.remove();
+    document.body.prepend(b);
+  }
+  async function checkTokenHealth() {
+    if (!isOwner()) return;   // family viewers can't renew the key — don't nag them
+    const now = Date.now();
+    try { if (now < +(localStorage.getItem("familyTree.tokenCheckAfter") || 0)) return; } catch (e) {}
+    let j = null;
+    try { const r = await fetch("api/store?action=tokenHealth&ts=" + now); j = await r.json(); } catch (e) { return; }
+    if (!j || j.error) return;
+    const DAY = 86400000;
+    if (j.auth === false) { showTokenBanner("expired", null); return; }
+    if (!j.expiresAt) { try { localStorage.setItem("familyTree.tokenCheckAfter", String(now + 20 * 3600 * 1000)); } catch (e) {} return; }
+    const days = (j.expiresAt - now) / DAY;
+    if (days < 0) { showTokenBanner("expired", j.expiresAt); return; }
+    if (days > 30) { try { localStorage.setItem("familyTree.tokenCheckAfter", String(now + 20 * 3600 * 1000)); } catch (e) {} return; }
+    // Inside the warning window: check on every load (so the banner comes back)
+    // unless the owner asked to be reminded later.
+    try { if (now < +(localStorage.getItem("familyTree.tokenSnoozeUntil") || 0)) return; } catch (e) {}
+    showTokenBanner("soon", j.expiresAt);
+  }
+
   async function init() {
     buildColorSwatches();
     setSex("male");
     setColor("");
     renderDocsForm(null);
+    setTimeout(checkTokenHealth, 4000);   // after boot settles; runs on every path
     await loadLocalData();   // pull the saved tree out of IndexedDB (roomy, no server)
     const params = new URLSearchParams(location.search);
     const wantEdit = params.has("edit");
