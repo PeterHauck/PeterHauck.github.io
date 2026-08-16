@@ -1099,15 +1099,61 @@
     const kids = childLinksOfUnion(u.id).map((l) => ({ l, p: personById(l.child) })).filter((k) => k.p && inView(k.p.id));
     const gu = el("g", { class: "union", "data-union": u.id });   // group so hover reveals the +
 
-    let midX, midY, dropTop;
+    let midX, midY, dropTop, dropXO = null;
     if (pb) {
-      const y = (A.y + B.y) / 2;
       const left = A.x < B.x ? A : B, right = A.x < B.x ? B : A;
-      const dashed = u.status === "partners";
-      gu.appendChild(el("line", { class: "link", x1: left.x + HALF - 6, y1: y, x2: right.x - HALF + 6, y2: y, "stroke-dasharray": dashed ? "6 5" : null }));
-      midX = (A.x + B.x) / 2; midY = y; dropTop = y;
+      const leftId = A.x < B.x ? u.a : u.b, rightId = A.x < B.x ? u.b : u.a;
+      // Multi-spouse fan: when someone has several spouses on the same side,
+      // several lines leave that side of their shape — evenly spaced within its
+      // height, the LOWEST line to the nearest spouse, higher lines to spouses
+      // further away (mirroring how multiple parent lines fan on a child).
+      const sideFan = (pid, dir) => {
+        const me = posOf(pid);
+        const list = unionsOfPerson(pid).filter((uu) => {
+          const oid = uu.a === pid ? uu.b : uu.a;
+          if (oid == null || !inView(oid) || !personById(oid)) return false;
+          const q = posOf(oid);
+          return (q.x - me.x) * dir > 0 && Math.abs(q.y - me.y) < HALF * 1.5;   // that side, same generation row
+        }).sort((ua, ub) =>
+          Math.abs(posOf(ua.a === pid ? ua.b : ua.a).x - me.x) -
+          Math.abs(posOf(ub.a === pid ? ub.b : ub.a).x - me.x));
+        return { k: list.length, r: Math.max(0, list.findIndex((x) => x.id === u.id)) };
+      };
+      const fL = sideFan(leftId, +1), fR = sideFan(rightId, -1);
+      const yOff = (f) => (f.k <= 1 ? 0 : HALF - (2 * HALF * (f.r + 1)) / (f.k + 1));
+      const yL = left.y + yOff(fL), yR = right.y + yOff(fR);
+      const x1 = left.x + HALF - 6, x2 = right.x - HALF + 6;
+      const dash = u.status === "partners" ? "6 5" : null;
+      // Anyone standing between the couple on this row means the line must hop
+      // over them instead of cutting through their shape.
+      const blockers = state.persons
+        .filter((pp) => pp.id !== u.a && pp.id !== u.b && inView(pp.id))
+        .map((pp) => posOf(pp.id))
+        .filter((q) => q.x > left.x && q.x < right.x && Math.abs(q.y - (left.y + right.y) / 2) < HALF * 1.5);
+      let segX1, segX2, segY;   // the long horizontal stretch (labels, ticks, + live here)
+      if (!blockers.length) {
+        segX1 = x1; segX2 = x2; segY = Math.min(yL, yR);
+        const d = yL === yR
+          ? `M ${x1} ${yL} L ${x2} ${yR}`
+          : `M ${x1} ${yL} L ${(x1 + x2) / 2} ${yL} L ${(x1 + x2) / 2} ${yR} L ${x2} ${yR}`;
+        gu.appendChild(el("path", { class: "link", d, fill: "none", "stroke-dasharray": dash }));
+        midX = (x1 + x2) / 2; midY = segY; dropTop = segY;
+      } else {
+        // Hop: out of the shape at this union's fan height, up over everyone in
+        // between, down into the far spouse at their fan height.
+        const rank = Math.max(fL.r, fR.r);
+        const stub = 12 + 6 * rank;
+        const top = Math.min(left.y, right.y, ...blockers.map((q) => q.y)) - HALF - 18 - 14 * Math.max(0, rank - 1);
+        const d = `M ${x1} ${yL} L ${x1 + stub} ${yL} L ${x1 + stub} ${top} L ${x2 - stub} ${top} L ${x2 - stub} ${yR} L ${x2} ${yR}`;
+        gu.appendChild(el("path", { class: "link", d, fill: "none", "stroke-dasharray": dash }));
+        segX1 = x1 + stub; segX2 = x2 - stub; segY = top;
+        midX = (x1 + x2) / 2; midY = top;
+        // Children of a hopped marriage drop from the descending leg beside the
+        // far spouse — through clear air, never through anyone's shape.
+        dropXO = x2 - stub; dropTop = yR;
+      }
       if (u.status === "divorced") {
-        [-7, 5].forEach((dx) => gu.appendChild(el("line", { class: "divorce-tick", x1: midX + dx + 5, y1: midY - 11, x2: midX + dx - 5, y2: midY + 11 })));
+        [-7, 5].forEach((dx) => gu.appendChild(el("line", { class: "divorce-tick", x1: midX + dx + 5, y1: segY - 11, x2: midX + dx - 5, y2: segY + 11 })));
       }
       // Marriage (and divorce) date, sitting just above the line.
       const dbits = [];
@@ -1115,16 +1161,16 @@
       if (u.status === "divorced" && u.divorce) dbits.push("div. " + u.divorce);
       if (dbits.length) {
         const dlabel = dbits.join("   ");
-        gu.appendChild(el("rect", { class: "union-date-bg", x: midX - (dlabel.length * 3.3) - 4, y: y - 21, width: dlabel.length * 6.6 + 8, height: 15, rx: 4 }));
-        gu.appendChild(el("text", { class: "union-date", x: midX, y: y - 10 }, txt(dlabel)));
+        gu.appendChild(el("rect", { class: "union-date-bg", x: midX - (dlabel.length * 3.3) - 4, y: segY - 21, width: dlabel.length * 6.6 + 8, height: 15, rx: 4 }));
+        gu.appendChild(el("text", { class: "union-date", x: midX, y: segY - 10 }, txt(dlabel)));
       }
       if (!readonly) {
         // Hovering the marriage line reveals a + (add a child of this couple) and
         // a +hidden (start a private sub-tree from this couple). A wide invisible
         // hit-line keeps them reachable across the whole line.
-        gu.appendChild(el("line", { class: "couple-hit", x1: left.x + HALF - 6, y1: y, x2: right.x - HALF + 6, y2: y }));
-        gu.appendChild(couplePlus(u.id, midX, y));
-        if (!hiddenScope) gu.appendChild(hiddenPlus({ union: u.id }, midX, y - 30));
+        gu.appendChild(el("line", { class: "couple-hit", x1: segX1, y1: segY, x2: segX2, y2: segY }));
+        gu.appendChild(couplePlus(u.id, midX, segY));
+        if (!hiddenScope) gu.appendChild(hiddenPlus({ union: u.id }, midX, segY - 30));
       }
     } else {
       midX = A.x; midY = A.y; dropTop = A.y + HALF; // drop from the single parent's bottom
@@ -1143,8 +1189,8 @@
     const cstyle = famColor ? "stroke:" + famColor + ";stroke-width:2.8" : null;
 
     const childTops = kids.map((k) => ({ x: childAttachX(k.p.id, u.id, posOf(k.p.id).x), top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
-    const dropX = midX;
-    const busY = midY + 120 + (busLevels[u.id] || 0) * 15;
+    const dropX = dropXO != null ? dropXO : midX;
+    const busY = (pb ? (A.y + B.y) / 2 : midY) + 120 + (busLevels[u.id] || 0) * 15;   // bus depth hangs from the couple's ROW, not a hopped line's top
     gu.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
     const minX = Math.min(dropX, ...childTops.map((c) => c.x));
     const maxX = Math.max(dropX, ...childTops.map((c) => c.x));
