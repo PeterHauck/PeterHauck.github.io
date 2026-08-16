@@ -3318,7 +3318,10 @@
       const committed = (typeof window.FAMILY_TREE_DATA === "string" && window.FAMILY_TREE_DATA.length > 20) ? window.FAMILY_TREE_DATA : null;
       if (committed) {
         const rc = await decryptWithKnown(committed, pw);
-        if (rc && confirm("The cloud copy can’t be opened, but the published copy of the tree can. Show the published copy on this device instead?")) {
+        if (rc && confirm("The cloud copy can’t be opened, but the published copy of the tree can. Show the published copy on this device instead? (This replaces what this device currently shows — a backup of it is kept.)")) {
+          // Never destroy what this device holds — stash it before replacing, so
+          // an accidental OK on the editing computer can always be undone.
+          try { await idbSet("tree.v1.conflictBackup", exportObject()); } catch (e) {}
           loadObject(rc.obj);
           try { localStorage.setItem("familyTree.familyPass", rc.pw); } catch (e) {}
           try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}
