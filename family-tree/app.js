@@ -63,7 +63,7 @@
   let hiddenScope = null;
   let viewPreview = null;   // { view, set } while previewing a View on the canvas
   const inView = (id) => {
-    if (viewPreview && !viewPreview.set.has(id)) return false;
+    if (viewPreview) return viewPreview.set.has(id);   // a view fully decides its own membership (may include chosen hidden branches)
     return hiddenScope ? hiddenScope.set.has(id) : !isHidden(id);
   };
   const visiblePersons = () => state.persons.filter((p) => inView(p.id));
@@ -4308,7 +4308,7 @@
      that slice, read-only. Private notes never leave the master tree, and
      hidden people are never included in a view. */
   const spouseIdsOf = (pid) => unionsOfPerson(pid).map((u) => (u.a === pid ? u.b : u.a)).filter((x) => x != null && personById(x));
-  function viewMembers(rules) {
+  function viewMembers(rules, withHidden) {
     const set = new Set();
     const addDescendants = (pid) => {
       const stack = [pid];
@@ -4345,13 +4345,32 @@
       else if (r.mode === "ancestors") addAncestors(r.person);
       else addFamily(r.person);
     });
-    [...set].forEach((id) => { if (isHidden(id)) set.delete(id); });   // private branches never leak into a view
+    [...set].forEach((id) => { if (isHidden(id)) set.delete(id); });   // hidden branches stay out unless chosen below
+    // Hidden branches the view's creator explicitly opted in: add the branch
+    // under each chosen couple, but only while that couple is still in the view.
+    (withHidden || []).forEach((uid) => {
+      const u = unionById(uid); if (!u) return;
+      if (!set.has(u.a) && !(u.b != null && set.has(u.b))) return;
+      hiddenMembersFrom([u.a, u.b].filter((x) => x != null)).members.forEach((m) => { if (isHidden(m)) set.add(m); });
+    });
     return set;
+  }
+  // The hidden branches hanging under a member-couple of the given rule set —
+  // each is offered as an opt-in toggle when editing a view.
+  function viewHiddenChoices(rules) {
+    const base = viewMembers(rules);
+    const out = [];
+    state.unions.forEach((u) => {
+      if (!base.has(u.a) && !(u.b != null && base.has(u.b))) return;
+      const branch = hiddenMembersFrom([u.a, u.b].filter((x) => x != null)).members.filter((m) => isHidden(m));
+      if (branch.length) out.push({ union: u.id, count: branch.length, label: [(personById(u.a) || {}).name, u.b != null ? (personById(u.b) || {}).name : null].filter(Boolean).join(" & ") });
+    });
+    return out;
   }
   // The shareable copy of a view: only its members, their couples/children,
   // and their saved positions. Private notes are stripped.
   function viewSlice(view) {
-    const set = viewMembers(view.rules);
+    const set = viewMembers(view.rules, view.withHidden);
     const persons = state.persons.filter((p) => set.has(p.id)).map((p) => { const q = Object.assign({}, p); delete q.notes; return q; });
     const unions = state.unions.filter((u) => set.has(u.a) && (u.b == null || set.has(u.b)));
     const uids = new Set(unions.map((u) => u.id));
@@ -4375,7 +4394,7 @@
     return { n: batch.length };
   }
   function startViewPreview(view) {
-    viewPreview = { view, set: viewMembers(view.rules) };
+    viewPreview = { view, set: viewMembers(view.rules, view.withHidden) };
     let bar = document.getElementById("viewScopeBar");
     if (!bar) {
       bar = document.createElement("div"); bar.id = "viewScopeBar";
@@ -4414,7 +4433,7 @@
       if (!views.length) { listEl.innerHTML = '<p class="hint">No views yet — create one, add people to it by rule, give it a password, then publish.</p>'; return; }
       views.forEach((v) => {
         const row = document.createElement("div"); row.className = "view-row";
-        const n = viewMembers(v.rules).size;
+        const n = viewMembers(v.rules, v.withHidden).size;
         const info = document.createElement("span"); info.className = "view-info";
         info.innerHTML = "<b></b><span class='view-meta'></span>";
         info.querySelector("b").textContent = v.name || "Untitled";
@@ -4444,8 +4463,9 @@
     };
   }
   function openViewEditModal(existing) {
-    const v = existing || { id: "v" + Math.random().toString(36).slice(2, 8), name: "", pass: "", rules: [] };
+    const v = existing || { id: "v" + Math.random().toString(36).slice(2, 8), name: "", pass: "", rules: [], withHidden: [] };
     const rules = (v.rules || []).map((r) => Object.assign({}, r));
+    let withHidden = (v.withHidden || []).slice();
     const back = document.createElement("div");
     back.className = "modal-backdrop";
     back.innerHTML = `<div class="modal"><h2>${existing ? "Edit view" : "New view"}</h2>
@@ -4462,6 +4482,7 @@
         </select>
         <button type="button" class="btn small" id="vAddRule">Add</button>
       </div>
+      <div id="vHiddenSec" hidden><label class="field"><span>Hidden branches under people in this view</span></label><div id="vHidden"></div></div>
       <p class="hint" id="vCount"></p>
       <div class="btn-row" style="margin-top:10px">
         <button type="button" class="btn" data-cancel>Cancel</button>
@@ -4481,6 +4502,26 @@
     });
     const modeWord = { family: "everyone related", descendants: "all descendants", ancestors: "all ancestors" };
     const rulesEl = back.querySelector("#vRules"), countEl = back.querySelector("#vCount");
+    const hidSec = back.querySelector("#vHiddenSec"), hidEl = back.querySelector("#vHidden");
+    const renderHiddenChoices = () => {
+      const choices = rules.length ? viewHiddenChoices(rules) : [];
+      withHidden = withHidden.filter((uid) => choices.some((c) => c.union === uid));   // drop choices whose couple left the view
+      hidSec.hidden = !choices.length;
+      hidEl.textContent = "";
+      choices.forEach((c) => {
+        const row = document.createElement("label"); row.className = "view-hidden-row";
+        const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = withHidden.includes(c.union);
+        cb.onchange = () => {
+          if (cb.checked) { if (!withHidden.includes(c.union)) withHidden.push(c.union); }
+          else withHidden = withHidden.filter((x) => x !== c.union);
+          updateCount();
+        };
+        const t = document.createElement("span");
+        t.textContent = "Show the hidden branch under " + c.label + " (" + c.count + (c.count === 1 ? " person)" : " people)");
+        row.appendChild(cb); row.appendChild(t); hidEl.appendChild(row);
+      });
+    };
+    const updateCount = () => { countEl.textContent = rules.length ? viewMembers(rules, withHidden).size + " people in this view so far." : ""; };
     const renderRules = () => {
       rulesEl.textContent = "";
       if (!rules.length) rulesEl.innerHTML = '<p class="hint">No one yet — pick a person below and add a rule.</p>';
@@ -4492,11 +4533,12 @@
         x.onclick = () => { rules.splice(i, 1); renderRules(); };
         row.appendChild(t); row.appendChild(x); rulesEl.appendChild(row);
       });
-      countEl.textContent = rules.length ? viewMembers(rules).size + " people in this view so far." : "";
+      renderHiddenChoices();
+      updateCount();
     };
     renderRules();
     back.querySelector("#vAddRule").onclick = () => { if (sel.value) { rules.push({ person: sel.value, mode: back.querySelector("#vMode").value }); renderRules(); } };
-    const collect = () => { v.name = back.querySelector("#vName").value.trim(); v.pass = back.querySelector("#vPass").value.trim(); v.rules = rules; };
+    const collect = () => { v.name = back.querySelector("#vName").value.trim(); v.pass = back.querySelector("#vPass").value.trim(); v.rules = rules; v.withHidden = withHidden; };
     back.querySelector("#vPreviewBtn").onclick = () => { collect(); close(); startViewPreview(v); };
     back.querySelector("#vSave").onclick = () => {
       collect();
