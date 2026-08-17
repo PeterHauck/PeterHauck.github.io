@@ -61,7 +61,11 @@
   // add/move) runs unchanged — only the visible set differs — so a hidden branch
   // behaves exactly like the main tree.
   let hiddenScope = null;
-  const inView = (id) => hiddenScope ? hiddenScope.set.has(id) : !isHidden(id);
+  let viewPreview = null;   // { view, set } while previewing a View on the canvas
+  const inView = (id) => {
+    if (viewPreview && !viewPreview.set.has(id)) return false;
+    return hiddenScope ? hiddenScope.set.has(id) : !isHidden(id);
+  };
   const visiblePersons = () => state.persons.filter((p) => inView(p.id));
   const unionVisible = (u) => inView(u.a) && (u.b == null || inView(u.b));
   const visibleUnions = () => state.unions.filter(unionVisible);
@@ -2217,7 +2221,7 @@
     return new Uint8Array(await new Response(s).arrayBuffer());
   }
 
-  async function encryptState(password) {
+  async function encryptState(password, obj) {
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const key = await deriveKey(password, salt);
@@ -2225,7 +2229,7 @@
     // (encrypted data can't be compressed afterwards). Single base64, not double —
     // together this roughly halves the size that goes to backup/publish, so big
     // trees stay under the server's request limit (413 Payload Too Large).
-    let data = new TextEncoder().encode(JSON.stringify(exportObject()));
+    let data = new TextEncoder().encode(JSON.stringify(obj || exportObject()));
     let v = 1;
     if (hasGzip) { try { data = await gzip(data); v = 2; } catch (e) { v = 1; } }
     const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, data);
@@ -3239,7 +3243,7 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, views: state.views || [] };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
@@ -3248,6 +3252,7 @@
       focus: Array.isArray(obj.focus) ? obj.focus : [], version: obj.version || 0,
       photoMigrated: !!obj.photoMigrated,
       namesSplit: !!obj.namesSplit,
+      views: Array.isArray(obj.views) ? obj.views : [],
     });
   }
   /* -------- local storage: IndexedDB (roomy — holds photos/PDFs), with a
@@ -4028,6 +4033,7 @@
   $("#tbMenu").onclick = () => togglePeopleMenu();
   $("#pmClose").onclick = () => togglePeopleMenu(false);
   $("#pmAdd").onclick = () => { togglePeopleMenu(false); resetPersonForm(); ensurePanel(); const n = $("#pFirst"); if (n) n.focus(); };
+  { const b = $("#pmViews"); if (b) b.onclick = () => { $("#peopleMenu").hidden = true; openViewsModal(); }; }
   $("#pmArrange").onclick = () => { pushUndo(); if (hiddenScope) state.manualHidden = {}; else state.manual = {}; selection = new Set(); relayoutAndSave(); fitView(); toast("Auto-arranged"); };
   $("#peopleFilter").addEventListener("input", () => updatePeopleList());
   $("#sibLeftBtn").onclick = () => shiftSibling(-1);
@@ -4123,6 +4129,22 @@
           for (const c of candidates) { try { return { obj: await decryptState(fam, c.data), from: c.src, viewer: true }; } catch (_) {} }
         } catch (_) {}
       }
+      // A VIEW password opens just that published slice, always read-only.
+      try {
+        const lr = await fetch("api/store?action=listViews");
+        if (lr.ok) {
+          const lj = await lr.json();
+          for (const vv of (lj.views || [])) {
+            try {
+              if ((await decryptText(pw, vv.check)) !== "familytree-view-ok") continue;
+              const gr = await fetch("api/store?action=getView&id=" + encodeURIComponent(vv.id));
+              if (!gr.ok) continue;
+              const gj = await gr.json();
+              if (gj.payload) return { obj: await decryptState(pw, gj.payload), from: "view", viewer: true };
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
       return null;
     }
     function finish(pw, r) {
@@ -4276,6 +4298,215 @@
     // unless the owner asked to be reminded later.
     try { if (now < +(localStorage.getItem("familyTree.tokenSnoozeUntil") || 0)) return; } catch (e) {}
     showTokenBanner("soon", j.expiresAt);
+  }
+
+  /* ==================================================================== VIEWS
+     A View is a named slice of the master tree, built from rules — "this
+     person + everyone related / all descendants / all ancestors" — as many
+     rules as you like. Each view can be published under its own share
+     password: someone entering that password at the lock screen sees ONLY
+     that slice, read-only. Private notes never leave the master tree, and
+     hidden people are never included in a view. */
+  const spouseIdsOf = (pid) => unionsOfPerson(pid).map((u) => (u.a === pid ? u.b : u.a)).filter((x) => x != null && personById(x));
+  function viewMembers(rules) {
+    const set = new Set();
+    const addDescendants = (pid) => {
+      const stack = [pid];
+      while (stack.length) {
+        const cur = stack.pop();
+        set.add(cur);
+        spouseIdsOf(cur).forEach((s) => set.add(s));   // spouses shown for context
+        unionsOfPerson(cur).forEach((u) => childLinksOfUnion(u.id).forEach((l) => { if (!set.has(l.child) && personById(l.child)) stack.push(l.child); }));
+      }
+    };
+    const addAncestors = (pid) => {
+      const stack = [pid]; set.add(pid);
+      while (stack.length) {
+        const cur = stack.pop();
+        parentLinksOfPerson(cur).forEach((l) => {
+          const u = unionById(l.union); if (!u) return;
+          [u.a, u.b].forEach((par) => { if (par != null && personById(par) && !set.has(par)) { set.add(par); stack.push(par); } });
+        });
+      }
+    };
+    const addFamily = (pid) => {
+      const stack = [pid]; set.add(pid);
+      const nb = (id) => {
+        const out = [];
+        unionsOfPerson(id).forEach((u) => { const o = u.a === id ? u.b : u.a; if (o != null) out.push(o); childLinksOfUnion(u.id).forEach((l) => out.push(l.child)); });
+        parentLinksOfPerson(id).forEach((l) => { const u = unionById(l.union); if (u) { if (u.a != null) out.push(u.a); if (u.b != null) out.push(u.b); } });
+        return out;
+      };
+      while (stack.length) { const cur = stack.pop(); nb(cur).forEach((n) => { if (personById(n) && !set.has(n)) { set.add(n); stack.push(n); } }); }
+    };
+    (rules || []).forEach((r) => {
+      if (!personById(r.person)) return;
+      if (r.mode === "descendants") addDescendants(r.person);
+      else if (r.mode === "ancestors") addAncestors(r.person);
+      else addFamily(r.person);
+    });
+    [...set].forEach((id) => { if (isHidden(id)) set.delete(id); });   // private branches never leak into a view
+    return set;
+  }
+  // The shareable copy of a view: only its members, their couples/children,
+  // and their saved positions. Private notes are stripped.
+  function viewSlice(view) {
+    const set = viewMembers(view.rules);
+    const persons = state.persons.filter((p) => set.has(p.id)).map((p) => { const q = Object.assign({}, p); delete q.notes; return q; });
+    const unions = state.unions.filter((u) => set.has(u.a) && (u.b == null || set.has(u.b)));
+    const uids = new Set(unions.map((u) => u.id));
+    const links = state.links.filter((l) => uids.has(l.union) && set.has(l.child));
+    const manual = {}; Object.keys(state.manual || {}).forEach((k) => { if (set.has(k)) manual[k] = state.manual[k]; });
+    return { title: view.name || state.title, subtitle: state.subtitle, persons, unions, links, manual, manualHidden: {}, hidden: {}, focus: [], version: state.version || 0, photoMigrated: true, namesSplit: true, viewOf: view.id };
+  }
+  // Encrypt every published view under its own password and store them.
+  async function publishViews() {
+    const views = (state.views || []).filter((v) => v.pass && v.rules && v.rules.length);
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    if (!views.length || !pass) return { n: 0 };
+    const batch = [];
+    for (const v of views) {
+      const payload = await encryptState(v.pass, viewSlice(v));
+      const check = await encryptText(v.pass, "familytree-view-ok");
+      batch.push({ id: v.id, name: v.name || "Family view", payload, check });
+    }
+    const res = await fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "saveViews", passcode: pass, views: batch }) });
+    if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) || {}).error || "Publishing views failed");
+    return { n: batch.length };
+  }
+  function startViewPreview(view) {
+    viewPreview = { view, set: viewMembers(view.rules) };
+    let bar = document.getElementById("viewScopeBar");
+    if (!bar) {
+      bar = document.createElement("div"); bar.id = "viewScopeBar";
+      bar.innerHTML = '<span class="vsb-text"></span><button type="button" id="vsbDone">Done</button>';
+      document.body.appendChild(bar);
+      bar.querySelector("#vsbDone").onclick = endViewPreview;
+    }
+    bar.querySelector(".vsb-text").innerHTML = "Previewing view: <b></b>";
+    bar.querySelector(".vsb-text b").textContent = view.name || "Untitled";
+    render(); fitView();
+  }
+  function endViewPreview() {
+    viewPreview = null;
+    const bar = document.getElementById("viewScopeBar"); if (bar) bar.remove();
+    render(); fitView();
+  }
+  function openViewsModal() {
+    const back = document.createElement("div");
+    back.className = "modal-backdrop";
+    back.innerHTML = `<div class="modal"><h2>Views</h2>
+      <p class="hint">A view is a slice of the family tree you can share on its own password. Whoever enters that password at the lock screen sees only that slice, view-only.</p>
+      <div id="viewsList"></div>
+      <div class="btn-row" style="margin-top:10px">
+        <button type="button" class="btn" data-cancel>Close</button>
+        <button type="button" class="btn" id="vPublish">☁︎ Publish views now</button>
+        <button type="button" class="btn primary" id="vNew">＋ New view</button>
+      </div></div>`;
+    document.body.appendChild(back);
+    const close = () => back.remove();
+    back.querySelector("[data-cancel]").onclick = close;
+    back.addEventListener("click", (e) => { if (e.target === back) close(); });
+    const listEl = back.querySelector("#viewsList");
+    const renderList = () => {
+      listEl.textContent = "";
+      const views = state.views || [];
+      if (!views.length) { listEl.innerHTML = '<p class="hint">No views yet — create one, add people to it by rule, give it a password, then publish.</p>'; return; }
+      views.forEach((v) => {
+        const row = document.createElement("div"); row.className = "view-row";
+        const n = viewMembers(v.rules).size;
+        const info = document.createElement("span"); info.className = "view-info";
+        info.innerHTML = "<b></b><span class='view-meta'></span>";
+        info.querySelector("b").textContent = v.name || "Untitled";
+        info.querySelector(".view-meta").textContent = " — " + n + " people" + (v.pass ? " · password set" : " · no password yet");
+        const bPrev = document.createElement("button"); bPrev.className = "btn small"; bPrev.textContent = "Preview";
+        bPrev.onclick = () => { close(); startViewPreview(v); };
+        const bEdit = document.createElement("button"); bEdit.className = "btn small"; bEdit.textContent = "Edit";
+        bEdit.onclick = () => { close(); openViewEditModal(v); };
+        const bDel = document.createElement("button"); bDel.className = "btn small danger"; bDel.textContent = "Delete";
+        bDel.onclick = () => {
+          if (!confirm("Delete the view “" + (v.name || "Untitled") + "”? (No people are deleted — only the view.)")) return;
+          state.views = (state.views || []).filter((x) => x.id !== v.id);
+          save(); renderList();
+          fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "deleteView", passcode: (localStorage.getItem("familyTree.importPass") || ""), id: v.id }) }).catch(() => {});
+        };
+        row.appendChild(info); row.appendChild(bPrev); row.appendChild(bEdit); row.appendChild(bDel);
+        listEl.appendChild(row);
+      });
+    };
+    renderList();
+    back.querySelector("#vNew").onclick = () => { close(); openViewEditModal(null); };
+    back.querySelector("#vPublish").onclick = async () => {
+      const b = back.querySelector("#vPublish"); b.disabled = true; b.textContent = "Publishing…";
+      try { const r = await publishViews(); toast(r.n ? "Published " + r.n + " view" + (r.n > 1 ? "s" : "") + " ✓ — share each view’s password" : "Nothing to publish — a view needs people and a password"); }
+      catch (e) { toast("Publishing views failed — " + e.message); }
+      b.disabled = false; b.textContent = "☁︎ Publish views now";
+    };
+  }
+  function openViewEditModal(existing) {
+    const v = existing || { id: "v" + Math.random().toString(36).slice(2, 8), name: "", pass: "", rules: [] };
+    const rules = (v.rules || []).map((r) => Object.assign({}, r));
+    const back = document.createElement("div");
+    back.className = "modal-backdrop";
+    back.innerHTML = `<div class="modal"><h2>${existing ? "Edit view" : "New view"}</h2>
+      <label class="field"><span>View name</span><input type="text" id="vName" placeholder="e.g. The Reiners branch"/></label>
+      <label class="field"><span>Share password (viewers type this to open the view)</span><input type="text" id="vPass" placeholder="e.g. ReinersTree"/></label>
+      <label class="field"><span>Who’s in this view</span></label>
+      <div id="vRules"></div>
+      <div class="view-addrule">
+        <select id="vPerson"></select>
+        <select id="vMode">
+          <option value="family">+ everyone related to them</option>
+          <option value="descendants">+ all their descendants</option>
+          <option value="ancestors">+ all their ancestors</option>
+        </select>
+        <button type="button" class="btn small" id="vAddRule">Add</button>
+      </div>
+      <p class="hint" id="vCount"></p>
+      <div class="btn-row" style="margin-top:10px">
+        <button type="button" class="btn" data-cancel>Cancel</button>
+        <button type="button" class="btn" id="vPreviewBtn">Preview</button>
+        <button type="button" class="btn primary" id="vSave">Save view</button>
+      </div></div>`;
+    document.body.appendChild(back);
+    const close = () => back.remove();
+    back.querySelector("[data-cancel]").onclick = () => { close(); openViewsModal(); };
+    back.addEventListener("click", (e) => { if (e.target === back) { close(); openViewsModal(); } });
+    back.querySelector("#vName").value = v.name || "";
+    back.querySelector("#vPass").value = v.pass || "";
+    const sel = back.querySelector("#vPerson");
+    state.persons.slice().sort((a, b) => (a.name || "").localeCompare(b.name || "")).forEach((p) => {
+      if (isHidden(p.id)) return;
+      const o = document.createElement("option"); o.value = p.id; o.textContent = p.name || "Unnamed"; sel.appendChild(o);
+    });
+    const modeWord = { family: "everyone related", descendants: "all descendants", ancestors: "all ancestors" };
+    const rulesEl = back.querySelector("#vRules"), countEl = back.querySelector("#vCount");
+    const renderRules = () => {
+      rulesEl.textContent = "";
+      if (!rules.length) rulesEl.innerHTML = '<p class="hint">No one yet — pick a person below and add a rule.</p>';
+      rules.forEach((r, i) => {
+        const row = document.createElement("div"); row.className = "view-rule";
+        const t = document.createElement("span");
+        t.textContent = ((personById(r.person) || {}).name || "?") + " — " + (modeWord[r.mode] || r.mode);
+        const x = document.createElement("button"); x.className = "btn small"; x.textContent = "✕";
+        x.onclick = () => { rules.splice(i, 1); renderRules(); };
+        row.appendChild(t); row.appendChild(x); rulesEl.appendChild(row);
+      });
+      countEl.textContent = rules.length ? viewMembers(rules).size + " people in this view so far." : "";
+    };
+    renderRules();
+    back.querySelector("#vAddRule").onclick = () => { if (sel.value) { rules.push({ person: sel.value, mode: back.querySelector("#vMode").value }); renderRules(); } };
+    const collect = () => { v.name = back.querySelector("#vName").value.trim(); v.pass = back.querySelector("#vPass").value.trim(); v.rules = rules; };
+    back.querySelector("#vPreviewBtn").onclick = () => { collect(); close(); startViewPreview(v); };
+    back.querySelector("#vSave").onclick = () => {
+      collect();
+      if (!v.name) { toast("Give the view a name"); return; }
+      if (!state.views) state.views = [];
+      const i = state.views.findIndex((x) => x.id === v.id);
+      if (i >= 0) state.views[i] = v; else state.views.push(v);
+      save(); close(); openViewsModal();
+      toast("View saved" + (v.pass ? " — use “Publish views now” to put it on your site" : " — add a share password to publish it"));
+    };
   }
 
   async function init() {

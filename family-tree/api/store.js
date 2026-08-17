@@ -455,7 +455,7 @@ async function handleGitHub(req, res, passcode, ghToken) {
     if (!head) entries = entries.concat([{ path: "vercel.json", blobSha: await ghMakeBlob('{"git":{"deploymentEnabled":false}}') }]);
     const tree = await gh("POST", repo + "/git/trees", {
       ...(baseTree ? { base_tree: baseTree } : {}),
-      tree: entries.map((e) => ({ path: e.path, mode: "100644", type: "blob", sha: e.blobSha })),
+      tree: entries.map((e) => ({ path: e.path, mode: "100644", type: "blob", sha: e.blobSha == null ? null : e.blobSha })),
     });
     const commit = await gh("POST", repo + "/git/commits", { message, tree: tree.sha, parents: [] });
     if (head) await gh("PATCH", repo + "/git/refs/heads/" + GH_BRANCH, { sha: commit.sha, force: true });
@@ -484,7 +484,31 @@ async function handleGitHub(req, res, passcode, ghToken) {
   }
   const recordType = (name) => (/\.pdf$/i.test(name) ? "application/pdf" : /\.png$/i.test(name) ? "image/png" : /\.webp$/i.test(name) ? "image/webp" : /\.gif$/i.test(name) ? "image/gif" : /\.jpe?g$/i.test(name) ? "image/jpeg" : "application/octet-stream");
 
+  async function readViewsIndex() {
+    const b = await ghFile("views-index.json");
+    if (!b) return [];
+    try { const j = JSON.parse(b.toString("utf8")); return Array.isArray(j) ? j : []; } catch (e) { return []; }
+  }
+  const VIEW_ID = /^[A-Za-z0-9_-]{1,24}$/;
+
   try {
+    // Published views: list (id + name + password-check only — payloads are
+    // fetched one at a time by getView).
+    if (req.method === "GET" && req.query.action === "listViews") {
+      res.setHeader("Cache-Control", "no-store");
+      res.status(200).json({ views: await readViewsIndex() });
+      return;
+    }
+    if (req.method === "GET" && req.query.action === "getView") {
+      const id = (req.query.id || "").toString();
+      if (!VIEW_ID.test(id)) { res.status(400).json({ error: "Bad view id." }); return; }
+      const b = await ghFile("views/" + id + ".json");
+      res.setHeader("Cache-Control", "no-store");
+      if (!b) { res.status(404).json({ error: "No such view." }); return; }
+      res.status(200).json({ payload: b.toString("utf8") });
+      return;
+    }
+
     // GitHub reports a fine-grained token's expiry on every authenticated
     // request; surface it so the app can warn the owner BEFORE saves break.
     if (req.method === "GET" && req.query.action === "tokenHealth") {
@@ -637,6 +661,35 @@ async function handleGitHub(req, res, passcode, ghToken) {
         const wrap = (body.wrap || "").toString();
         if (!wrap || wrap.length > 10000) { res.status(400).json({ error: "Bad viewer key." }); return; }
         await ghCommitFiles([{ path: "viewer-key.json", blobSha: await ghMakeBlob(wrap) }], "Update viewer key");
+        res.status(200).json({ ok: true });
+        return;
+      }
+
+      if (action === "saveViews") {
+        const list_ = Array.isArray(body.views) ? body.views.slice(0, 20) : [];
+        if (!list_.length) { res.status(400).json({ error: "No views to publish." }); return; }
+        const idx = await readViewsIndex();
+        const entries = [];
+        for (const v of list_) {
+          const id = (v.id || "").toString();
+          const payload = (v.payload || "").toString();
+          if (!VIEW_ID.test(id) || !payload || payload.length > 30 * 1024 * 1024) { res.status(400).json({ error: "Bad view entry." }); return; }
+          entries.push({ path: "views/" + id + ".json", blobSha: await ghMakeBlob(payload) });
+          const rec = { id, name: (v.name || "").toString().slice(0, 80), check: (v.check || "").toString().slice(0, 5000) };
+          const at = idx.findIndex((x) => x.id === id);
+          if (at >= 0) idx[at] = rec; else idx.push(rec);
+        }
+        entries.push({ path: "views-index.json", blobSha: await ghMakeBlob(JSON.stringify(idx)) });
+        await ghCommitFiles(entries, "Publish views");
+        res.status(200).json({ ok: true, n: list_.length });
+        return;
+      }
+      if (action === "deleteView") {
+        const id = (body.id || "").toString();
+        if (!VIEW_ID.test(id)) { res.status(400).json({ error: "Bad view id." }); return; }
+        const idx = (await readViewsIndex()).filter((x) => x.id !== id);
+        const entries = [{ path: "views-index.json", blobSha: await ghMakeBlob(JSON.stringify(idx)) }, { path: "views/" + id + ".json", blobSha: null }];
+        await ghCommitFiles(entries, "Delete view " + id);
         res.status(200).json({ ok: true });
         return;
       }
