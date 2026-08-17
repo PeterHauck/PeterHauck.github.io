@@ -665,3 +665,20 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 }
 #selBar button { flex: none; background: #fff; color: var(--accent); border: none; padding: 5px 11px; font-size: 12.5px; border-radius: 999px; cursor: pointer; }
 #selBar #sbClear { background: transparent; color: #fff; border: 1px solid rgba(255, 255, 255, .6); }
+
+/* Views: manager rows, rule rows, and the canvas preview bar */
+.view-row { display: flex; align-items: center; gap: 8px; padding: 8px 2px; border-bottom: 1px solid var(--panel-border); }
+.view-row .view-info { flex: 1; min-width: 0; font-size: 13.5px; }
+.view-row .view-meta { color: var(--muted); }
+.view-rule { display: flex; align-items: center; gap: 8px; padding: 5px 2px; font-size: 13.5px; }
+.view-rule span { flex: 1; }
+.view-addrule { display: flex; gap: 6px; margin-top: 6px; }
+.view-addrule select { flex: 1; min-width: 0; padding: 7px; border: 1px solid var(--panel-border); border-radius: 8px; background: var(--paper); font: inherit; font-size: 13px; }
+#viewScopeBar {
+  position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 45;
+  display: flex; align-items: center; gap: 10px; max-width: min(92vw, 560px);
+  padding: 7px 8px 7px 14px; background: var(--accent); color: #fff; box-shadow: var(--shadow);
+  border-radius: 999px; font-size: 13px;
+}
+#viewScopeBar .vsb-text b { font-weight: 700; }
+#viewScopeBar #vsbDone { flex: none; background: #fff; color: var(--accent); border: none; padding: 5px 11px; font-size: 12.5px; border-radius: 999px; cursor: pointer; }
