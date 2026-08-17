@@ -682,3 +682,5 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 }
 #viewScopeBar .vsb-text b { font-weight: 700; }
 #viewScopeBar #vsbDone { flex: none; background: #fff; color: var(--accent); border: none; padding: 5px 11px; font-size: 12.5px; border-radius: 999px; cursor: pointer; }
+.view-hidden-row { display: flex; align-items: flex-start; gap: 8px; padding: 4px 2px; font-size: 13px; cursor: pointer; }
+.view-hidden-row input { margin-top: 2px; }
