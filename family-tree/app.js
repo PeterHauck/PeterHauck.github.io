@@ -674,6 +674,7 @@
     // Inside a hidden branch, refresh which people belong to it (so ones you just
     // added show up) before drawing.
     if (hiddenScope) hiddenScope.set = new Set(hiddenMembersFrom(hiddenScope.seedIds).members);
+    if (viewPreview) viewPreview.set = viewMembers(viewPreview.view.rules, viewPreview.view.withHidden);
     gNodes.textContent = "";
     gLinks.textContent = "";
     emptyState.style.display = state.persons.length ? "none" : "flex";
@@ -3557,6 +3558,7 @@
       // pull its own save back on the next load.
       try { if (j && j.savedAt) localStorage.setItem("familyTree.cloudSavedAt", String(j.savedAt)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
       cloudRetries = 0;
+      try { await publishViews(); } catch (e) {}   // published views track the master on every save
       // Keep the shared viewer password working: wrap the family password under it
       // and store the wrap (ciphertext) so viewers can unlock with their password.
       try {
