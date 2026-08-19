@@ -4329,21 +4329,32 @@
         });
       }
     };
-    const addFamily = (pid) => {
-      const stack = [pid]; set.add(pid);
-      const nb = (id) => {
-        const out = [];
-        unionsOfPerson(id).forEach((u) => { const o = u.a === id ? u.b : u.a; if (o != null) out.push(o); childLinksOfUnion(u.id).forEach((l) => out.push(l.child)); });
-        parentLinksOfPerson(id).forEach((l) => { const u = unionById(l.union); if (u) { if (u.a != null) out.push(u.a); if (u.b != null) out.push(u.b); } });
-        return out;
-      };
-      while (stack.length) { const cur = stack.pop(); nb(cur).forEach((n) => { if (personById(n) && !set.has(n)) { set.add(n); stack.push(n); } }); }
+    // "Everyone related": the person's bloodline — all ancestors and all
+    // descendants — plus the spouses married INTO that line. It deliberately
+    // stops there: a married-in spouse is shown, their own family is not.
+    const addRelated = (pid) => {
+      const mine = new Set([pid]);
+      let stack = [pid];
+      while (stack.length) {   // ancestors
+        const cur = stack.pop();
+        parentLinksOfPerson(cur).forEach((l) => {
+          const u = unionById(l.union); if (!u) return;
+          [u.a, u.b].forEach((par) => { if (par != null && personById(par) && !mine.has(par)) { mine.add(par); stack.push(par); } });
+        });
+      }
+      stack = [pid];
+      while (stack.length) {   // descendants
+        const cur = stack.pop();
+        unionsOfPerson(cur).forEach((u) => childLinksOfUnion(u.id).forEach((l) => { if (personById(l.child) && !mine.has(l.child)) { mine.add(l.child); stack.push(l.child); } }));
+      }
+      [...mine].forEach((id) => spouseIdsOf(id).forEach((sp) => mine.add(sp)));   // married-ins, and no further
+      mine.forEach((id) => set.add(id));
     };
     (rules || []).forEach((r) => {
       if (!personById(r.person)) return;
       if (r.mode === "descendants") addDescendants(r.person);
       else if (r.mode === "ancestors") addAncestors(r.person);
-      else addFamily(r.person);
+      else addRelated(r.person);
     });
     [...set].forEach((id) => { if (isHidden(id)) set.delete(id); });   // hidden branches stay out unless chosen below
     // Hidden branches the view's creator explicitly opted in: add the branch
