@@ -64,6 +64,7 @@
 
       <!-- floating toolbar -->
       <div id="toolbar" class="floating">
+        <button id="tbViews" title="Views" aria-label="Views" hidden>☰</button>
         <button id="tbMenu" title="People &amp; menu" aria-label="People and menu">☰</button>
         <button id="tbImport" title="Add people from an obituary (Claude reads it for you)">✨</button>
         <div class="sep"></div>
@@ -80,6 +81,7 @@
       <!-- people & menu (opened by ☰) -->
       <div id="peopleMenu" class="floating" hidden>
         <div class="pm-head"><h3>People <span class="pill" id="peopleCount">0</span></h3><button id="pmClose" class="pm-x" aria-label="Close">✕</button></div>
+        <div id="viewSwitchSec" hidden><div class="vs-title">Viewing</div><div id="viewSwitchList"></div></div>
         <input type="text" id="peopleFilter" placeholder="Search people…" autocomplete="off" />
         <ul class="people-list" id="peopleList"></ul>
         <div class="btn-row pm-actions">
