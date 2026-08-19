@@ -663,6 +663,31 @@
   // master tree, a hidden branch, or a VIEW. Each view keeps its own private
   // arrangement — moving someone inside a view never moves them on the master
   // tree (and vice versa: unmoved people follow the master's arrangement).
+  // Effective family colour: a person's own colour if set, otherwise inherited
+  // from their FATHER's line (falling back to the mother's) — so newly added
+  // people take their family's colour automatically without hand-painting.
+  let colorMemo = null;
+  function effColor(pid, seen) {
+    if (!colorMemo) colorMemo = new Map();
+    if (colorMemo.has(pid)) return colorMemo.get(pid);
+    seen = seen || new Set();
+    if (seen.has(pid)) return null;
+    seen.add(pid);
+    const p = personById(pid); if (!p) return null;
+    let c = p.color || null;
+    if (!c) {
+      const parents = [];
+      parentLinksOfPerson(pid).forEach((l) => {
+        const u = unionById(l.union); if (!u) return;
+        [u.a, u.b].forEach((x) => { const pp = x != null && personById(x); if (pp && !parents.includes(pp)) parents.push(pp); });
+      });
+      const father = parents.find((x) => x.sex === "male");
+      const others = parents.filter((x) => x !== father);
+      c = (father ? effColor(father.id, seen) : null) || others.map((x) => effColor(x.id, seen)).find(Boolean) || null;
+    }
+    colorMemo.set(pid, c);
+    return c;
+  }
   const posMap = () => {
     if (viewPreview) { const v = viewPreview.view; return v.manual || (v.manual = {}); }
     return hiddenScope ? (state.manualHidden || (state.manualHidden = {})) : state.manual;
@@ -673,6 +698,7 @@
   function render() {
     // Inside a hidden branch, refresh which people belong to it (so ones you just
     // added show up) before drawing.
+    colorMemo = null;   // family colours recompute each draw (inheritance is live)
     if (hiddenScope) hiddenScope.set = new Set(hiddenMembersFrom(hiddenScope.seedIds).members);
     if (viewPreview) viewPreview.set = viewMembers(viewPreview.view.rules, viewPreview.view.withHidden);
     gNodes.textContent = "";
@@ -750,7 +776,7 @@
       g.appendChild(el("text", { class: "placeholder-emoji", x: 0, y: 2 }, txt("👤")));
     }
     // shape outline on top
-    g.appendChild(shapeOutline(p.sex, !!ph, p.color));
+    g.appendChild(shapeOutline(p.sex, !!ph, effColor(p.id)));
     // deceased slash — drawn across the empty symbol (the classic mark) only when
     // there's no photo; photo nodes get the behind-the-picture version above.
     if (decd && !ph) g.appendChild(el("line", { class: "deceased", x1: -HALF, y1: HALF, x2: HALF, y2: -HALF }));
@@ -1234,7 +1260,7 @@
 
     // Colour the descent lines by the children's family so each set of lines is
     // traceable at a glance instead of a grey tangle.
-    const famColor = kids.map((k) => k.p.color).find(Boolean) || (pa && pa.color) || (pb && pb.color) || null;
+    const famColor = kids.map((k) => effColor(k.p.id)).find(Boolean) || (pa && effColor(pa.id)) || (pb && effColor(pb.id)) || null;
     const cstyle = famColor ? "stroke:" + famColor + ";stroke-width:2.8" : null;
 
     const childTops = kids.map((k) => ({ x: childAttachX(k.p.id, u.id, posOf(k.p.id).x), top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
@@ -4653,18 +4679,19 @@
     back.addEventListener("click", (e) => { if (e.target === back) back.remove(); });
     document.body.appendChild(back);
   }
-  function startViewPreview(view) {
+  function startViewPreview(view, temporary) {
     try { localStorage.setItem("familyTree.currentView", view.id); } catch (e) {}
     viewPreview = { view, set: viewMembers(view.rules, view.withHidden) };
-    let bar = document.getElementById("viewScopeBar");
-    if (!bar) {
-      bar = document.createElement("div"); bar.id = "viewScopeBar";
-      bar.innerHTML = '<span class="vsb-text"></span><button type="button" id="vsbDone">Done</button>';
+    // Switching views is a normal mode — the ☰ menu is the way in AND out, so
+    // no pop-up bar. Only the fleeting Preview from the view editor gets one.
+    const old = document.getElementById("viewScopeBar"); if (old) old.remove();
+    if (temporary) {
+      const bar = document.createElement("div"); bar.id = "viewScopeBar";
+      bar.innerHTML = '<span class="vsb-text">Previewing view: <b></b></span><button type="button" id="vsbDone">Done</button>';
       document.body.appendChild(bar);
       bar.querySelector("#vsbDone").onclick = endViewPreview;
+      bar.querySelector(".vsb-text b").textContent = view.name || "Untitled";
     }
-    bar.querySelector(".vsb-text").innerHTML = "Previewing view: <b></b>";
-    bar.querySelector(".vsb-text b").textContent = view.name || "Untitled";
     render(); fitView();
   }
   function endViewPreview() {
@@ -4701,7 +4728,7 @@
         info.querySelector("b").textContent = v.name || "Untitled";
         info.querySelector(".view-meta").textContent = " — " + n + " people" + (v.pass ? " · password set" : " · no password yet");
         const bPrev = document.createElement("button"); bPrev.className = "btn small"; bPrev.textContent = "Preview";
-        bPrev.onclick = () => { close(); startViewPreview(v); };
+        bPrev.onclick = () => { close(); startViewPreview(v, true); };
         const bEdit = document.createElement("button"); bEdit.className = "btn small"; bEdit.textContent = "Edit";
         bEdit.onclick = () => { close(); openViewEditModal(v); };
         const bDel = document.createElement("button"); bDel.className = "btn small danger"; bDel.textContent = "Delete";
@@ -4806,7 +4833,7 @@
     renderRules();
     back.querySelector("#vAddRule").onclick = () => { if (sel.value) { rules.push({ person: sel.value, mode: back.querySelector("#vMode").value }); renderRules(); } };
     const collect = () => { v.name = back.querySelector("#vName").value.trim(); v.pass = back.querySelector("#vPass").value.trim(); v.rules = rules; v.withHidden = withHidden; };
-    back.querySelector("#vPreviewBtn").onclick = () => { collect(); close(); startViewPreview(v); };
+    back.querySelector("#vPreviewBtn").onclick = () => { collect(); close(); startViewPreview(v, true); };
     back.querySelector("#vSave").onclick = () => {
       collect();
       if (!v.name) { toast("Give the view a name"); return; }
