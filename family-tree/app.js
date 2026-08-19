@@ -3511,12 +3511,19 @@
     setCloudStatus("pending");
     cloudTimer = setTimeout(() => cloudSaveTree(false), 1500);   // near-instant: every change reaches the cloud moments after it's made
   }
+  let missingPassWarned = false;
   async function cloudSaveTree(manual) {
     if (readonly && !ownerCanCloud()) return;
     let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
-    if (!fam) { if (!manual) return; fam = prompt("Choose a family password (used to encrypt your saved tree):") || ""; if (!fam) return; try { localStorage.setItem("familyTree.familyPass", fam); } catch (e) {} }
+    // A browser missing its saved passwords must NEVER skip saves silently —
+    // that leaves edits stranded on one device while everything looks fine.
+    const surface = (what) => {
+      setCloudStatus("error", "Edits aren't reaching your site — " + what + ". Open “Save & back up” and click Save to fix it.");
+      if (!missingPassWarned) { missingPassWarned = true; toast("⚠️ Your edits are NOT saving to your site from this browser — click “☁︎ Save to my site now” once to fix it"); }
+    };
+    if (!fam) { if (!manual) { surface("this browser doesn't have the family password"); return; } fam = prompt("Choose a family password (used to encrypt your saved tree):") || ""; if (!fam) return; try { localStorage.setItem("familyTree.familyPass", fam); } catch (e) {} }
     let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
-    if (!pass) { if (!manual) return; pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || ""; if (!pass) return; try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {} }
+    if (!pass) { if (!manual) { surface("this browser doesn't have the import passcode"); return; } pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || ""; if (!pass) return; try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {} missingPassWarned = false; }
     try { localStorage.setItem("familyTree.cloudOn", "1"); } catch (e) {}
     setCloudStatus("saving");
     try {
