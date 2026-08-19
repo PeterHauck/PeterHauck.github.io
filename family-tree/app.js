@@ -659,8 +659,15 @@
   // state.manual; a hidden branch uses state.manualHidden. That keeps a branch
   // self-contained (its seed people don't drag their main-tree coordinates in)
   // and never disturbs the main layout.
-  const posMap = () => hiddenScope ? (state.manualHidden || (state.manualHidden = {})) : state.manual;
-  const posOf = (id) => posMap()[id] || layoutPos[id] || { x: 0, y: 0 };
+  // Where dragged positions are stored depends on what's on the canvas: the
+  // master tree, a hidden branch, or a VIEW. Each view keeps its own private
+  // arrangement — moving someone inside a view never moves them on the master
+  // tree (and vice versa: unmoved people follow the master's arrangement).
+  const posMap = () => {
+    if (viewPreview) { const v = viewPreview.view; return v.manual || (v.manual = {}); }
+    return hiddenScope ? (state.manualHidden || (state.manualHidden = {})) : state.manual;
+  };
+  const posOf = (id) => posMap()[id] || (viewPreview ? (state.manual || {})[id] : null) || layoutPos[id] || { x: 0, y: 0 };
 
   /* ============================================================= RENDER */
   function render() {
@@ -4202,7 +4209,13 @@
   $("#pmAdd").onclick = () => { togglePeopleMenu(false); resetPersonForm(); ensurePanel(); const n = $("#pFirst"); if (n) n.focus(); };
   { const b = $("#pmViews"); if (b) b.onclick = () => { $("#peopleMenu").hidden = true; openViewsModal(); }; }
   { const b = $("#tbViews"); if (b) b.onclick = openViewSheet; }
-  $("#pmArrange").onclick = () => { pushUndo(); if (hiddenScope) state.manualHidden = {}; else state.manual = {}; selection = new Set(); relayoutAndSave(); fitView(); toast("Auto-arranged"); };
+  $("#pmArrange").onclick = () => {
+    pushUndo();
+    if (viewPreview) viewPreview.view.manual = {};             // reset only this view's arrangement
+    else if (hiddenScope) state.manualHidden = {};
+    else state.manual = {};
+    selection = new Set(); relayoutAndSave(); fitView(); toast("Auto-arranged");
+  };
   $("#peopleFilter").addEventListener("input", () => updatePeopleList());
   $("#sibLeftBtn").onclick = () => shiftSibling(-1);
   $("#sibRightBtn").onclick = () => shiftSibling(1);
@@ -4568,6 +4581,7 @@
     const uids = new Set(unions.map((u) => u.id));
     const links = state.links.filter((l) => uids.has(l.union) && set.has(l.child));
     const manual = {}; Object.keys(state.manual || {}).forEach((k) => { if (set.has(k)) manual[k] = state.manual[k]; });
+    Object.keys(view.manual || {}).forEach((k) => { if (set.has(k)) manual[k] = view.manual[k]; });   // the view's own arrangement wins
     return { title: view.name || state.title, subtitle: state.subtitle, persons, unions, links, manual, manualHidden: {}, hidden: {}, focus: [], version: state.version || 0, photoMigrated: true, namesSplit: true, viewOf: view.id, mediaKey: state.mediaKey || null };
   }
   // Encrypt every published view under its own password and store them.
