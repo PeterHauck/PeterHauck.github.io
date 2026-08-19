@@ -684,3 +684,20 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 #viewScopeBar #vsbDone { flex: none; background: #fff; color: var(--accent); border: none; padding: 5px 11px; font-size: 12.5px; border-radius: 999px; cursor: pointer; }
 .view-hidden-row { display: flex; align-items: flex-start; gap: 8px; padding: 4px 2px; font-size: 13px; cursor: pointer; }
 .view-hidden-row input { margin-top: 2px; }
+
+/* view switcher: rows in the ☰ menu (desktop) and hamburger sheet (mobile) */
+.vs-title { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 8px 2px 4px; }
+.vs-row {
+  display: block; width: 100%; text-align: left; border: none; background: transparent;
+  padding: 8px 10px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 13.5px;
+}
+.vs-row:hover { background: var(--paper); }
+.vs-row.active { background: var(--accent); color: #fff; }
+#viewSwitchSec { border-bottom: 1px solid var(--panel-border); padding-bottom: 6px; margin-bottom: 6px; }
+.vsheet .vs-row { font-size: 15px; padding: 12px 12px; }
+@media (min-width: 721px) {
+  #tbViews { display: none !important; }   /* desktop switches views inside the ☰ menu */
+}
+@media (max-width: 720px) {
+  #tbViews:not([hidden]) { display: flex; }
+}

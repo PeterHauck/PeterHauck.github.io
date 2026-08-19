@@ -678,6 +678,7 @@
     $("#peopleCount").textContent = state.persons.length;
     updateHiddenChip();
     updateSelBar();
+    updateViewSwitcher();
   }
 
   // Floating action bar for a group selection (Rearrange mode: drag a box
@@ -4034,6 +4035,7 @@
   $("#pmClose").onclick = () => togglePeopleMenu(false);
   $("#pmAdd").onclick = () => { togglePeopleMenu(false); resetPersonForm(); ensurePanel(); const n = $("#pFirst"); if (n) n.focus(); };
   { const b = $("#pmViews"); if (b) b.onclick = () => { $("#peopleMenu").hidden = true; openViewsModal(); }; }
+  { const b = $("#tbViews"); if (b) b.onclick = openViewSheet; }
   $("#pmArrange").onclick = () => { pushUndo(); if (hiddenScope) state.manualHidden = {}; else state.manual = {}; selection = new Set(); relayoutAndSave(); fitView(); toast("Auto-arranged"); };
   $("#peopleFilter").addEventListener("input", () => updatePeopleList());
   $("#sibLeftBtn").onclick = () => shiftSibling(-1);
@@ -4241,6 +4243,11 @@
     if (!readonly && dedupeParentUnions()) save();   // heal any duplicate parentage in existing data
     if (!readonly && !state.namesSplit) { splitNames(); state.namesSplit = true; save(); }   // one-time: split names into parts
     autoLayout(); render(); syncTitle(); setupTitleEditing();
+    try {
+      const vid = localStorage.getItem("familyTree.currentView");
+      const vv = (state.views || []).find((xx) => xx.id === vid);
+      if (vv) startViewPreview(vv);
+    } catch (e) {}
     if (!readonly) { setCloudStatus(CLOUD_ON() ? "on" : "off"); setBackupStatus(BACKUP_ON() ? "on" : "off"); }
     // One-time: turn any already-attached obituary photos into node pictures.
     if (!readonly && !state.photoMigrated) {
@@ -4406,7 +4413,46 @@
     if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) || {}).error || "Publishing views failed");
     return { n: batch.length };
   }
+  // Build the "Viewing" rows (whole tree + each view) into a container. Used by
+  // the desktop ☰ menu and the mobile hamburger sheet.
+  function buildViewSwitchList(container, onPick) {
+    container.textContent = "";
+    const row = (label, active, fn) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "vs-row" + (active ? " active" : "");
+      b.textContent = label;
+      b.onclick = () => { fn(); if (onPick) onPick(); };
+      container.appendChild(b);
+    };
+    row("🌳 Whole tree", !viewPreview, () => endViewPreview());
+    (state.views || []).forEach((v) => {
+      const n = viewMembers(v.rules, v.withHidden).size;
+      row("🔭 " + (v.name || "Untitled") + " (" + n + ")", !!(viewPreview && viewPreview.view.id === v.id), () => startViewPreview(v));
+    });
+  }
+  function updateViewSwitcher() {
+    const sec = document.getElementById("viewSwitchSec");
+    const tb = document.getElementById("tbViews");
+    const has = (state.views || []).length > 0;
+    if (tb) tb.hidden = !has;
+    if (!sec) return;
+    sec.hidden = !has;
+    if (has) buildViewSwitchList(document.getElementById("viewSwitchList"), () => { const m = $("#peopleMenu"); if (m) m.hidden = true; });
+  }
+  function openViewSheet() {
+    const back = document.createElement("div"); back.className = "pcard-back"; back.id = "viewSheetBack";
+    const card = document.createElement("div"); card.className = "pcard vsheet"; back.appendChild(card);
+    const head = document.createElement("div"); head.className = "pcard-head";
+    const h = document.createElement("h2"); h.textContent = "Views"; h.style.margin = "0"; head.appendChild(h);
+    const x = document.createElement("button"); x.className = "pcard-x"; x.textContent = "✕"; x.onclick = () => back.remove(); head.appendChild(x);
+    card.appendChild(head);
+    const list = document.createElement("div"); list.className = "pcard-body"; card.appendChild(list);
+    buildViewSwitchList(list, () => back.remove());
+    back.addEventListener("click", (e) => { if (e.target === back) back.remove(); });
+    document.body.appendChild(back);
+  }
   function startViewPreview(view) {
+    try { localStorage.setItem("familyTree.currentView", view.id); } catch (e) {}
     viewPreview = { view, set: viewMembers(view.rules, view.withHidden) };
     let bar = document.getElementById("viewScopeBar");
     if (!bar) {
@@ -4420,6 +4466,7 @@
     render(); fitView();
   }
   function endViewPreview() {
+    try { localStorage.removeItem("familyTree.currentView"); } catch (e) {}
     viewPreview = null;
     const bar = document.getElementById("viewScopeBar"); if (bar) bar.remove();
     render(); fitView();
