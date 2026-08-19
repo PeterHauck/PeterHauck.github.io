@@ -4329,9 +4329,11 @@
         });
       }
     };
-    // "Everyone related": the person's bloodline — all ancestors and all
-    // descendants — plus the spouses married INTO that line. It deliberately
-    // stops there: a married-in spouse is shown, their own family is not.
+    // "Everyone related": the person's blood relatives — all ancestors, plus
+    // every descendant of those ancestors (that's what brings in siblings,
+    // nieces/nephews, aunts/uncles, and cousins) — plus the spouses married
+    // INTO that group. It deliberately stops there: a married-in spouse is
+    // shown, their own family is not.
     const addRelated = (pid) => {
       const mine = new Set([pid]);
       let stack = [pid];
@@ -4342,8 +4344,8 @@
           [u.a, u.b].forEach((par) => { if (par != null && personById(par) && !mine.has(par)) { mine.add(par); stack.push(par); } });
         });
       }
-      stack = [pid];
-      while (stack.length) {   // descendants
+      stack = [...mine];   // descendants of the person AND of every ancestor
+      while (stack.length) {
         const cur = stack.pop();
         unionsOfPerson(cur).forEach((u) => childLinksOfUnion(u.id).forEach((l) => { if (personById(l.child) && !mine.has(l.child)) { mine.add(l.child); stack.push(l.child); } }));
       }
