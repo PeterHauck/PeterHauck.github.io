@@ -4594,10 +4594,17 @@
     return { title: view.name || state.title, subtitle: state.subtitle, persons, unions, links, manual, manualHidden: {}, hidden: {}, focus: [], version: state.version || 0, photoMigrated: true, namesSplit: true, viewOf: view.id, mediaKey: state.mediaKey || null };
   }
   // Encrypt every published view under its own password and store them.
-  async function publishViews() {
+  async function publishViews(interactive) {
     const views = (state.views || []).filter((v) => v.pass && v.rules && v.rules.length);
+    if (!views.length) return { n: 0, why: "noviews" };
     let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
-    if (!views.length || !pass) return { n: 0 };
+    // Publishing is an upload, so it needs the site's import passcode — when
+    // this browser doesn't have it stored, ASK (never fail with a wrong excuse).
+    if (!pass && interactive) {
+      pass = prompt("One-time import passcode (the IMPORT_PASSCODE set on your Vercel site):") || "";
+      if (pass) { try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {} }
+    }
+    if (!pass) return { n: 0, why: "nopass" };
     const batch = [];
     for (const v of views) {
       const payload = await encryptState(v.pass, viewSlice(v));
@@ -4712,7 +4719,12 @@
     back.querySelector("#vNew").onclick = () => { close(); openViewEditModal(null); };
     back.querySelector("#vPublish").onclick = async () => {
       const b = back.querySelector("#vPublish"); b.disabled = true; b.textContent = "Publishing…";
-      try { const r = await publishViews(); toast(r.n ? "Published " + r.n + " view" + (r.n > 1 ? "s" : "") + " ✓ — share each view’s password" : "Nothing to publish — a view needs people and a password"); }
+      try {
+        const r = await publishViews(true);
+        if (r.n) toast("Published " + r.n + " view" + (r.n > 1 ? "s" : "") + " ✓ — share each view’s password");
+        else if (r.why === "nopass") toast("Publishing needs the import passcode — click Publish again and enter it when asked");
+        else toast("Nothing to publish — a view needs people and a share password");
+      }
       catch (e) { toast("Publishing views failed — " + e.message); }
       b.disabled = false; b.textContent = "☁︎ Publish views now";
     };
