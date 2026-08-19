@@ -36,6 +36,7 @@
   let redoStack = [];
   let view = { tx: 0, ty: 0, scale: 1 };
   let pendingPhoto = null;   // dataURL staged in the person form
+  let photoDirty = false;    // true only when the user changed/cleared the photo this edit
   let formSex = "male";
   let formColor = "";
   const FAMILY_COLORS = ["#2f6fb0", "#9e6b3f", "#3f8f5a", "#2a9d9d", "#bf8b30", "#b5495b", "#8a4f80"];
@@ -730,19 +731,21 @@
 
     const clip = { male: "clip-male", female: "clip-female", unknown: "clip-unknown" }[p.sex] || "clip-unknown";
     const decd = isDeceased(p);
-    if (p.photo) {
+    const ph = photoOf(p);                       // cached dataURL (or null while an externalised photo loads)
+    const hasPhoto = !!(p.photo || p.photoRef);
+    if (ph) {
       // For a photo, the deceased slash goes BEHIND the picture so it never
       // crosses the face — only its tips peek out past the edges.
       if (decd) g.appendChild(el("line", { class: "deceased", x1: -HALF - 9, y1: HALF + 9, x2: HALF + 9, y2: -HALF - 9 }));
-      g.appendChild(el("image", { href: p.photo, x: -HALF, y: -HALF, width: HALF * 2, height: HALF * 2, preserveAspectRatio: "xMidYMid slice", "clip-path": `url(#${clip})` }));
+      g.appendChild(el("image", { href: ph, x: -HALF, y: -HALF, width: HALF * 2, height: HALF * 2, preserveAspectRatio: "xMidYMid slice", "clip-path": `url(#${clip})` }));
     } else {
       g.appendChild(el("text", { class: "placeholder-emoji", x: 0, y: 2 }, txt("👤")));
     }
     // shape outline on top
-    g.appendChild(shapeOutline(p.sex, !!p.photo, p.color));
+    g.appendChild(shapeOutline(p.sex, !!ph, p.color));
     // deceased slash — drawn across the empty symbol (the classic mark) only when
     // there's no photo; photo nodes get the behind-the-picture version above.
-    if (decd && !p.photo) g.appendChild(el("line", { class: "deceased", x1: -HALF, y1: HALF, x2: HALF, y2: -HALF }));
+    if (decd && !ph) g.appendChild(el("line", { class: "deceased", x1: -HALF, y1: HALF, x2: HALF, y2: -HALF }));
 
     // labels — with a paper-coloured backing so connectors pass BEHIND the text
     const lines = nameLines(treeDisplayName(p));
@@ -1618,7 +1621,12 @@
     $("#pDeceased").checked = isDeceased(p);
     setSex(p.sex);
     setColor(p.color || "");
-    pendingPhoto = p.photo || null;
+    photoDirty = false;
+    pendingPhoto = photoOf(p);
+    // An externalised photo may still be loading — fill the preview when it lands.
+    if (!pendingPhoto && p.photoRef) mediaGet(p.photoRef).then((u) => {
+      if (u && $("#personId").value === p.id && !photoDirty) { pendingPhoto = u; updatePhotoPreview(); }
+    }).catch(() => {});
     updatePhotoPreview();
     $("#personSubmit").textContent = "Save changes";
     $("#personCancel").hidden = false;
@@ -1686,9 +1694,9 @@
     // Offer to pull a picture out of an obituary when there's one to pull from
     // (an uploaded photo, or a linked page we can fetch the portrait off).
     if (photoBtn) {
-      const canPhoto = docs.some((d) => isObitDoc(d) && ((d.kind === "image" && d.content) || d.url));
+      const canPhoto = docs.some((d) => isObitDoc(d) && ((d.kind === "image" && (d.content || d.ref)) || d.url));
       photoBtn.hidden = !canPhoto;
-      photoBtn.textContent = p.photo ? "📷 Replace picture from obituary" : "📷 Use photo from obituary";
+      photoBtn.textContent = (p.photo || p.photoRef) ? "📷 Replace picture from obituary" : "📷 Use photo from obituary";
     }
     // Offer to (re)read birth & death dates when an obituary is attached but the
     // exact dates are still missing — fixes people uploaded before the automatic
@@ -1994,7 +2002,13 @@
     const data = { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: birthYear, death: deathYear, birthDate, deathDate, deceased: $("#pDeceased").checked, sex: formSex, color: formColor, photo: pendingPhoto };
     if (id) {
       const p = personById(id);
-      Object.assign(p, { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate, deathDate: data.deathDate, deceased: data.deceased, sex: data.sex, color: data.color || null, photo: data.photo });
+      Object.assign(p, { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate, deathDate: data.deathDate, deceased: data.deceased, sex: data.sex, color: data.color || null });
+      // The photo only changes when the user actually changed it — an
+      // externalised photo that hadn't finished loading is never wiped.
+      if (photoDirty) {
+        if (pendingPhoto) { p.photo = pendingPhoto; delete p.photoRef; scheduleSweep(); }
+        else { delete p.photo; delete p.photoRef; }
+      }
     } else {
       const p = addPerson(data); selectedId = p.id;
     }
@@ -2015,17 +2029,17 @@
 
   /* photo upload with downscale */
   $("#photoDrop").onclick = () => $("#photoInput").click();
-  $("#photoClear").onclick = () => { pendingPhoto = null; updatePhotoPreview(); };
+  $("#photoClear").onclick = () => { pendingPhoto = null; photoDirty = true; updatePhotoPreview(); };
   $("#photoUrlBtn").onclick = () => setPhotoFromUrl($("#photoUrl").value);
   $("#photoInput").addEventListener("change", (e) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => openPhotoAdjust(reader.result, (photo) => { pendingPhoto = photo; updatePhotoPreview(); });
+    reader.onload = () => openPhotoAdjust(reader.result, (photo) => { pendingPhoto = photo; photoDirty = true; updatePhotoPreview(); });
     reader.onerror = () => toast("Couldn’t read that file.");
     reader.readAsDataURL(file);
     e.target.value = "";
   });
-  $("#photoAdjustBtn").onclick = () => { if (pendingPhoto) openPhotoAdjust(pendingPhoto, (photo) => { pendingPhoto = photo; updatePhotoPreview(); }); };
+  $("#photoAdjustBtn").onclick = () => { if (pendingPhoto) openPhotoAdjust(pendingPhoto, (photo) => { pendingPhoto = photo; photoDirty = true; updatePhotoPreview(); }); };
   // Load a photo from a pasted image link (or any page with a portrait) into the
   // form's staged photo. The fetch runs server-side (Vercel), so it works on
   // cross-origin images the browser itself couldn't read. Save to keep it.
@@ -2041,7 +2055,7 @@
     try {
       const data = await callArchive({ passcode: pass, url });
       if (data && data.image) {
-        openPhotoAdjust(data.image, (photo) => { pendingPhoto = photo; updatePhotoPreview(); toast("Photo loaded — click Save to keep it"); });
+        openPhotoAdjust(data.image, (photo) => { pendingPhoto = photo; photoDirty = true; updatePhotoPreview(); toast("Photo loaded — click Save to keep it"); });
         return;
       }
       toast("No image found at that link");
@@ -2212,6 +2226,147 @@
     return btoa(bin);
   }
   const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+  /* ================= MEDIA STORE: photos & documents as their own files =================
+     The tree used to carry every photo/PDF inside its one big encrypted blob, so
+     every save and sync moved ~8MB. Now each binary lives in its OWN file,
+     encrypted under a random media key that itself travels INSIDE the encrypted
+     tree (so the family password still protects everything, and published view
+     slices carry the key so their photos work). Files upload once and are
+     content-addressed by a random id — they never change, so devices cache them
+     for good. */
+  const mediaMem = new Map();      // ref -> decrypted dataURL (this session)
+  const mediaPending = new Set();
+  let mediaRenderTimer = null;
+  function ensureMediaKey() {
+    if (!state.mediaKey) { state.mediaKey = b64(crypto.getRandomValues(new Uint8Array(32))); }
+    return state.mediaKey;
+  }
+  async function mediaCryptoKey() {
+    if (!state.mediaKey) return null;
+    return await crypto.subtle.importKey("raw", unb64(state.mediaKey), "AES-GCM", false, ["encrypt", "decrypt"]);
+  }
+  async function mediaEncrypt(dataUrl) {
+    const key = await mediaCryptoKey(); if (!key) throw new Error("no media key");
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(dataUrl));
+    return JSON.stringify({ v: "m1", iv: b64(iv), ct: b64(ct) });
+  }
+  async function mediaDecrypt(payload) {
+    const key = await mediaCryptoKey(); if (!key) throw new Error("no media key");
+    const o = JSON.parse(payload);
+    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(o.iv) }, key, unb64(o.ct));
+    return new TextDecoder().decode(pt);
+  }
+  async function mediaUpload(dataUrl) {
+    ensureMediaKey();
+    const id = "m" + Math.random().toString(36).slice(2, 12);
+    const payload = await mediaEncrypt(dataUrl);
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    if (!pass) throw new Error("not the owner");
+    const r = await fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "putMedia", passcode: pass, items: [{ id, payload }] }) });
+    if (!r.ok) throw new Error((((await r.json().catch(() => ({}))) || {}).error) || "upload failed");
+    mediaMem.set(id, dataUrl);
+    idbSet("media." + id, dataUrl).catch(() => {});
+    return id;
+  }
+  async function mediaGet(ref) {
+    if (!ref) return null;
+    if (mediaMem.has(ref)) return mediaMem.get(ref);
+    try { const c = await idbGet("media." + ref); if (c) { mediaMem.set(ref, c); return c; } } catch (e) {}
+    const r = await fetch("api/store?action=getMedia&id=" + encodeURIComponent(ref));
+    if (!r.ok) throw new Error("media fetch failed");
+    const j = await r.json();
+    const dataUrl = await mediaDecrypt(j.payload);
+    mediaMem.set(ref, dataUrl);
+    idbSet("media." + ref, dataUrl).catch(() => {});
+    return dataUrl;
+  }
+  // Synchronous accessor for the render loop: hands back what's cached and
+  // quietly loads the rest, re-drawing once when a batch arrives.
+  function photoOf(p) {
+    if (!p) return null;
+    if (p.photo) return p.photo;   // still embedded (legacy, or added moments ago)
+    if (!p.photoRef) return null;
+    if (mediaMem.has(p.photoRef)) return mediaMem.get(p.photoRef);
+    queueMediaLoad(p.photoRef);
+    return null;
+  }
+  function queueMediaLoad(ref) {
+    if (mediaPending.has(ref) || mediaMem.has(ref)) return;
+    mediaPending.add(ref);
+    mediaGet(ref).then(() => {
+      if (mediaRenderTimer) clearTimeout(mediaRenderTimer);
+      mediaRenderTimer = setTimeout(() => { mediaRenderTimer = null; render(); }, 200);
+    }).catch(() => {}).finally(() => mediaPending.delete(ref));
+  }
+  const docSrcAsync = async (doc) => {
+    const s0 = docSrc(doc); if (s0) return s0;
+    if (doc && doc.ref) { try { return await mediaGet(doc.ref); } catch (e) {} }
+    return "";
+  };
+  // Move every embedded photo/document into its own encrypted file: the one-time
+  // slimming migration, and the ongoing sweep for anything newly embedded.
+  // Each file is verified by re-downloading and decrypting before the embedded
+  // copy is dropped; failures simply stay embedded and retry later.
+  let sweepRunning = false, sweepTimer = null;
+  function scheduleSweep() { if (sweepTimer) clearTimeout(sweepTimer); sweepTimer = setTimeout(() => { sweepTimer = null; sweepEmbeddedMedia(false); }, 5000); }
+  async function sweepEmbeddedMedia(firstRun) {
+    if (sweepRunning || readonly) return;
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    if (!pass || !CLOUD_ON()) return;
+    const jobs = [];
+    state.persons.forEach((p) => {
+      if (p.photo && /^data:/.test(p.photo)) jobs.push({ kind: "photo", p });
+      (p.docs || []).forEach((d) => {
+        if (!d) return;
+        if ((d.kind === "image" || d.kind === "pdf") && d.content && /^data:/.test(d.content)) jobs.push({ kind: "doc", d });
+        else if (d.path) jobs.push({ kind: "docpath", d });
+      });
+    });
+    if (!jobs.length) return;
+    sweepRunning = true;
+    if (firstRun) toast("Slimming storage: moving " + jobs.length + " photos & documents into their own files (runs in the background)…");
+    try { await idbSet("tree.v1.preDietBackup", exportObject()); } catch (e) {}
+    let moved = 0, failed = 0;
+    for (const j of jobs) {
+      try {
+        let dataUrl;
+        if (j.kind === "photo") dataUrl = j.p.photo;
+        else if (j.kind === "doc") dataUrl = j.d.content;
+        else {   // legacy record stored server-side unencrypted: pull it back in, re-store encrypted
+          const rr = await fetch(recordSrc(j.d.path)); if (!rr.ok) throw new Error("record fetch failed");
+          const bl = await rr.blob();
+          dataUrl = await new Promise((res2, rej2) => { const fr = new FileReader(); fr.onload = () => res2(fr.result); fr.onerror = rej2; fr.readAsDataURL(bl); });
+        }
+        const id = await mediaUpload(dataUrl);
+        const vr = await fetch("api/store?action=getMedia&id=" + encodeURIComponent(id) + "&ts=" + Date.now());
+        if (!vr.ok) throw new Error("verify fetch failed");
+        if ((await mediaDecrypt((await vr.json()).payload)) !== dataUrl) throw new Error("verify mismatch");
+        if (j.kind === "photo") { j.p.photoRef = id; delete j.p.photo; }
+        else { j.d.ref = id; delete j.d.content; delete j.d.path; }
+        moved++;
+        if (moved % 5 === 0) { save(); if (firstRun) toast("Slimming storage… " + moved + "/" + jobs.length); }
+      } catch (e) { failed++; }
+    }
+    if (moved) save();
+    if (firstRun) toast(failed ? "Moved " + moved + " files ✓ — " + failed + " will retry next time" : "Storage slimmed ✓ — every save is now far lighter");
+    sweepRunning = false;
+  }
+  // A self-contained copy with every photo/document folded back in — used for
+  // manual exports and the downloadable published file, so backups never depend
+  // on the online media store.
+  async function exportInlinedObject() {
+    const obj = JSON.parse(JSON.stringify(exportObject()));
+    for (const p of obj.persons) {
+      if (p.photoRef) { try { const u = await mediaGet(p.photoRef); if (u) { p.photo = u; delete p.photoRef; } } catch (e) {} }
+      for (const d of (p.docs || [])) {
+        if (d && d.ref) { try { const u = await mediaGet(d.ref); if (u) { d.content = u; delete d.ref; } } catch (e) {} }
+      }
+    }
+    delete obj.mediaKey;
+    return obj;
+  }
   const hasGzip = typeof CompressionStream === "function" && typeof DecompressionStream === "function";
   async function gzip(bytes) {
     const s = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
@@ -2273,7 +2428,7 @@
         const p1 = m.querySelector("#pubPass").value, p2 = m.querySelector("#pubPass2").value;
         if (!p1) { toast("Enter a password"); return false; }
         if (p1 !== p2) { toast("Passwords don’t match"); return false; }
-        encryptState(p1).then((payload) => {
+        exportInlinedObject().then((full) => encryptState(p1, full)).then((payload) => {
           const content = "/* Encrypted family tree — generated by the Family Tree editor. */\nwindow.FAMILY_TREE_DATA = " + JSON.stringify(payload) + ";\n";
           downloadFile("family-data.js", content, "text/javascript");
           toast("Downloaded family-data.js — commit it to publish");
@@ -2483,7 +2638,7 @@
     const m = /^https:\/\/[^/]*\.blob\.vercel-storage\.com\/([^?]+)/.exec(path || "");
     return m ? "api/store?action=getRecord&p=" + encodeURIComponent(m[1]) : path;
   };
-  const docSrc = (doc) => (doc && (doc.content || (doc.path ? recordSrc(doc.path) : "")));
+  const docSrc = (doc) => (doc && (doc.content || (doc.ref && mediaMem.get(doc.ref)) || (doc.path ? recordSrc(doc.path) : "")));
   const extFor = (mt) => (mt === "application/pdf" ? "pdf" : mt === "image/png" ? "png" : mt === "image/webp" ? "webp" : mt === "image/gif" ? "gif" : "jpg");
   function shrinkImageDataUrl(dataUrl, max) {
     return new Promise((resolve) => {
@@ -2498,15 +2653,9 @@
   // false means keep it embedded (cloud not set up / unreachable — nothing lost).
   async function storeRecordBinary(doc, dataUrl, pass) {
     const m = /^data:([^;]+);base64,(.*)$/.exec(dataUrl || ""); if (!m) return false;
-    const mt = m[1], b64 = m[2];
-    const name = doc.id + "." + extFor(mt);
     try {
-      const res = await fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "putRecord", passcode: pass, name, base64: b64, contentType: mt }) });
-      if (!res.ok) return false;
-      const j = await res.json();
-      if (!j || !j.url) return false;
-      doc.path = j.url; doc.mediaType = mt; delete doc.content;   // path = same-site record URL
+      doc.ref = await mediaUpload(dataUrl);   // its own ENCRYPTED file — the tree stays small
+      doc.mediaType = m[1]; delete doc.content; delete doc.path;
       return true;
     } catch (e) { return false; }
   }
@@ -2609,7 +2758,7 @@
       let setPic = false;
       if (docType === "obituary" && !person.photo) {
         const picSrc = kind === "image" ? content : fetchedImage;
-        if (picSrc) { const photo = await imageDataToPhoto(picSrc); if (photo) { person.photo = photo; setPic = true; } }
+        if (picSrc) { const photo = await imageDataToPhoto(picSrc); if (photo) { person.photo = photo; setPic = true; scheduleSweep(); } }
       }
 
       // Store the PDF/photo as its own repo file so the tree stays small and
@@ -2679,10 +2828,10 @@
   async function migratePhotosFromObits() {
     let changed = false;
     for (const p of state.persons) {
-      if (p.photo || !Array.isArray(p.docs)) continue;
-      const imgDoc = p.docs.find((d) => isObitDoc(d) && d.kind === "image" && docSrc(d));
+      if (p.photo || p.photoRef || !Array.isArray(p.docs)) continue;
+      const imgDoc = p.docs.find((d) => isObitDoc(d) && d.kind === "image" && (docSrc(d) || d.ref));
       if (!imgDoc) continue;
-      const photo = await imageDataToPhoto(docSrc(imgDoc));
+      const photo = await imageDataToPhoto(await docSrcAsync(imgDoc));
       if (photo) { p.photo = photo; changed = true; }
     }
     return changed;
@@ -2696,7 +2845,7 @@
   // AI reader the upload flow uses, so it works retroactively.
   async function readDatesFromObit(p) {
     if (!p) return;
-    const src = obitSourceOf(p);
+    const src = await resolveObitSource(obitSourceOf(p));
     if (!src) { toast("No obituary attached to read from"); return; }
     let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
     if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
@@ -2715,10 +2864,10 @@
   async function usePhotoFromObit(p) {
     if (!p) return;
     const docs = (p.docs || []).filter(isObitDoc);   // obituaries only — never a record scan
-    const imgDoc = docs.find((d) => d && d.kind === "image" && docSrc(d));
+    const imgDoc = docs.find((d) => d && d.kind === "image" && (docSrc(d) || d.ref));
     if (imgDoc) {
-      const photo = await imageDataToPhoto(docSrc(imgDoc));
-      if (photo) { p.photo = photo; save(); render(); if (selectedId === p.id) fillPersonForm(p); toast("Set their picture from the obituary"); return; }
+      const photo = await imageDataToPhoto(await docSrcAsync(imgDoc));
+      if (photo) { p.photo = photo; scheduleSweep(); save(); render(); if (selectedId === p.id) fillPersonForm(p); toast("Set their picture from the obituary"); return; }
     }
     const urlDoc = docs.find((d) => d && d.url);
     if (!urlDoc) { toast("No photo found in the obituary"); return; }
@@ -2854,10 +3003,20 @@
       if (d.kind !== "pdf" && d.kind !== "image") continue;
       const m = /^data:([^;]+);base64,(.*)$/.exec(d.content || "");
       if (m) return { file: { mediaType: m[1], data: m[2] } };
+      if (d.ref) return { ref: d.ref };   // externalised media — resolveObitSource() turns this into a file
       if (d.path) return { url: new URL(recordSrc(d.path), location.href).href };   // externalised → let the server fetch it
     }
     const link = docs.find((d) => d.url);
     if (link) return { url: link.url };
+    return null;
+  }
+  async function resolveObitSource(src) {
+    if (!src || !src.ref) return src;
+    try {
+      const du = await mediaGet(src.ref);
+      const m = /^data:([^;]+);base64,(.*)$/.exec(du || "");
+      if (m) return { file: { mediaType: m[1], data: m[2] } };
+    } catch (e) {}
     return null;
   }
   async function callDates(payload) {
@@ -2887,7 +3046,7 @@
       for (let i = 0; i < targets.length; i++) {
         const p = targets[i];
         if (btn) btn.textContent = "Reading obituaries… (" + (i + 1) + " of " + targets.length + ")";
-        const src = obitSourceOf(p);
+        const src = await resolveObitSource(obitSourceOf(p));
         let r = null;
         try { r = await callDates(Object.assign({ passcode: pass, name: p.name }, src)); }
         catch (e) {
@@ -2941,7 +3100,8 @@
     });
   }
 
-  function openDocViewer(doc, personId) {
+  async function openDocViewer(doc, personId) {
+    if (doc && doc.ref && !mediaMem.has(doc.ref)) { try { await mediaGet(doc.ref); } catch (e) {} }
     const src = docSrc(doc);
     let bodyHtml;
     if (doc.kind === "text") bodyHtml = `<pre>${escapeHtml(doc.content || "")}</pre>`;
@@ -2981,11 +3141,11 @@
     }
   }
 
-  function downloadDoc(doc) {
+  async function downloadDoc(doc) {
     const base = (doc.title || "record").replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase() || "record";
     if (doc.kind === "text") { downloadFile(base + ".txt", doc.content || "", "text/plain"); return; }
     const a = document.createElement("a");
-    a.href = docSrc(doc);
+    a.href = await docSrcAsync(doc);
     a.download = base + (doc.kind === "pdf" ? ".pdf" : "");
     a.click();
   }
@@ -3082,7 +3242,10 @@
     // header
     const head = document.createElement("div"); head.className = "pcard-head";
     const av = document.createElement("div"); av.className = "pcard-photo " + (p.sex === "female" ? "f" : p.sex === "male" ? "m" : "u");
-    if (p.photo) { const img = document.createElement("img"); img.src = p.photo; av.appendChild(img); } else av.textContent = "👤";
+    const ph0 = photoOf(p);
+    if (ph0) { const img = document.createElement("img"); img.src = ph0; av.appendChild(img); }
+    else if (p.photoRef) { av.textContent = "👤"; mediaGet(p.photoRef).then((u) => { if (u && av.isConnected) { av.textContent = ""; const img = document.createElement("img"); img.src = u; av.appendChild(img); } }).catch(() => {}); }
+    else av.textContent = "👤";
     if (isDeceased(p)) av.classList.add("deceased");
     head.appendChild(av);
     const hbox = document.createElement("div"); hbox.className = "pcard-headtext";
@@ -3104,20 +3267,22 @@
         if (!file) return;
         let photo = null; try { const dataUrl = await readFileDataURL(file); photo = await imageDataToPhoto(dataUrl); } catch (e) {}
         if (!photo) { toast("Couldn’t read that image"); return; }
-        p.photo = photo; p.photoMobile = true;
+        try { p.photoRef = await mediaUpload(photo); delete p.photo; }
+        catch (e2) { p.photo = photo; delete p.photoRef; }   // offline: keep it embedded; the sweep externalises later
+        p.photoMobile = true;
         save(); try { cloudSaveTree(false); } catch (e) {}
         render(); openProfileCard(id); toast("Photo updated");
       };
       fileInput.onchange = () => setFromFile(fileInput.files[0]);
       const addBtn = (label) => { const b = document.createElement("button"); b.className = "btn small"; b.textContent = label; s.appendChild(b); return b; };
-      if (!p.photo) {
+      if (!p.photo && !p.photoRef) {
         addBtn("📷 Add a photo").onclick = () => fileInput.click();
       } else if (mobileAdded) {
         addBtn("📷 Change photo").onclick = () => fileInput.click();
         const rm = addBtn("Remove photo"); rm.classList.add("danger");
         rm.onclick = () => {
           if (!confirm("Remove this photo?")) return;
-          delete p.photo; delete p.photoMobile;
+          delete p.photo; delete p.photoRef; delete p.photoMobile;
           save(); try { cloudSaveTree(false); } catch (e) {}
           render(); openProfileCard(id); toast("Photo removed");
         };
@@ -3244,7 +3409,7 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, views: state.views || [] };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, views: state.views || [], mediaKey: state.mediaKey || null };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
@@ -3254,6 +3419,7 @@
       photoMigrated: !!obj.photoMigrated,
       namesSplit: !!obj.namesSplit,
       views: Array.isArray(obj.views) ? obj.views : [],
+      mediaKey: obj.mediaKey || null,
     });
   }
   /* -------- local storage: IndexedDB (roomy — holds photos/PDFs), with a
@@ -3729,7 +3895,7 @@
     (old.persons || []).forEach((pp) => { if (pp && pp.id) oldById[pp.id] = pp; });
     state.persons.forEach((pp) => {
       const o = oldById[pp.id]; if (!o) return;
-      if (!pp.photo && o.photo) pp.photo = o.photo;
+      if (!pp.photo && !pp.photoRef) { if (o.photo) pp.photo = o.photo; if (o.photoRef) pp.photoRef = o.photoRef; }
       if (!pp.birthDate && o.birthDate) pp.birthDate = o.birthDate;   // exact dates the user filled in
       if (!pp.deathDate && o.deathDate) pp.deathDate = o.deathDate;
       if (Array.isArray(o.docs) && o.docs.length) {
@@ -4044,7 +4210,12 @@
   $("#tbZoomOut").onclick = () => zoomAt(1 / 1.2);
   $("#addUnionBtn").onclick = openUnionModal;
   $("#addChildBtn").onclick = openChildModal;
-  $("#exportBtn").onclick = () => { downloadFile((state.title || "family-tree").replace(/\s+/g, "-").toLowerCase() + ".json", JSON.stringify(exportObject(), null, 2)); toast("Exported"); };
+  $("#exportBtn").onclick = async () => {
+    toast("Preparing export (folding photos & documents back in)…");
+    const obj = await exportInlinedObject();
+    downloadFile((state.title || "family-tree").replace(/\s+/g, "-").toLowerCase() + ".json", JSON.stringify(obj, null, 2));
+    toast("Exported — the file is self-contained");
+  };
   $("#importBtn").onclick = () => $("#importInput").click();
   $("#importInput").addEventListener("change", (e) => {
     const f = e.target.files[0]; if (!f) return;
@@ -4248,6 +4419,7 @@
       const vv = (state.views || []).find((xx) => xx.id === vid);
       if (vv) startViewPreview(vv);
     } catch (e) {}
+    if (!readonly) setTimeout(() => sweepEmbeddedMedia(true), 8000);   // storage diet: externalise anything still embedded
     if (!readonly) { setCloudStatus(CLOUD_ON() ? "on" : "off"); setBackupStatus(BACKUP_ON() ? "on" : "off"); }
     // One-time: turn any already-attached obituary photos into node pictures.
     if (!readonly && !state.photoMigrated) {
@@ -4396,7 +4568,7 @@
     const uids = new Set(unions.map((u) => u.id));
     const links = state.links.filter((l) => uids.has(l.union) && set.has(l.child));
     const manual = {}; Object.keys(state.manual || {}).forEach((k) => { if (set.has(k)) manual[k] = state.manual[k]; });
-    return { title: view.name || state.title, subtitle: state.subtitle, persons, unions, links, manual, manualHidden: {}, hidden: {}, focus: [], version: state.version || 0, photoMigrated: true, namesSplit: true, viewOf: view.id };
+    return { title: view.name || state.title, subtitle: state.subtitle, persons, unions, links, manual, manualHidden: {}, hidden: {}, focus: [], version: state.version || 0, photoMigrated: true, namesSplit: true, viewOf: view.id, mediaKey: state.mediaKey || null };
   }
   // Encrypt every published view under its own password and store them.
   async function publishViews() {

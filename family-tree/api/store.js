@@ -409,6 +409,24 @@ export default async function handler(req, res) {
 /* ======================= GitHub storage engine ======================= */
 
 async function handleGitHub(req, res, passcode, ghToken) {
+  const nodeCrypto = await import("node:crypto");
+  const commentsKey = () => nodeCrypto.createHash("sha256").update("ft-comments:" + (passcode || "")).digest();
+  const encComments = (obj) => {
+    const iv = nodeCrypto.randomBytes(12);
+    const c = nodeCrypto.createCipheriv("aes-256-gcm", commentsKey(), iv);
+    const ct = Buffer.concat([c.update(JSON.stringify(obj), "utf8"), c.final(), c.getAuthTag()]);
+    return JSON.stringify({ v: "c1", iv: iv.toString("base64"), ct: ct.toString("base64") });
+  };
+  const decComments = (text) => {
+    const j = JSON.parse(text);
+    if (j && j.v === "c1") {
+      const iv = Buffer.from(j.iv, "base64"), raw = Buffer.from(j.ct, "base64");
+      const d = nodeCrypto.createDecipheriv("aes-256-gcm", commentsKey(), iv);
+      d.setAuthTag(raw.subarray(raw.length - 16));
+      return JSON.parse(Buffer.concat([d.update(raw.subarray(0, raw.length - 16)), d.final()]).toString("utf8"));
+    }
+    return j || {};   // legacy plaintext file
+  };
   const hdr = (extra) => ({ Authorization: "Bearer " + ghToken, "User-Agent": "FamilyTree store", "X-GitHub-Api-Version": "2022-11-28", ...extra });
   // JSON API call; 404 → null, other failures → throw with GitHub's message.
   async function gh(method, path, body) {
@@ -470,9 +488,9 @@ async function handleGitHub(req, res, passcode, ghToken) {
   async function readCommentsGh() {
     const b = await ghFile("comments.json");
     if (!b) return {};
-    try { return JSON.parse(b.toString("utf8")) || {}; } catch (e) { return {}; }
+    try { return decComments(b.toString("utf8")) || {}; } catch (e) { return {}; }
   }
-  const commitComments = async (all) => ghCommitFiles([{ path: "comments.json", blobSha: await ghMakeBlob(JSON.stringify(all)) }], "Update comments");
+  const commitComments = async (all) => ghCommitFiles([{ path: "comments.json", blobSha: await ghMakeBlob(encComments(all)) }], "Update comments");
   // Store a fresh tree payload (+ its metadata) in one commit.
   async function commitTreePayload(payload, check) {
     const savedAt = Date.now();
@@ -490,6 +508,7 @@ async function handleGitHub(req, res, passcode, ghToken) {
     try { const j = JSON.parse(b.toString("utf8")); return Array.isArray(j) ? j : []; } catch (e) { return []; }
   }
   const VIEW_ID = /^[A-Za-z0-9_-]{1,24}$/;
+  const MEDIA_ID = /^m[a-z0-9]{6,24}$/;
 
   try {
     // Published views: list (id + name + password-check only — payloads are
@@ -499,6 +518,18 @@ async function handleGitHub(req, res, passcode, ghToken) {
       res.status(200).json({ views: await readViewsIndex() });
       return;
     }
+    // One encrypted media file (a photo or document, ciphertext only). Media ids
+    // are write-once, so responses can be cached indefinitely at the edge.
+    if (req.method === "GET" && req.query.action === "getMedia") {
+      const id = (req.query.id || "").toString();
+      if (!MEDIA_ID.test(id)) { res.status(400).json({ error: "Bad media id." }); return; }
+      const b = await ghFile("media/" + id + ".json");
+      if (!b) { res.setHeader("Cache-Control", "no-store"); res.status(404).json({ error: "No such file." }); return; }
+      res.setHeader("Cache-Control", "public, s-maxage=31536000, max-age=86400, immutable");
+      res.status(200).json({ payload: b.toString("utf8") });
+      return;
+    }
+
     if (req.method === "GET" && req.query.action === "getView") {
       const id = (req.query.id || "").toString();
       if (!VIEW_ID.test(id)) { res.status(400).json({ error: "Bad view id." }); return; }
@@ -662,6 +693,20 @@ async function handleGitHub(req, res, passcode, ghToken) {
         if (!wrap || wrap.length > 10000) { res.status(400).json({ error: "Bad viewer key." }); return; }
         await ghCommitFiles([{ path: "viewer-key.json", blobSha: await ghMakeBlob(wrap) }], "Update viewer key");
         res.status(200).json({ ok: true });
+        return;
+      }
+
+      if (action === "putMedia") {
+        const items = Array.isArray(body.items) ? body.items.slice(0, 50) : [];
+        if (!items.length) { res.status(400).json({ error: "Nothing to store." }); return; }
+        const entries = [];
+        for (const it of items) {
+          const id = (it.id || "").toString(), payload = (it.payload || "").toString();
+          if (!MEDIA_ID.test(id) || !payload || payload.length > 25 * 1024 * 1024) { res.status(400).json({ error: "Bad media entry." }); return; }
+          entries.push({ path: "media/" + id + ".json", blobSha: await ghMakeBlob(payload) });
+        }
+        await ghCommitFiles(entries, "Store media (" + entries.length + ")");
+        res.status(200).json({ ok: true, n: entries.length });
         return;
       }
 
