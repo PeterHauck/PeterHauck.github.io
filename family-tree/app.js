@@ -690,20 +690,34 @@
     if (ids.length < 2) return;
     pushUndo();
     const rows = ids.map((id) => ({ id, p: posOf(id) })).sort((a, b) => a.p.x - b.p.x);
-    const y = rows[0].p.y;
-    let x = rows[0].p.x;
-    const moves = [];
-    for (let i = 1; i < rows.length; i++) {
-      const u = unionBetween(rows[i - 1].id, rows[i].id);
+    const gapFor = (aId, bId) => {
+      const u = unionBetween(aId, bId);
       const dlabel = u ? unionDateLabel(u) : "";
       const floor = dlabel ? dlabel.length * 6.6 + 8 + 2 * HALF + 16 : 2 * HALF + 12;
       const base = mode === "sibling" ? SIBLING_GAP : (u ? coupleStandardGap(u) : COLW + 12);
-      x += Math.max(floor, base);
+      return Math.max(floor, base);
+    };
+    // A 🔒 locked person in the selection becomes the anchor: everyone else
+    // snaps OUTWARD from them (another locked person re-anchors the chain
+    // there). With no lock, the leftmost person anchors as before.
+    const anchorIdx = rows.findIndex((r) => isLocked(r.id));
+    const start = anchorIdx >= 0 ? anchorIdx : 0;
+    const moves = [];
+    let x = rows[start].p.x, y = rows[start].p.y;
+    for (let i = start + 1; i < rows.length; i++) {
+      if (isLocked(rows[i].id)) { x = rows[i].p.x; y = rows[i].p.y; continue; }
+      x += gapFor(rows[i - 1].id, rows[i].id);
+      moves.push({ id: rows[i].id, x, y, dx: x - rows[i].p.x });
+    }
+    x = rows[start].p.x; y = rows[start].p.y;
+    for (let i = start - 1; i >= 0; i--) {
+      if (isLocked(rows[i].id)) { x = rows[i].p.x; y = rows[i].p.y; continue; }
+      x -= gapFor(rows[i].id, rows[i + 1].id);
       moves.push({ id: rows[i].id, x, y, dx: x - rows[i].p.x });
     }
     applyToolMoves(moves, ids);
     save(); render();
-    toast((mode === "sibling" ? "Snapped close" : "Snapped wide") + " — " + rows.length + " people");
+    toast((mode === "sibling" ? "Snapped close" : "Snapped wide") + (anchorIdx >= 0 ? " around 🔒 " + (((personById(rows[anchorIdx].id) || {}).first) || "the locked person") : "") + " — " + rows.length + " people");
   }
   // Slide a couple sideways (keeping their own spacing) so they sit centered
   // over their children.
