@@ -692,14 +692,16 @@
     const rows = ids.map((id) => ({ id, p: posOf(id) })).sort((a, b) => a.p.x - b.p.x);
     const y = rows[0].p.y;
     let x = rows[0].p.x;
+    const moves = [];
     for (let i = 1; i < rows.length; i++) {
       const u = unionBetween(rows[i - 1].id, rows[i].id);
       const dlabel = u ? unionDateLabel(u) : "";
       const floor = dlabel ? dlabel.length * 6.6 + 8 + 2 * HALF + 16 : 2 * HALF + 12;
       const base = mode === "sibling" ? SIBLING_GAP : (u ? coupleStandardGap(u) : COLW + 12);
       x += Math.max(floor, base);
-      posMap()[rows[i].id] = { x, y };
+      moves.push({ id: rows[i].id, x, y, dx: x - rows[i].p.x });
     }
+    applyToolMoves(moves, ids);
     save(); render();
     toast((mode === "sibling" ? "Snapped close" : "Snapped wide") + " — " + rows.length + " people");
   }
@@ -713,11 +715,44 @@
     const target = (Math.min(...xs) + Math.max(...xs)) / 2;
     const A = posOf(u.a), B = posOf(u.b);
     const dx = target - (A.x + B.x) / 2;
-    posMap()[u.a] = { x: A.x + dx, y: A.y };
-    posMap()[u.b] = { x: B.x + dx, y: B.y };
+    applyToolMoves([{ id: u.a, x: A.x + dx, y: A.y, dx }, { id: u.b, x: B.x + dx, y: B.y, dx }], kids);
     save(); render();
     toast("Centered over their children");
   }
+  /* -------- groups: people locked together at their current offsets -------- */
+  const groupOf = (pid) => (state.groups || []).find((g) => g.members.includes(pid));
+  const groupMatesOf = (pid) => { const g = groupOf(pid); return g ? g.members.filter((m) => m !== pid && personById(m)) : []; };
+  function makeGroup(ids) {
+    if (!state.groups) state.groups = [];
+    state.groups.forEach((g) => { g.members = g.members.filter((m) => !ids.includes(m)); });   // leave any old group first
+    state.groups = state.groups.filter((g) => g.members.length >= 2);
+    state.groups.push({ id: "g" + Math.random().toString(36).slice(2, 8), members: ids.slice() });
+    save();
+  }
+  function ungroup(ids) {
+    if (!state.groups) return;
+    state.groups.forEach((g) => { g.members = g.members.filter((m) => !ids.includes(m)); });
+    state.groups = state.groups.filter((g) => g.members.length >= 2);
+    save();
+  }
+  // Layout tools call this instead of writing positions directly: each listed
+  // person lands on their target, and their group-mates slide sideways by the
+  // same distance so grouped people keep their set spacing. The anchors of an
+  // action (e.g. the children being centered on) never get dragged along.
+  function applyToolMoves(moves, anchorIds) {
+    const done = new Set(moves.map((m) => m.id));
+    const skip = new Set(anchorIds || []);
+    moves.forEach((m) => { posMap()[m.id] = { x: m.x, y: m.y }; });
+    moves.forEach((m) => {
+      if (!m.dx) return;
+      groupMatesOf(m.id).forEach((f) => {
+        if (done.has(f) || skip.has(f)) return;
+        done.add(f);
+        const q = posOf(f); posMap()[f] = { x: q.x + m.dx, y: q.y };
+      });
+    });
+  }
+
   // The parent couple every selected person has in common. A married-in spouse
   // counts through their partner, so a row of siblings WITH their spouses can
   // still be centered under the siblings' parents.
@@ -754,7 +789,7 @@
     const target = B ? (A.x + B.x) / 2 : A.x;
     const xs = ids.map((id) => posOf(id).x);
     const dx = target - (Math.min(...xs) + Math.max(...xs)) / 2;
-    ids.forEach((id) => { const q = posOf(id); posMap()[id] = { x: q.x + dx, y: q.y }; });
+    applyToolMoves(ids.map((id) => { const q = posOf(id); return { id, x: q.x + dx, y: q.y, dx }; }), [u.a, u.b].filter((x) => x != null));
     save(); render();
     toast("Centered under their parents");
   }
@@ -767,7 +802,7 @@
     const rows = ids.map((id) => ({ id, p: posOf(id) })).sort((a, b) => a.p.x - b.p.x);
     const first = rows[0].p.x, last = rows[rows.length - 1].p.x;
     const step = (last - first) / (rows.length - 1);
-    rows.forEach((r, i) => { posMap()[r.id] = { x: first + step * i, y: r.p.y }; });
+    applyToolMoves(rows.map((r, i) => ({ id: r.id, x: first + step * i, y: r.p.y, dx: first + step * i - r.p.x })), ids);
     save(); render();
     toast("Spaced evenly");
   }
@@ -846,7 +881,9 @@
     if (cu && childLinksOfUnion(cu.id).length) btn("⌖ Center on children", () => centerCoupleOnChildren(cu));
     if (commonParentUnion(ids)) btn("⌖ Center on parents", centerSelectionOnParents);
     if (ids.length >= 3) btn("↔ Space evenly", distributeSelection);
-    btn("Hide group", () => {
+    if (ids.length >= 2) btn("🔗 Group", () => { makeGroup(ids); render(); toast("Grouped — they now move together (any tool, any drag)"); });
+    if (ids.some((id) => groupOf(id))) btn("⛓ Ungroup", () => { ungroup(ids); render(); toast("Ungrouped — they move separately again"); });
+    btn("Hide selected", () => {
       pushUndo();
       if (!state.hidden) state.hidden = {};
       const n = selection.size;
@@ -1572,7 +1609,7 @@
           if (selection.size) toast(selection.size + " selected — drag any of them to move the group");
           return;
         }
-        if (!selection.has(id)) { selection = new Set([id]); render(); }
+        if (!selection.has(id)) { selection = new Set([id, ...groupMatesOf(id)]); render(); }
         const starts = {};
         selection.forEach((pid) => { const p = posOf(pid); starts[pid] = { x: p.x, y: p.y }; });
         drag = { mode: "group", id, startX: e.clientX, startY: e.clientY, starts, moved: false, pre: snapshot() };
@@ -3561,7 +3598,7 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, views: state.views || [], mediaKey: state.mediaKey || null };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [] };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
@@ -3572,6 +3609,7 @@
       namesSplit: !!obj.namesSplit,
       views: Array.isArray(obj.views) ? obj.views : [],
       mediaKey: obj.mediaKey || null,
+      groups: Array.isArray(obj.groups) ? obj.groups : [],
     });
   }
   /* -------- local storage: IndexedDB (roomy — holds photos/PDFs), with a
