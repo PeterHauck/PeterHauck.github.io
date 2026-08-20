@@ -719,6 +719,9 @@
     save(); render();
     toast("Centered over their children");
   }
+  // Pinned people: their position is fixed — no drag, no layout tool, no
+  // auto-arrange moves them until they're unlocked.
+  const isLocked = (id) => !!(state.locked && state.locked[id]);
   /* -------- groups: people locked together at their current offsets -------- */
   const groupOf = (pid) => (state.groups || []).find((g) => g.members.includes(pid));
   const groupMatesOf = (pid) => { const g = groupOf(pid); return g ? g.members.filter((m) => m !== pid && personById(m)) : []; };
@@ -742,11 +745,11 @@
   function applyToolMoves(moves, anchorIds) {
     const done = new Set(moves.map((m) => m.id));
     const skip = new Set(anchorIds || []);
-    moves.forEach((m) => { posMap()[m.id] = { x: m.x, y: m.y }; });
+    moves.forEach((m) => { if (!isLocked(m.id)) posMap()[m.id] = { x: m.x, y: m.y }; });
     moves.forEach((m) => {
-      if (!m.dx) return;
+      if (!m.dx || isLocked(m.id)) return;
       groupMatesOf(m.id).forEach((f) => {
-        if (done.has(f) || skip.has(f)) return;
+        if (done.has(f) || skip.has(f) || isLocked(f)) return;
         done.add(f);
         const q = posOf(f); posMap()[f] = { x: q.x + m.dx, y: q.y };
       });
@@ -881,6 +884,15 @@
     if (cu && childLinksOfUnion(cu.id).length) btn("⌖ Center on children", () => centerCoupleOnChildren(cu));
     if (commonParentUnion(ids)) btn("⌖ Center on parents", centerSelectionOnParents);
     if (ids.length >= 3) btn("↔ Space evenly", distributeSelection);
+    if (ids.some((id) => !isLocked(id))) btn("🔒 Lock", () => {
+      if (!state.locked) state.locked = {};
+      ids.forEach((id) => { state.locked[id] = true; });
+      save(); render(); toast("Locked in place — nothing moves them until you unlock");
+    });
+    if (ids.some((id) => isLocked(id))) btn("🔓 Unlock", () => {
+      ids.forEach((id) => { if (state.locked) delete state.locked[id]; });
+      save(); render(); toast("Unlocked — they can move again");
+    });
     if (ids.length >= 2) btn("🔗 Group", () => { makeGroup(ids); render(); toast("Grouped — they now move together (any tool, any drag)"); });
     if (ids.some((id) => groupOf(id))) btn("⛓ Ungroup", () => { ungroup(ids); render(); toast("Ungrouped — they move separately again"); });
     btn("Hide selected", () => {
@@ -960,6 +972,12 @@
       badge.appendChild(el("line", { class: "doc-badge-mark", x1: -1.4, y1: 2, x2: 1.4, y2: 2 }));
       badge.appendChild(el("title", null, txt(p.docs.length + " attached record" + (p.docs.length > 1 ? "s" : ""))));
       g.appendChild(badge);
+    }
+
+    if (isLocked(p.id)) {
+      const lk = el("text", { class: "lock-badge", x: -HALF + 2, y: -HALF + 12 }, txt("🔒"));
+      lk.appendChild(el("title", null, txt("Locked in place")));
+      g.appendChild(lk);
     }
 
     // Four directional add-a-relative "+"s, revealed on hover (CSS). Left/right add
@@ -1141,7 +1159,7 @@
     visiblePersons().forEach((p) => {
       if (exceptIds && exceptIds.has(p.id)) return;
       const q = posOf(p.id);
-      if (q.x >= x) posMap()[p.id] = { x: q.x + width, y: q.y };
+      if (q.x >= x && !isLocked(p.id)) posMap()[p.id] = { x: q.x + width, y: q.y };
     });
   }
   const spotOccupied = (x, y, exceptId) => visiblePersons().some((p) => p.id !== exceptId && Math.abs(posOf(p.id).x - x) < COLW * 0.85 && Math.abs(posOf(p.id).y - y) < ROWH * 0.55);
@@ -1609,6 +1627,7 @@
           if (selection.size) toast(selection.size + " selected — drag any of them to move the group");
           return;
         }
+        if (isLocked(id)) toast("🔒 Locked in place — unlock them to move them");
         if (!selection.has(id)) { selection = new Set([id, ...groupMatesOf(id)]); render(); }
         const starts = {};
         selection.forEach((pid) => { const p = posOf(pid); starts[pid] = { x: p.x, y: p.y }; });
@@ -1647,7 +1666,7 @@
     else if (drag.mode === "group") {
       if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
       const wdx = dx / view.scale, wdy = dy / view.scale;
-      for (const pid in drag.starts) posMap()[pid] = { x: drag.starts[pid].x + wdx, y: drag.starts[pid].y + wdy };
+      for (const pid in drag.starts) { if (isLocked(pid)) continue; posMap()[pid] = { x: drag.starts[pid].x + wdx, y: drag.starts[pid].y + wdy }; }
       render();
     }
     else if (drag.mode === "marquee") {
@@ -1736,8 +1755,8 @@
     const a = [...familyBlock(selectedId)].map((pid) => ({ pid, p: posOf(pid) }));
     const b = [...familyBlock(other)].map((pid) => ({ pid, p: posOf(pid) }));
     pushUndo();
-    a.forEach(({ pid, p }) => (posMap()[pid] = { x: p.x + delta, y: p.y }));
-    b.forEach(({ pid, p }) => (posMap()[pid] = { x: p.x - delta, y: p.y }));
+    a.forEach(({ pid, p }) => { if (!isLocked(pid)) posMap()[pid] = { x: p.x + delta, y: p.y }; });
+    b.forEach(({ pid, p }) => { if (!isLocked(pid)) posMap()[pid] = { x: p.x - delta, y: p.y }; });
     save(); render();
   }
 
@@ -1771,7 +1790,7 @@
       const n = ys.length;
       const ty = n % 2 ? ys[(n - 1) / 2] : (ys[n / 2 - 1] + ys[n / 2]) / 2;  // median height
       for (const it of band.items) {
-        if (Math.abs(it.y - ty) > 0.5) { posMap()[it.id] = { x: it.x, y: ty }; moved++; }
+        if (Math.abs(it.y - ty) > 0.5 && !isLocked(it.id)) { posMap()[it.id] = { x: it.x, y: ty }; moved++; }
       }
     }
     if (!moved) { toast("Everything's already lined up"); return; }
@@ -3598,7 +3617,7 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [] };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [], locked: state.locked || {} };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
@@ -3610,6 +3629,7 @@
       views: Array.isArray(obj.views) ? obj.views : [],
       mediaKey: obj.mediaKey || null,
       groups: Array.isArray(obj.groups) ? obj.groups : [],
+      locked: obj.locked && typeof obj.locked === "object" ? obj.locked : {},
     });
   }
   /* -------- local storage: IndexedDB (roomy — holds photos/PDFs), with a
@@ -4402,9 +4422,10 @@
   { const b = $("#tbViews"); if (b) b.onclick = openViewSheet; }
   $("#pmArrange").onclick = () => {
     pushUndo();
-    if (viewPreview) viewPreview.view.manual = {};             // reset only this view's arrangement
-    else if (hiddenScope) state.manualHidden = {};
-    else state.manual = {};
+    const keepPinned = (map) => { const out = {}; Object.keys(state.locked || {}).forEach((id) => { if (map && map[id]) out[id] = map[id]; }); return out; };
+    if (viewPreview) viewPreview.view.manual = keepPinned(viewPreview.view.manual);   // reset only this view's arrangement
+    else if (hiddenScope) state.manualHidden = keepPinned(state.manualHidden);
+    else state.manual = keepPinned(state.manual);
     selection = new Set(); relayoutAndSave(); fitView(); toast("Auto-arranged");
   };
   $("#peopleFilter").addEventListener("input", () => updatePeopleList());
