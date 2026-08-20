@@ -698,20 +698,21 @@
       return Math.max(floor, base);
     };
     // A 🔒 locked person in the selection becomes the anchor: everyone else
-    // snaps OUTWARD from them (another locked person re-anchors the chain
-    // there). With no lock, the leftmost person anchors as before.
+    // snaps OUTWARD from them. Two locked people would fight over the spacing,
+    // so that's refused outright. With no lock, the leftmost anchors as before.
+    const lockedCount = rows.filter((r) => isLocked(r.id)).length;
+    if (lockedCount >= 2) { toast("⚠️ Can't snap — this selection has " + lockedCount + " locked people. Unlock all but one first."); return; }
     const anchorIdx = rows.findIndex((r) => isLocked(r.id));
     const start = anchorIdx >= 0 ? anchorIdx : 0;
     const moves = [];
-    let x = rows[start].p.x, y = rows[start].p.y;
+    let x = rows[start].p.x;
+    const y = rows[start].p.y;
     for (let i = start + 1; i < rows.length; i++) {
-      if (isLocked(rows[i].id)) { x = rows[i].p.x; y = rows[i].p.y; continue; }
       x += gapFor(rows[i - 1].id, rows[i].id);
       moves.push({ id: rows[i].id, x, y, dx: x - rows[i].p.x });
     }
-    x = rows[start].p.x; y = rows[start].p.y;
+    x = rows[start].p.x;
     for (let i = start - 1; i >= 0; i--) {
-      if (isLocked(rows[i].id)) { x = rows[i].p.x; y = rows[i].p.y; continue; }
       x -= gapFor(rows[i].id, rows[i + 1].id);
       moves.push({ id: rows[i].id, x, y, dx: x - rows[i].p.x });
     }
