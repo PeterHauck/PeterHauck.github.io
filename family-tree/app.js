@@ -663,6 +663,63 @@
   // master tree, a hidden branch, or a VIEW. Each view keeps its own private
   // arrangement — moving someone inside a view never moves them on the master
   // tree (and vice versa: unmoved people follow the master's arrangement).
+  function unionDateLabel(u) {
+    const dbits = [];
+    if (u.marriage) dbits.push((u.status === "partners" ? "" : "m. ") + (isISODate(u.marriage) ? fmtDateShort(u.marriage) : u.marriage));
+    if (u.status === "divorced" && u.divorce) dbits.push("div. " + u.divorce);
+    return dbits.length ? dbits.join("   ") : "";
+  }
+  const unionBetween = (aId, bId) => state.unions.find((u) => (u.a === aId && u.b === bId) || (u.a === bId && u.b === aId));
+  // The standard spacing for a couple: a consistent base, widened just enough
+  // that this couple's marriage/divorce label always fits between their shapes.
+  function coupleStandardGap(u) {
+    const dlabel = unionDateLabel(u);
+    const labelW = dlabel ? dlabel.length * 6.6 + 8 : 0;
+    return Math.max(COLW + 12, labelW + 2 * HALF + 24);
+  }
+  // Snap ANY two neighbours to the standard spacing: the left one stays, the
+  // right one lines up level at the standard distance — widened automatically
+  // for couples so their marriage/divorce dates always stay visible.
+  function snapPairSpacing(aId, bId) {
+    pushUndo();
+    const A = posOf(aId), B = posOf(bId);
+    const leftId = A.x <= B.x ? aId : bId, rightId = A.x <= B.x ? bId : aId;
+    const u = unionBetween(aId, bId);
+    const gap = u ? coupleStandardGap(u) : COLW + 12;
+    const L = posOf(leftId);
+    posMap()[rightId] = { x: L.x + gap, y: L.y };
+    save(); render();
+    toast("Snapped to standard spacing");
+  }
+  // Slide a couple sideways (keeping their own spacing) so they sit centered
+  // over their children.
+  function centerCoupleOnChildren(u) {
+    const kids = childLinksOfUnion(u.id).map((l) => l.child).filter((id) => personById(id) && inView(id));
+    if (!kids.length) { toast("This couple has no children to center on"); return; }
+    pushUndo();
+    const xs = kids.map((id) => posOf(id).x);
+    const target = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const A = posOf(u.a), B = posOf(u.b);
+    const dx = target - (A.x + B.x) / 2;
+    posMap()[u.a] = { x: A.x + dx, y: A.y };
+    posMap()[u.b] = { x: B.x + dx, y: B.y };
+    save(); render();
+    toast("Centered over their children");
+  }
+  // Evenly distribute the selected people: leftmost and rightmost stay put,
+  // everyone between them gets equal spacing (each keeps their own row).
+  function distributeSelection() {
+    const ids = [...selection].filter((id) => personById(id));
+    if (ids.length < 3) { toast("Select at least three people to space evenly"); return; }
+    pushUndo();
+    const rows = ids.map((id) => ({ id, p: posOf(id) })).sort((a, b) => a.p.x - b.p.x);
+    const first = rows[0].p.x, last = rows[rows.length - 1].p.x;
+    const step = (last - first) / (rows.length - 1);
+    rows.forEach((r, i) => { posMap()[r.id] = { x: first + step * i, y: r.p.y }; });
+    save(); render();
+    toast("Spaced evenly");
+  }
+
   // Effective family colour: a person's own colour if set, otherwise inherited
   // from their FATHER's line (falling back to the mother's) — so newly added
   // people take their family's colour automatically without hand-painting.
@@ -722,22 +779,28 @@
     let bar = document.getElementById("selBar");
     const show = rearrange && !readonly && !hiddenScope && selection.size > 0;
     if (!show) { if (bar) bar.remove(); return; }
-    if (!bar) {
-      bar = document.createElement("div"); bar.id = "selBar";
-      bar.innerHTML = '<span class="sb-text"></span><button type="button" id="sbHide">Hide group</button><button type="button" id="sbClear">Clear</button>';
-      document.body.appendChild(bar);
-      bar.querySelector("#sbHide").onclick = () => {
-        pushUndo();
-        if (!state.hidden) state.hidden = {};
-        const n = selection.size;
-        selection.forEach((id) => { state.hidden[id] = true; if (id === selectedId) { selectedId = null; resetPersonForm(); } });
-        selection = new Set();
-        relayoutAndSave(); fitView();
-        toast("Hid " + n + " people — the counter chip at the top brings everyone back");
-      };
-      bar.querySelector("#sbClear").onclick = () => { selection = new Set(); render(); };
-    }
-    bar.querySelector(".sb-text").innerHTML = "<b>" + selection.size + "</b> selected";
+    if (!bar) { bar = document.createElement("div"); bar.id = "selBar"; document.body.appendChild(bar); }
+    bar.textContent = "";
+    const txtEl = document.createElement("span"); txtEl.className = "sb-text";
+    txtEl.innerHTML = "<b>" + selection.size + "</b> selected"; bar.appendChild(txtEl);
+    const btn = (label, fn) => { const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.onclick = fn; bar.appendChild(b); return b; };
+    // Context actions: a selected COUPLE gets spacing/centering, 3+ get distribution.
+    const ids = [...selection];
+    const cu = ids.length === 2 ? unionBetween(ids[0], ids[1]) : null;
+    if (ids.length === 2) btn("⇄ Snap spacing", () => snapPairSpacing(ids[0], ids[1]));
+    if (cu && childLinksOfUnion(cu.id).length) btn("⌖ Center on children", () => centerCoupleOnChildren(cu));
+    if (ids.length >= 3) btn("↔ Space evenly", distributeSelection);
+    btn("Hide group", () => {
+      pushUndo();
+      if (!state.hidden) state.hidden = {};
+      const n = selection.size;
+      selection.forEach((id) => { state.hidden[id] = true; if (id === selectedId) { selectedId = null; resetPersonForm(); } });
+      selection = new Set();
+      relayoutAndSave(); fitView();
+      toast("Hid " + n + " people — the counter chip at the top brings everyone back");
+    });
+    const clr = btn("Clear", () => { selection = new Set(); render(); });
+    clr.id = "sbClear";
   }
 
   function el(tag, attrs, children) {
@@ -1231,13 +1294,12 @@
         [-7, 5].forEach((dx) => gu.appendChild(el("line", { class: "divorce-tick", x1: midX + dx + 5, y1: segY - 11, x2: midX + dx - 5, y2: segY + 11 })));
       }
       // Marriage (and divorce) date, sitting just above the line.
-      const dbits = [];
-      if (u.marriage) dbits.push((u.status === "partners" ? "" : "m. ") + (isISODate(u.marriage) ? fmtDateShort(u.marriage) : u.marriage));
-      if (u.status === "divorced" && u.divorce) dbits.push("div. " + u.divorce);
-      if (dbits.length) {
-        const dlabel = dbits.join("   ");
+      {
+        const dlabel = unionDateLabel(u);
+        if (dlabel) {
         gu.appendChild(el("rect", { class: "union-date-bg", x: midX - (dlabel.length * 3.3) - 4, y: segY - 21, width: dlabel.length * 6.6 + 8, height: 15, rx: 4 }));
         gu.appendChild(el("text", { class: "union-date", x: midX, y: segY - 10 }, txt(dlabel)));
+        }
       }
       if (!readonly) {
         // Hovering the marriage line reveals a + (add a child of this couple) and
