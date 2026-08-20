@@ -677,19 +677,24 @@
     const labelW = dlabel ? dlabel.length * 6.6 + 8 : 0;
     return Math.max(COLW + 12, labelW + 2 * HALF + 24);
   }
-  // Snap ANY two neighbours to the standard spacing: the left one stays, the
-  // right one lines up level at the standard distance — widened automatically
-  // for couples so their marriage/divorce dates always stay visible.
-  function snapPairSpacing(aId, bId) {
+  // Snap the selected people to the standard spacing, chained left to right:
+  // the leftmost stays, each next person lines up level beside the previous one
+  // at the standard distance — widened automatically wherever two neighbours
+  // are a couple, so their marriage/divorce dates always stay visible.
+  function snapChainSpacing() {
+    const ids = [...selection].filter((id) => personById(id));
+    if (ids.length < 2) return;
     pushUndo();
-    const A = posOf(aId), B = posOf(bId);
-    const leftId = A.x <= B.x ? aId : bId, rightId = A.x <= B.x ? bId : aId;
-    const u = unionBetween(aId, bId);
-    const gap = u ? coupleStandardGap(u) : COLW + 12;
-    const L = posOf(leftId);
-    posMap()[rightId] = { x: L.x + gap, y: L.y };
+    const rows = ids.map((id) => ({ id, p: posOf(id) })).sort((a, b) => a.p.x - b.p.x);
+    const y = rows[0].p.y;
+    let x = rows[0].p.x;
+    for (let i = 1; i < rows.length; i++) {
+      const u = unionBetween(rows[i - 1].id, rows[i].id);
+      x += u ? coupleStandardGap(u) : COLW + 12;
+      posMap()[rows[i].id] = { x, y };
+    }
     save(); render();
-    toast("Snapped to standard spacing");
+    toast("Snapped " + rows.length + " people to standard spacing");
   }
   // Slide a couple sideways (keeping their own spacing) so they sit centered
   // over their children.
@@ -787,7 +792,7 @@
     // Context actions: a selected COUPLE gets spacing/centering, 3+ get distribution.
     const ids = [...selection];
     const cu = ids.length === 2 ? unionBetween(ids[0], ids[1]) : null;
-    if (ids.length === 2) btn("⇄ Snap spacing", () => snapPairSpacing(ids[0], ids[1]));
+    if (ids.length >= 2) btn("⇄ Snap spacing", snapChainSpacing);
     if (cu && childLinksOfUnion(cu.id).length) btn("⌖ Center on children", () => centerCoupleOnChildren(cu));
     if (ids.length >= 3) btn("↔ Space evenly", distributeSelection);
     btn("Hide group", () => {
