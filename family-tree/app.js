@@ -677,11 +677,15 @@
     const labelW = dlabel ? dlabel.length * 6.6 + 8 : 0;
     return Math.max(COLW + 12, labelW + 2 * HALF + 24);
   }
-  // Snap the selected people to the standard spacing, chained left to right:
-  // the leftmost stays, each next person lines up level beside the previous one
-  // at the standard distance — widened automatically wherever two neighbours
-  // are a couple, so their marriage/divorce dates always stay visible.
-  function snapChainSpacing() {
+  // Two snap presets, chained left to right (the leftmost person stays put,
+  //  everyone else lines up level beside the previous person):
+  //   Snap wide  — the roomier standard, widened per couple so marriage/
+  //                divorce dates always fit between the shapes.
+  //   Snap close — a tighter standard for rows of siblings/children.
+  // Both respect the same floors: shapes never overlap, and a couple can never
+  // get closer than its date label needs.
+  const SIBLING_GAP = 140;
+  function snapChainSpacing(mode) {
     const ids = [...selection].filter((id) => personById(id));
     if (ids.length < 2) return;
     pushUndo();
@@ -690,11 +694,14 @@
     let x = rows[0].p.x;
     for (let i = 1; i < rows.length; i++) {
       const u = unionBetween(rows[i - 1].id, rows[i].id);
-      x += u ? coupleStandardGap(u) : COLW + 12;
+      const dlabel = u ? unionDateLabel(u) : "";
+      const floor = dlabel ? dlabel.length * 6.6 + 8 + 2 * HALF + 16 : 2 * HALF + 12;
+      const base = mode === "sibling" ? SIBLING_GAP : (u ? coupleStandardGap(u) : COLW + 12);
+      x += Math.max(floor, base);
       posMap()[rows[i].id] = { x, y };
     }
     save(); render();
-    toast("Snapped " + rows.length + " people to standard spacing");
+    toast((mode === "sibling" ? "Snapped close" : "Snapped wide") + " — " + rows.length + " people");
   }
   // Slide a couple sideways (keeping their own spacing) so they sit centered
   // over their children.
@@ -792,7 +799,10 @@
     // Context actions: a selected COUPLE gets spacing/centering, 3+ get distribution.
     const ids = [...selection];
     const cu = ids.length === 2 ? unionBetween(ids[0], ids[1]) : null;
-    if (ids.length >= 2) btn("⇄ Snap spacing", snapChainSpacing);
+    if (ids.length >= 2) {
+      btn("⇤ Snap close", () => snapChainSpacing("sibling"));
+      btn("⇔ Snap wide", () => snapChainSpacing("couple"));
+    }
     if (cu && childLinksOfUnion(cu.id).length) btn("⌖ Center on children", () => centerCoupleOnChildren(cu));
     if (ids.length >= 3) btn("↔ Space evenly", distributeSelection);
     btn("Hide group", () => {
