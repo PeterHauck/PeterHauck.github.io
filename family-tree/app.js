@@ -2254,8 +2254,9 @@
   $("#photoDrop").onclick = () => $("#photoInput").click();
   $("#photoClear").onclick = () => { pendingPhoto = null; photoDirty = true; updatePhotoPreview(); };
   $("#photoUrlBtn").onclick = () => setPhotoFromUrl($("#photoUrl").value);
-  $("#photoInput").addEventListener("change", (e) => {
-    const file = e.target.files[0]; if (!file) return;
+  $("#photoInput").addEventListener("change", async (e) => {
+    let file = e.target.files[0]; if (!file) return;
+    try { file = await normalizeImageFile(file); } catch (err) { toast("Couldn’t convert that HEIC photo — try exporting it as JPG."); return; }
     const reader = new FileReader();
     reader.onload = () => openPhotoAdjust(reader.result, (photo) => { pendingPhoto = photo; photoDirty = true; updatePhotoPreview(); });
     reader.onerror = () => toast("Couldn’t read that file.");
@@ -2894,7 +2895,7 @@
       <label class="field" id="dTitleField" hidden><span>What is this record?</span><input type="text" id="dTitle" placeholder="e.g. South Dakota Basketball Hall of Fame"/></label>
       <label class="field"><span>Link to it</span><input type="text" id="dUrl" placeholder="https://…"/></label>
       <label class="field"><span>…or paste the text</span><textarea id="dText" rows="5" placeholder="Paste the text here…"></textarea></label>
-      <label class="field"><span>…or upload a photo / PDF</span><input type="file" id="dFile" accept="application/pdf,image/*,.txt,.html"/></label>
+      <label class="field"><span>…or upload a photo / PDF</span><input type="file" id="dFile" accept="application/pdf,image/*,.heic,.heif,.txt,.html"/></label>
       <div class="err" id="dErr" style="color:var(--divorce);font-size:12.5px;min-height:16px"></div>
       <div class="hint" id="dStatus"></div>
       <div class="btn-row"><button class="btn" data-cancel>Cancel</button><button class="btn primary" id="dSave">Save</button></div></div>`;
@@ -2925,10 +2926,14 @@
       err.textContent = "";
       const url = back.querySelector("#dUrl").value.trim();
       const text = back.querySelector("#dText").value.trim();
-      const file = back.querySelector("#dFile").files[0];
+      let file = back.querySelector("#dFile").files[0];
       let kind = "link", content = "", fetchedImage = "", scrapedText = "", fileB64 = "", fileMt = "";
       if (file) {
         if (file.size > 8 * 1024 * 1024) { err.textContent = "File is too large (max 8 MB)."; return; }
+        if (isHeicFile(file)) {
+          try { status.textContent = "Converting iPhone photo (HEIC)…"; file = await normalizeImageFile(file); status.textContent = ""; }
+          catch (e) { err.textContent = "Couldn’t convert that HEIC photo — try exporting it as JPG."; status.textContent = ""; return; }
+        }
         fileMt = file.type;
         if (file.type === "application/pdf") { kind = "pdf"; fileB64 = await fileToBase64(file); content = "data:application/pdf;base64," + fileB64; }
         else if (file.type.startsWith("image/")) { kind = "image"; fileB64 = await fileToBase64(file); content = "data:" + file.type + ";base64," + fileB64; }
@@ -3378,6 +3383,31 @@
   // The "owner" is a device holding the import passcode (the secret only used to
   // save the tree). Private notes are shown/edited only for the owner.
   const isOwner = () => { try { return !!(localStorage.getItem("familyTree.importPass") || "").trim(); } catch (e) { return false; } };
+  // HEIC/HEIF (iPhone) photos: browsers can't display them, so they're
+  // converted to JPEG in the browser first. The converter (vendored
+  // heic2any, ~1.3MB) loads on demand — only the first time a HEIC file is
+  // actually picked — and never on normal page loads.
+  let heicLibP = null;
+  function loadHeicLib() {
+    if (window.heic2any) return Promise.resolve();
+    if (!heicLibP) heicLibP = new Promise((resolve, reject) => {
+      const sc = document.createElement("script");
+      sc.src = "heic2any.min.js?v=" + (window.FAMILY_DATA_VERSION || Date.now());
+      sc.onload = resolve;
+      sc.onerror = () => { heicLibP = null; reject(new Error("converter failed to load")); };
+      document.head.appendChild(sc);
+    });
+    return heicLibP;
+  }
+  const isHeicFile = (file) => !!file && (/heic|heif/i.test(file.type || "") || /\.(heic|heif)$/i.test(file.name || ""));
+  async function normalizeImageFile(file) {
+    if (!isHeicFile(file)) return file;
+    toast("Converting iPhone photo (HEIC)…");
+    await loadHeicLib();
+    const out = await window.heic2any({ blob: file, toType: "image/jpeg", quality: 0.9 });
+    const blob = Array.isArray(out) ? out[0] : out;
+    return new File([blob], (file.name || "photo").replace(/\.(heic|heif)$/i, "") + ".jpg", { type: "image/jpeg" });
+  }
   function readFileDataURL(file) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(file); }); }
 
   function personDatesLine(p) {
@@ -3485,9 +3515,10 @@
     if (isOwner()) {
       const s = section("Photo", "pcard-photo-sec");
       const mobileAdded = !!p.photoMobile;
-      const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*"; fileInput.style.display = "none";
+      const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*,.heic,.heif"; fileInput.style.display = "none";
       const setFromFile = async (file) => {
         if (!file) return;
+        try { file = await normalizeImageFile(file); } catch (e) { toast("Couldn’t convert that HEIC photo — try a JPG."); return; }
         let photo = null; try { const dataUrl = await readFileDataURL(file); photo = await imageDataToPhoto(dataUrl); } catch (e) {}
         if (!photo) { toast("Couldn’t read that image"); return; }
         try { p.photoRef = await mediaUpload(photo); delete p.photo; }
