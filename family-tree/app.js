@@ -1170,11 +1170,14 @@
   const hasPos = (id) => !!(posMap()[id] || layoutPos[id]);
   // Shift everyone at/right of x rightward by `width`, keeping their relative
   // positions, so a gap opens at x. Pins them so the shift survives re-layout.
+  // 🔒 Locked people shift too: a lock protects someone's PLACE IN THE LAYOUT
+  // from arranging tools — when the whole tree slides over to make room for a
+  // new person, locked people must ride along or the layout tears around them.
   function makeRoomAt(x, width, exceptIds) {
     visiblePersons().forEach((p) => {
       if (exceptIds && exceptIds.has(p.id)) return;
       const q = posOf(p.id);
-      if (q.x >= x && !isLocked(p.id)) posMap()[p.id] = { x: q.x + width, y: q.y };
+      if (q.x >= x) posMap()[p.id] = { x: q.x + width, y: q.y };
     });
   }
   const spotOccupied = (x, y, exceptId) => visiblePersons().some((p) => p.id !== exceptId && Math.abs(posOf(p.id).x - x) < COLW * 0.85 && Math.abs(posOf(p.id).y - y) < ROWH * 0.55);
