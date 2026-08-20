@@ -718,6 +718,46 @@
     save(); render();
     toast("Centered over their children");
   }
+  // The parent couple every selected person has in common. A married-in spouse
+  // counts through their partner, so a row of siblings WITH their spouses can
+  // still be centered under the siblings' parents.
+  function commonParentUnion(ids) {
+    const inSel = new Set(ids);
+    const unionsFor = (id) => {
+      const own = parentLinksOfPerson(id).map((l) => l.union);
+      if (own.length) return own;
+      const viaSpouse = [];
+      unionsOfPerson(id).forEach((u) => {
+        const o = u.a === id ? u.b : u.a;
+        if (o != null && inSel.has(o)) parentLinksOfPerson(o).forEach((l) => viaSpouse.push(l.union));
+      });
+      return viaSpouse;
+    };
+    let common = null;
+    for (const id of ids) {
+      const us = new Set(unionsFor(id));
+      if (!us.size) return null;
+      if (common === null) common = us;
+      else { common = new Set([...common].filter((x) => us.has(x))); if (!common.size) return null; }
+    }
+    const uid = common ? [...common][0] : null;
+    return uid ? unionById(uid) : null;
+  }
+  // Slide the selected children sideways as a group (keeping their spacing)
+  // so they sit centered under their parents.
+  function centerSelectionOnParents() {
+    const ids = [...selection].filter((id) => personById(id));
+    const u = commonParentUnion(ids);
+    if (!u) { toast("Select children who share the same parents"); return; }
+    pushUndo();
+    const A = posOf(u.a), B = u.b != null ? posOf(u.b) : null;
+    const target = B ? (A.x + B.x) / 2 : A.x;
+    const xs = ids.map((id) => posOf(id).x);
+    const dx = target - (Math.min(...xs) + Math.max(...xs)) / 2;
+    ids.forEach((id) => { const q = posOf(id); posMap()[id] = { x: q.x + dx, y: q.y }; });
+    save(); render();
+    toast("Centered under their parents");
+  }
   // Evenly distribute the selected people: leftmost and rightmost stay put,
   // everyone between them gets equal spacing (each keeps their own row).
   function distributeSelection() {
@@ -804,6 +844,7 @@
       btn("⇔ Snap wide", () => snapChainSpacing("couple"));
     }
     if (cu && childLinksOfUnion(cu.id).length) btn("⌖ Center on children", () => centerCoupleOnChildren(cu));
+    if (commonParentUnion(ids)) btn("⌖ Center on parents", centerSelectionOnParents);
     if (ids.length >= 3) btn("↔ Space evenly", distributeSelection);
     btn("Hide group", () => {
       pushUndo();
