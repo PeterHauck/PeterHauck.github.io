@@ -701,3 +701,4 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 @media (max-width: 720px) {
   #tbViews:not([hidden]) { display: flex; }
 }
+.lock-badge { font-size: 13px; pointer-events: none; }
