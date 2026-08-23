@@ -1972,46 +1972,65 @@
     const people = visiblePersons();
     if (people.length < 2) { toast("Nothing to tidy yet"); return; }
     const ids = new Set(people.map((p) => p.id));
-    const gen = new Map();
-    const neighbours = (id) => {
-      const out = [];
-      unionsOfPerson(id).forEach((u) => {
-        const o = u.a === id ? u.b : u.a;
-        if (o != null && ids.has(o)) out.push([o, 0]);
-        childLinksOfUnion(u.id).forEach((l) => { if (ids.has(l.child)) out.push([l.child, 1]); });
+    // 1) merge every couple first, so a marriage can NEVER split a line —
+    //    spouses land on the same row no matter which path reached them
+    const up = new Map();
+    people.forEach((p) => up.set(p.id, p.id));
+    const find = (x) => { let r = x; while (up.get(r) !== undefined && up.get(r) !== r) r = up.get(r); up.set(x, r); return r; };
+    state.unions.forEach((u) => { if (u.b != null && ids.has(u.a) && ids.has(u.b)) { const a = find(u.a), b = find(u.b); if (a !== b) up.set(a, b); } });
+    // 2) generations over the condensed couple graph (children one row down)
+    const adjR = new Map();
+    const addE = (a, b, d) => { if (!adjR.has(a)) adjR.set(a, []); adjR.get(a).push([b, d]); };
+    state.unions.forEach((u) => {
+      const anchor = ids.has(u.a) ? u.a : (u.b != null && ids.has(u.b) ? u.b : null);
+      if (anchor == null) return;
+      const par = find(anchor);
+      childLinksOfUnion(u.id).forEach((l) => {
+        if (!ids.has(l.child)) return;
+        const c = find(l.child);
+        addE(par, c, 1); addE(c, par, -1);
       });
-      parentLinksOfPerson(id).forEach((l) => {
-        const u = unionById(l.union); if (!u) return;
-        [u.a, u.b].forEach((x) => { if (x != null && ids.has(x)) out.push([x, -1]); });
-      });
-      return out;
-    };
+    });
+    const gen = new Map(), compOf = new Map();
     const comps = [];
     people.forEach((p) => {
-      if (gen.has(p.id)) return;
-      const comp = [p.id];
-      gen.set(p.id, 0);
-      for (let i = 0; i < comp.length; i++) {
-        neighbours(comp[i]).forEach(([o, d]) => { if (!gen.has(o)) { gen.set(o, gen.get(comp[i]) + d); comp.push(o); } });
-      }
+      const r0 = find(p.id);
+      if (gen.has(r0)) return;
+      const comp = [r0]; gen.set(r0, 0); compOf.set(r0, comps.length);
+      for (let i = 0; i < comp.length; i++)
+        (adjR.get(comp[i]) || []).forEach(([o, d]) => { if (!gen.has(o)) { gen.set(o, gen.get(comp[i]) + d); compOf.set(o, comps.length); comp.push(o); } });
       comps.push(comp);
     });
+    const genOf = (pid) => gen.get(find(pid)) || 0;
+    const members = comps.map(() => []);
+    people.forEach((p) => members[compOf.get(find(p.id))].push(p.id));
+    // 3) a baseline per family: a 🔒 locked member pins it exactly; otherwise
+    //    the median offset. Then every unlocked family snaps onto ONE shared
+    //    grid (the locked — else biggest — family sets it), so the generation
+    //    lines are the SAME across all trees on the canvas.
+    const y0s = members.map((mem) => {
+      const lockedId = mem.find((id) => isLocked(id));
+      if (lockedId != null) return { y: posOf(lockedId).y - genOf(lockedId) * ROWH, locked: true, n: mem.length };
+      const offs = mem.map((id) => posOf(id).y - genOf(id) * ROWH).sort((a, b) => a - b);
+      return { y: offs[Math.floor(offs.length / 2)], locked: false, n: mem.length };
+    });
+    const ref = y0s.filter((v) => v.locked).sort((a, b) => b.n - a.n)[0] || y0s.slice().sort((a, b) => b.n - a.n)[0];
+    y0s.forEach((v) => { if (!v.locked && v !== ref) v.y = ref.y + Math.round((v.y - ref.y) / ROWH) * ROWH; });
+    const lineFor = (pid) => y0s[compOf.get(find(pid))].y + genOf(pid) * ROWH;
+    // 4) move every appearance onto its line — main nodes AND copies alike
     let moved = 0;
     const pre = snapshot();
-    comps.forEach((comp) => {
-      // baseline: a locked member pins the grid; else the median offset wins
-      const lockedId = comp.find((id) => isLocked(id));
-      let y0;
-      if (lockedId != null) y0 = posOf(lockedId).y - gen.get(lockedId) * ROWH;
-      else {
-        const offs = comp.map((id) => posOf(id).y - gen.get(id) * ROWH).sort((a, b) => a - b);
-        y0 = offs[Math.floor(offs.length / 2)];
-      }
-      comp.forEach((id) => {
-        if (isLocked(id)) return;
-        const q = posOf(id), ty = y0 + gen.get(id) * ROWH;
-        if (Math.abs(q.y - ty) > 0.5) { posMap()[id] = { x: q.x, y: ty }; moved++; }
-      });
+    people.forEach((p) => {
+      if (isLocked(p.id)) return;
+      const q = posOf(p.id), ty = lineFor(p.id);
+      if (Math.abs(q.y - ty) > 0.5) { posMap()[p.id] = { x: q.x, y: ty }; moved++; }
+    });
+    Object.keys(copyPos).forEach((nk) => {
+      if (isLocked(nk)) return;
+      const pid = pidOf(nk);
+      if (!ids.has(pid)) return;
+      const q = nkPos(nk), ty = lineFor(pid);
+      if (Math.abs(q.y - ty) > 0.5) { (state.echoPos || (state.echoPos = {}))[nk] = { x: q.x, y: ty }; moved++; }
     });
     if (!moved) { toast("Everything's already lined up — one line per generation"); return; }
     pushUndo(pre);
