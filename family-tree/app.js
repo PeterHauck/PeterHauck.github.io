@@ -1384,43 +1384,56 @@
   // only extra is a ⤴ badge for hopping between a person's appearances.
   let copyPlacements = [], copySpots = {};
   // The far-away child REPEATED on their parents' side — them, their spouse(s),
-  // and their children — so each branch reads complete on its own. Each copy
+  // and their WHOLE descendant branch (children, children's spouses,
+  // grandchildren, …) so each side reads complete on its own. Each copy
   // starts at a tidy default spot but can be dragged anywhere (stored per
   // jump+person in state.echoPos); the connecting lines follow the shapes.
   function renderEchoCluster(gu, uid, childId, cx, rowY) {
-    const p = personById(childId); if (!p) return { anchorX: cx, anchorTop: rowY - HALF - 8, width: COLW };
-    const spouses = spouseIdsOf(childId).map(personById).filter((sp) => sp && !isHidden(sp.id)).slice(0, 2);
-    const kids = [...new Set(unionsOfPerson(childId).flatMap((u2) => childLinksOfUnion(u2.id).map((l) => l.child)))]
-      .map(personById).filter((k) => k && !isHidden(k.id));
-    const defSx = cx + spouses.length * (COLW + 12);
-    const mid0 = (cx + defSx) / 2, kidY0 = rowY + ROWH;
-    const startX = mid0 - ((kids.length - 1) * 150) / 2;
-    const spotOf = (id, dx, dy) => (state.echoPos && state.echoPos[uid + ":" + id]) || { x: dx, y: dy };
-    const cq = spotOf(childId, cx, rowY);
-    const sq = spouses.map((sp, i) => spotOf(sp.id, cx + (i + 1) * (COLW + 12), rowY));
-    const kq = kids.map((k, i) => spotOf(k.id, startX + i * 150, kidY0));
-    // partner line(s): chain child → spouse1 → spouse2 between shape edges
-    let prev = cq;
-    sq.forEach((q) => {
-      const a = prev.x <= q.x ? prev : q, b = prev.x <= q.x ? q : prev;
-      gu.appendChild(el("line", { class: "link echo-link", x1: a.x + HALF - 6, y1: a.y, x2: b.x - HALF + 6, y2: b.y }));
-      prev = q;
-    });
-    if (kids.length) {
-      // mini bus hanging below the couple's row, drops into each child copy
-      const par = [cq, ...sq];
-      const pmx = par.reduce((s, q) => s + q.x, 0) / par.length;
-      const pby = Math.max(...par.map((q) => q.y));
-      const kb = pby + 120;
-      gu.appendChild(el("line", { class: "link echo-link", x1: pmx, y1: pby, x2: pmx, y2: kb }));
-      const bxs = [pmx, ...kq.map((q) => q.x)];
-      if (Math.min(...bxs) !== Math.max(...bxs))
-        gu.appendChild(el("line", { class: "link echo-link", x1: Math.min(...bxs), y1: kb, x2: Math.max(...bxs), y2: kb }));
-      kq.forEach((q) => gu.appendChild(el("line", { class: "link echo-link", x1: q.x, y1: kb, x2: q.x, y2: q.y - HALF - 8 })));
-    }
-    const reg = (pp, q) => { copyPlacements.push({ p: pp, uid, x: q.x, y: q.y }); (copySpots[pp.id] = copySpots[pp.id] || []).push({ uid, x: q.x, y: q.y }); };
-    reg(p, cq); spouses.forEach((sp, i) => reg(sp, sq[i])); kids.forEach((k, i) => reg(k, kq[i]));
-    return { anchorX: cq.x, anchorTop: cq.y - HALF - 8, width: Math.max(defSx - cx + 2 * HALF, kids.length * 150) };
+    const spot = (id, dx, dy) => (state.echoPos && state.echoPos[uid + ":" + id]) || { x: dx, y: dy };
+    const SLOT = COLW + 22, GAPC = 40;
+    const seen = new Set();
+    // measure the branch: a unit = person + their spouse(s) + kid units below
+    const unitOf = (pid) => {
+      if (seen.has(pid)) return null;
+      seen.add(pid);
+      const p = personById(pid); if (!p) return null;
+      const spouses = spouseIdsOf(pid).map(personById).filter((sp) => sp && !isHidden(sp.id) && !seen.has(sp.id)).slice(0, 2);
+      spouses.forEach((sp) => seen.add(sp.id));
+      const kids = [...new Set(unionsOfPerson(pid).flatMap((u2) => childLinksOfUnion(u2.id).map((l) => l.child)))]
+        .filter((k) => personById(k) && !isHidden(k)).map(unitOf).filter(Boolean);
+      const rowW = (1 + spouses.length) * SLOT;
+      const kidsW = kids.reduce((s, k) => s + k.w, 0) + GAPC * Math.max(0, kids.length - 1);
+      return { p, spouses, kids, w: Math.max(rowW, kidsW) };
+    };
+    const root = unitOf(childId); if (!root) return { anchorX: cx, anchorTop: rowY - HALF - 8, width: COLW };
+    const reg = (pp, v) => { copyPlacements.push({ p: pp, uid, x: v.x, y: v.y }); (copySpots[pp.id] = copySpots[pp.id] || []).push({ uid, x: v.x, y: v.y }); };
+    // place a unit centred on centerX: first spouse to the right, a second to
+    // the left; each spouse ties to THIS person (never spouse-to-spouse); kids
+    // hang from a mini bus below the couple, each centred over their own branch
+    const place = (unit, centerX, y) => {
+      const q = spot(unit.p.id, centerX, y);
+      const sq = unit.spouses.map((sp, i) => spot(sp.id, centerX + (i === 0 ? SLOT : -SLOT), y));
+      sq.forEach((s) => {
+        const a = s.x <= q.x ? s : q, b = s.x <= q.x ? q : s;
+        gu.appendChild(el("line", { class: "link echo-link", x1: a.x + HALF - 6, y1: a.y, x2: b.x - HALF + 6, y2: b.y }));
+      });
+      if (unit.kids.length) {
+        const pmx = sq.length ? (q.x + sq[0].x) / 2 : q.x;   // bus hangs between the couple
+        const pby = Math.max(q.y, ...sq.map((v) => v.y));
+        const kb = pby + 120, kidY = y + ROWH;
+        let kx = centerX - (unit.kids.reduce((s, k) => s + k.w, 0) + GAPC * (unit.kids.length - 1)) / 2;
+        const kqs = unit.kids.map((k) => { const c = kx + k.w / 2; kx += k.w + GAPC; return place(k, c, kidY); });
+        gu.appendChild(el("line", { class: "link echo-link", x1: pmx, y1: pby, x2: pmx, y2: kb }));
+        const bxs = [pmx, ...kqs.map((v) => v.x)];
+        if (Math.min(...bxs) !== Math.max(...bxs))
+          gu.appendChild(el("line", { class: "link echo-link", x1: Math.min(...bxs), y1: kb, x2: Math.max(...bxs), y2: kb }));
+        kqs.forEach((v) => gu.appendChild(el("line", { class: "link echo-link", x1: v.x, y1: kb, x2: v.x, y2: v.y - HALF - 8 })));
+      }
+      reg(unit.p, q); unit.spouses.forEach((sp, i) => reg(sp, sq[i]));
+      return q;
+    };
+    const rootQ = place(root, cx + root.w / 2, rowY);   // cx is the branch's left edge
+    return { anchorX: rootQ.x, anchorTop: rootQ.y - HALF - 8, width: root.w };
   }
 
   function renderUnion(u) {
@@ -2687,6 +2700,34 @@
   // copy is dropped; failures simply stay embedded and retry later.
   let sweepRunning = false, sweepTimer = null;
   function scheduleSweep() { if (sweepTimer) clearTimeout(sweepTimer); sweepTimer = setTimeout(() => { sweepTimer = null; sweepEmbeddedMedia(false); }, 5000); }
+  // Self-heal: if the cloud store lost a photo/document file the tree still
+  // references (it happened in the Blob→GitHub move), re-upload it from this
+  // device's local cache. Runs once per session on the editor's devices.
+  async function healMissingMedia() {
+    if (readonly || !CLOUD_ON()) return;
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    if (!pass || !state.mediaKey) return;
+    try {
+      const r = await fetch("api/store?action=listMedia"); if (!r.ok) return;
+      const have = new Set(((await r.json()).ids) || []);
+      const wanted = new Set();
+      state.persons.forEach((p) => { if (p.photoRef) wanted.add(p.photoRef); (p.docs || []).forEach((d) => { if (d.ref) wanted.add(d.ref); }); });
+      const missing = [...wanted].filter((id) => !have.has(id));
+      if (!missing.length) return;
+      const items = [];
+      for (const id of missing) {
+        let cached = null;
+        try { cached = mediaMem.get(id) || (await idbGet("media." + id)); } catch (e) {}
+        if (cached) items.push({ id, payload: await mediaEncrypt(cached) });
+      }
+      if (!items.length) return;
+      for (let i = 0; i < items.length; i += 20) {
+        const r2 = await fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "putMedia", passcode: pass, items: items.slice(i, i + 20) }) });
+        if (!r2.ok) return;
+      }
+      toast("♻️ Restored " + items.length + " photo" + (items.length > 1 ? "s" : "") + " to the cloud from this device's saved copies");
+    } catch (e) {}
+  }
   async function sweepEmbeddedMedia(firstRun) {
     if (sweepRunning || readonly) return;
     let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
@@ -4845,6 +4886,7 @@
       if (vv) startViewPreview(vv);
     } catch (e) {}
     if (!readonly) setTimeout(() => sweepEmbeddedMedia(true), 8000);   // storage diet: externalise anything still embedded
+    if (!readonly) setTimeout(() => healMissingMedia(), 12000);        // re-upload any photo the cloud lost but this device still has
     if (!readonly) { setCloudStatus(CLOUD_ON() ? "on" : "off"); setBackupStatus(BACKUP_ON() ? "on" : "off"); }
     // One-time: turn any already-attached obituary photos into node pictures.
     if (!readonly && !state.photoMigrated) {
