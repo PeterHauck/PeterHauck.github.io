@@ -686,12 +686,12 @@
   // get closer than its date label needs.
   const SIBLING_GAP = 140;
   function snapChainSpacing(mode) {
-    const ids = [...selection].filter((id) => personById(id));
+    const ids = [...selection].filter((nk) => personById(pidOf(nk)));
     if (ids.length < 2) return;
     pushUndo();
-    const rows = ids.map((id) => ({ id, p: posOf(id) })).sort((a, b) => a.p.x - b.p.x);
+    const rows = ids.map((id) => ({ id, p: nkPos(id) })).sort((a, b) => a.p.x - b.p.x);
     const gapFor = (aId, bId) => {
-      const u = unionBetween(aId, bId);
+      const u = unionBetween(pidOf(aId), pidOf(bId));
       const dlabel = u ? unionDateLabel(u) : "";
       const floor = dlabel ? dlabel.length * 6.6 + 8 + 2 * HALF + 16 : 2 * HALF + 12;
       const base = mode === "sibling" ? SIBLING_GAP : (u ? coupleStandardGap(u) : COLW + 12);
@@ -718,19 +718,21 @@
     }
     applyToolMoves(moves, ids);
     save(); render();
-    toast((mode === "sibling" ? "Snapped close" : "Snapped wide") + (anchorIdx >= 0 ? " around 🔒 " + (((personById(rows[anchorIdx].id) || {}).first) || "the locked person") : "") + " — " + rows.length + " people");
+    toast((mode === "sibling" ? "Snapped close" : "Snapped wide") + (anchorIdx >= 0 ? " around 🔒 " + (((personById(pidOf(rows[anchorIdx].id)) || {}).first) || "the locked person") : "") + " — " + rows.length + " people");
   }
   // Slide a couple sideways (keeping their own spacing) so they sit centered
   // over their children.
-  function centerCoupleOnChildren(u) {
-    const kids = childLinksOfUnion(u.id).map((l) => l.child).filter((id) => personById(id) && inView(id));
+  function centerCoupleOnChildren(u, aNk, bNk) {
+    aNk = aNk || u.a; bNk = bNk || u.b;
+    // work in the couple's own context: copies center on the CLUSTER's children
+    const kids = childLinksOfUnion(u.id).map((l) => l.child).filter((id) => personById(id) && inView(id)).map((id) => nkFor(id, aNk));
     if (!kids.length) { toast("This couple has no children to center on"); return; }
     pushUndo();
-    const xs = kids.map((id) => posOf(id).x);
+    const xs = kids.map((nk) => nkPos(nk).x);
     const target = (Math.min(...xs) + Math.max(...xs)) / 2;
-    const A = posOf(u.a), B = posOf(u.b);
+    const A = nkPos(aNk), B = nkPos(bNk);
     const dx = target - (A.x + B.x) / 2;
-    applyToolMoves([{ id: u.a, x: A.x + dx, y: A.y, dx }, { id: u.b, x: B.x + dx, y: B.y, dx }], kids);
+    applyToolMoves([{ id: aNk, x: A.x + dx, y: A.y, dx }, { id: bNk, x: B.x + dx, y: B.y, dx }], kids);
     save(); render();
     toast("Centered over their children");
   }
@@ -739,7 +741,7 @@
   const isLocked = (id) => !!(state.locked && state.locked[id]);
   /* -------- groups: people locked together at their current offsets -------- */
   const groupOf = (pid) => (state.groups || []).find((g) => g.members.includes(pid));
-  const groupMatesOf = (pid) => { const g = groupOf(pid); return g ? g.members.filter((m) => m !== pid && personById(m)) : []; };
+  const groupMatesOf = (nk) => { const g = groupOf(nk); return g ? g.members.filter((m) => m !== nk && personById(pidOf(m))) : []; };
   function makeGroup(ids) {
     if (!state.groups) state.groups = [];
     state.groups.forEach((g) => { g.members = g.members.filter((m) => !ids.includes(m)); });   // leave any old group first
@@ -760,14 +762,13 @@
   function applyToolMoves(moves, anchorIds) {
     const done = new Set(moves.map((m) => m.id));
     const skip = new Set(anchorIds || []);
-    moves.forEach((m) => { if (!isLocked(m.id)) posMap()[m.id] = { x: m.x, y: m.y }; });
+    moves.forEach((m) => { if (!isLocked(m.id)) nkSetPos(m.id, { x: m.x, y: m.y }); });
     moves.forEach((m) => {
-      if (echoScope) return;   // groups tie MAIN spots; copies never drag mates along
       if (!m.dx || isLocked(m.id)) return;
       groupMatesOf(m.id).forEach((f) => {
         if (done.has(f) || skip.has(f) || isLocked(f)) return;
         done.add(f);
-        const q = posOf(f); posMap()[f] = { x: q.x + m.dx, y: q.y };
+        const q = nkPos(f); nkSetPos(f, { x: q.x + m.dx, y: q.y });
       });
     });
   }
@@ -776,7 +777,7 @@
   // counts through their partner, so a row of siblings WITH their spouses can
   // still be centered under the siblings' parents.
   function commonParentUnion(ids) {
-    const inSel = new Set(ids);
+    const inSel = new Set(ids.map(pidOf));
     const unionsFor = (id) => {
       const own = parentLinksOfPerson(id).map((l) => l.union);
       if (own.length) return own;
@@ -788,7 +789,7 @@
       return viaSpouse;
     };
     let common = null;
-    for (const id of ids) {
+    for (const id of ids.map(pidOf)) {
       const us = new Set(unionsFor(id));
       if (!us.size) return null;
       if (common === null) common = us;
@@ -800,25 +801,28 @@
   // Slide the selected children sideways as a group (keeping their spacing)
   // so they sit centered under their parents.
   function centerSelectionOnParents() {
-    const ids = [...selection].filter((id) => personById(id));
+    const ids = [...selection].filter((nk) => personById(pidOf(nk)));
     const u = commonParentUnion(ids);
     if (!u) { toast("Select children who share the same parents"); return; }
     pushUndo();
-    const A = posOf(u.a), B = u.b != null ? posOf(u.b) : null;
+    // parents resolved in the selection's context (a copy's parents may be the
+    // cluster's copies, or main nodes — whichever appearance is drawn there)
+    const aNk = nkFor(u.a, ids[0]), bNk = u.b != null ? nkFor(u.b, ids[0]) : null;
+    const A = nkPos(aNk), B = bNk ? nkPos(bNk) : null;
     const target = B ? (A.x + B.x) / 2 : A.x;
-    const xs = ids.map((id) => posOf(id).x);
+    const xs = ids.map((nk) => nkPos(nk).x);
     const dx = target - (Math.min(...xs) + Math.max(...xs)) / 2;
-    applyToolMoves(ids.map((id) => { const q = posOf(id); return { id, x: q.x + dx, y: q.y, dx }; }), [u.a, u.b].filter((x) => x != null));
+    applyToolMoves(ids.map((nk) => { const q = nkPos(nk); return { id: nk, x: q.x + dx, y: q.y, dx }; }), [aNk, bNk].filter((x) => x != null));
     save(); render();
     toast("Centered under their parents");
   }
   // Evenly distribute the selected people: leftmost and rightmost stay put,
   // everyone between them gets equal spacing (each keeps their own row).
   function distributeSelection() {
-    const ids = [...selection].filter((id) => personById(id));
+    const ids = [...selection].filter((nk) => personById(pidOf(nk)));
     if (ids.length < 3) { toast("Select at least three people to space evenly"); return; }
     pushUndo();
-    const rows = ids.map((id) => ({ id, p: posOf(id) })).sort((a, b) => a.p.x - b.p.x);
+    const rows = ids.map((id) => ({ id, p: nkPos(id) })).sort((a, b) => a.p.x - b.p.x);
     const first = rows[0].p.x, last = rows[rows.length - 1].p.x;
     const step = (last - first) / (rows.length - 1);
     applyToolMoves(rows.map((r, i) => ({ id: r.id, x: first + step * i, y: r.p.y, dx: first + step * i - r.p.x })), ids);
@@ -851,40 +855,32 @@
     colorMemo.set(pid, c);
     return c;
   }
-  // When a jump's COPIES are selected (echoScope = that jump's union id), the
-  // position layer redirects to their per-jump spots so drags and every layout
-  // tool (snap, distribute, center…) rearranges the copies, never the originals.
-  let echoScope = null;
-  let renderSelScope = null;   // echoScope as of the current draw (for highlights)
   const posMap = () => {
-    if (echoScope) {
-      const uid = echoScope, store = state.echoPos || (state.echoPos = {});
-      return new Proxy(store, {
-        get: (t, k) => (typeof k === "string" && !k.includes(":") ? t[uid + ":" + k] : t[k]),
-        set: (t, k, v) => { t[typeof k === "string" && !k.includes(":") ? uid + ":" + k : k] = v; return true; },
-      });
-    }
     if (viewPreview) { const v = viewPreview.view; return v.manual || (v.manual = {}); }
     return hiddenScope ? (state.manualHidden || (state.manualHidden = {})) : state.manual;
   };
   const posOf = (id) => posMap()[id] || (viewPreview ? (state.manual || {})[id] : null) || layoutPos[id] || { x: 0, y: 0 };
-  // Selecting a copy pins the WHOLE cluster's current spots into state.echoPos
-  // first, so tools that look at neighbours (snap, center) see copy positions.
-  function enterEchoScope(uid) {
-    echoScope = uid;
-    const store = state.echoPos || (state.echoPos = {});
-    copyPlacements.filter((c) => c.uid === uid).forEach((c) => { const k = uid + ":" + c.p.id; if (!store[k]) store[k] = { x: c.x, y: c.y }; });
-  }
+  // NODE KEYS: every APPEARANCE on the canvas has its own key — a main node is
+  // just the person id, a copy across a jump is "unionId:personId". Selection,
+  // locks, groups, drags and every layout tool work on appearances, so an
+  // original and its copy are handled identically — and independently.
+  const isCopyKey = (nk) => nk.indexOf(":") >= 0;
+  const pidOf = (nk) => (isCopyKey(nk) ? nk.slice(nk.indexOf(":") + 1) : nk);
+  let copyPos = {};   // where every copy actually drew this pass (nk -> {x,y})
+  const nkPos = (nk) => (isCopyKey(nk) ? ((state.echoPos || {})[nk] || copyPos[nk] || { x: 0, y: 0 }) : posOf(nk));
+  const nkSetPos = (nk, q) => { if (isCopyKey(nk)) (state.echoPos || (state.echoPos = {}))[nk] = q; else posMap()[nk] = q; };
+  // The appearance of `pid` in the same context as `likeNk`: inside a copy
+  // cluster prefer that cluster's copy of pid; otherwise the main node.
+  const nkFor = (pid, likeNk) => {
+    if (likeNk && isCopyKey(likeNk)) {
+      const k = likeNk.slice(0, likeNk.indexOf(":") + 1) + pid;
+      if (copyPos[k] || (state.echoPos || {})[k]) return k;
+    }
+    return pid;
+  };
 
   /* ============================================================= RENDER */
   function render() {
-    // Drawing always reads MAIN positions (copies draw from their own spots in
-    // renderEchoCluster), so the copy-selection scope is parked for the pass —
-    // renderSelScope keeps the highlight on the right appearance.
-    const esHold = echoScope; echoScope = null; renderSelScope = esHold;
-    try { renderPass(); } finally { echoScope = esHold; }
-  }
-  function renderPass() {
     // Inside a hidden branch, refresh which people belong to it (so ones you just
     // added show up) before drawing.
     colorMemo = null;   // family colours recompute each draw (inheritance is live)
@@ -895,7 +891,7 @@
     emptyState.style.display = state.persons.length ? "none" : "flex";
 
     busLevels = computeBusLevels();
-    copyPlacements = []; copySpots = {};   // repopulated by the unions below
+    copyPlacements = []; copySpots = {}; copyPos = {};   // repopulated by the unions below
     visibleUnions().forEach(renderUnion);
     visiblePersons().forEach((p) => renderPerson(p));
     copyPlacements.forEach((c) => renderPerson(c.p, c));   // copies are full person nodes
@@ -920,12 +916,12 @@
     const btn = (label, fn) => { const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.onclick = fn; bar.appendChild(b); return b; };
     // Context actions: a selected COUPLE gets spacing/centering, 3+ get distribution.
     const ids = [...selection];
-    const cu = ids.length === 2 ? unionBetween(ids[0], ids[1]) : null;
+    const cu = ids.length === 2 ? unionBetween(pidOf(ids[0]), pidOf(ids[1])) : null;
     if (ids.length >= 2) {
       { const b = btn("⇤ Snap close", () => snapChainSpacing("sibling")); b.title = "Hotkey: C"; }
       { const b = btn("⇔ Snap wide", () => snapChainSpacing("couple")); b.title = "Hotkey: W"; }
     }
-    if (cu && childLinksOfUnion(cu.id).length) { const b = btn("⌖ Center on children", () => centerCoupleOnChildren(cu)); b.title = "Hotkey: K"; }
+    if (cu && childLinksOfUnion(cu.id).length) { const b = btn("⌖ Center on children", () => centerCoupleOnChildren(cu, ids.find((k) => pidOf(k) === cu.a), ids.find((k) => pidOf(k) === cu.b))); b.title = "Hotkey: K"; }
     if (commonParentUnion(ids)) { const b = btn("⌖ Center on parents", centerSelectionOnParents); b.title = "Hotkey: P"; }
     if (ids.length >= 3) btn("↔ Space evenly", distributeSelection);
     if (ids.some((id) => !isLocked(id))) btn("🔒 Lock", () => {
@@ -943,12 +939,12 @@
       pushUndo();
       if (!state.hidden) state.hidden = {};
       const n = selection.size;
-      selection.forEach((id) => { state.hidden[id] = true; if (id === selectedId) { selectedId = null; resetPersonForm(); } });
-      selection = new Set(); echoScope = null;
+      selection.forEach((nk) => { const pid = pidOf(nk); state.hidden[pid] = true; if (pid === selectedId) { selectedId = null; resetPersonForm(); } });
+      selection = new Set();
       relayoutAndSave(); fitView();
       toast("Hid " + n + " people — the counter chip at the top brings everyone back");
     });
-    const clr = btn("Clear", () => { selection = new Set(); echoScope = null; render(); });
+    const clr = btn("Clear", () => { selection = new Set(); render(); });
     clr.id = "sbClear";
   }
 
@@ -969,10 +965,9 @@
     // full profile, its own spot (state.echoPos), tagged so drags know which
     // appearance moved.
     const pos = inst ? inst : posOf(p.id);
-    // highlight the appearance that is actually selected: with a copy-selection
-    // active, only that jump's copies glow; otherwise only main nodes do.
-    const selHere = selection.has(p.id) && (renderSelScope ? !!(inst && inst.uid === renderSelScope) : !inst);
-    const g = el("g", { class: "person" + (p.id === selectedId ? " selected" : "") + (selHere ? " multi" : ""), transform: `translate(${pos.x},${pos.y})`, "data-id": p.id });
+    // this appearance's own key — selection/locks highlight per appearance
+    const nk = inst ? inst.uid + ":" + p.id : p.id;
+    const g = el("g", { class: "person" + (p.id === selectedId ? " selected" : "") + (selection.has(nk) ? " multi" : ""), transform: `translate(${pos.x},${pos.y})`, "data-id": p.id });
     if (inst) g.setAttribute("data-inst", inst.uid);
     // Hover tooltip carries the exact dates when known (the label stays year-only).
     if (p.birthDate || p.deathDate) {
@@ -1025,7 +1020,7 @@
       g.appendChild(badge);
     }
 
-    if (isLocked(p.id)) {
+    if (isLocked(nk)) {
       const lk = el("text", { class: "lock-badge", x: -HALF + 2, y: -HALF + 12 }, txt("🔒"));
       lk.appendChild(el("title", null, txt("Locked in place")));
       g.appendChild(lk);
@@ -1436,7 +1431,7 @@
       return { p, spouses, kids, w: Math.max(rowW, kidsW) };
     };
     const root = unitOf(childId); if (!root) return { anchorX: cx, anchorTop: rowY - HALF - 8, width: COLW };
-    const reg = (pp, v) => { copyPlacements.push({ p: pp, uid, x: v.x, y: v.y }); (copySpots[pp.id] = copySpots[pp.id] || []).push({ uid, x: v.x, y: v.y }); };
+    const reg = (pp, v) => { copyPlacements.push({ p: pp, uid, x: v.x, y: v.y }); (copySpots[pp.id] = copySpots[pp.id] || []).push({ uid, x: v.x, y: v.y }); copyPos[uid + ":" + pp.id] = { x: v.x, y: v.y }; };
     // place a unit centred on centerX: first spouse to the right, a second to
     // the left; each spouse ties to THIS person (never spouse-to-spouse); kids
     // hang from a mini bus below the couple, each centred over their own branch
@@ -1813,41 +1808,24 @@
 
     if (rearrange && !readonly) {
       if (personEl) {
+        // Every appearance — original or copy — goes through the SAME path,
+        // addressed by its node key. Copies mix freely into any selection.
         const id = personEl.getAttribute("data-id");
-        const inst = personEl.getAttribute("data-inst");
-        if (inst) {
-          // COPIES select and move through the normal machinery, scoped to this
-          // jump: their spots live per-jump, so tools and drags rearrange the
-          // copies and never the originals.
-          if (e.shiftKey) {
-            if (echoScope === inst && selection.size) { if (selection.has(id)) selection.delete(id); else selection.add(id); }
-            else { enterEchoScope(inst); selection = new Set([id]); }
-            render();
-            if (selection.size) toast(selection.size + " selected — drag any of them to move the group");
-            return;
-          }
-          if (isLocked(id)) toast("🔒 Locked in place — unlock them to move them");
-          if (echoScope !== inst || !selection.has(id)) { enterEchoScope(inst); selection = new Set([id]); render(); }
-          const starts = {};
-          selection.forEach((pid) => { const p = posOf(pid); starts[pid] = { x: p.x, y: p.y }; });
-          drag = { mode: "group", id, startX: e.clientX, startY: e.clientY, starts, moved: false, pre: snapshot() };
-          return;
-        }
-        // a main-node click while copies were selected starts a fresh selection
-        if (echoScope) { echoScope = null; selection = new Set(); }
-        // Shift-click toggles a person in/out of the group selection without
+        const instU = personEl.getAttribute("data-inst");
+        const nk = instU ? instU + ":" + id : id;
+        // Shift-click toggles an appearance in/out of the group selection without
         // moving anything — build up a set, then drag any of them to move all.
         if (e.shiftKey) {
-          if (selection.has(id)) selection.delete(id); else selection.add(id);
+          if (selection.has(nk)) selection.delete(nk); else selection.add(nk);
           render();
           if (selection.size) toast(selection.size + " selected — drag any of them to move the group");
           return;
         }
-        if (isLocked(id)) toast("🔒 Locked in place — unlock them to move them");
-        if (!selection.has(id)) { selection = new Set([id, ...groupMatesOf(id)]); render(); }
+        if (isLocked(nk)) toast("🔒 Locked in place — unlock them to move them");
+        if (!selection.has(nk)) { selection = new Set([nk, ...groupMatesOf(nk)]); render(); }
         const starts = {};
-        selection.forEach((pid) => { const p = posOf(pid); starts[pid] = { x: p.x, y: p.y }; });
-        drag = { mode: "group", id, startX: e.clientX, startY: e.clientY, starts, moved: false, pre: snapshot() };
+        selection.forEach((k) => { const p = nkPos(k); starts[k] = { x: p.x, y: p.y }; });
+        drag = { mode: "group", id: nk, startX: e.clientX, startY: e.clientY, starts, moved: false, pre: snapshot() };
       } else {
         const w = toWorld(e.clientX, e.clientY);
         drag = { mode: "marquee", startX: e.clientX, startY: e.clientY, moved: false, baseSel: e.shiftKey ? [...selection] : null };
@@ -1882,7 +1860,7 @@
     else if (drag.mode === "group") {
       if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
       const wdx = dx / view.scale, wdy = e.shiftKey ? 0 : dy / view.scale;   // Shift = hold the row (horizontal-only move)
-      for (const pid in drag.starts) { if (isLocked(pid)) continue; posMap()[pid] = { x: drag.starts[pid].x + wdx, y: drag.starts[pid].y + wdy }; }
+      for (const nk in drag.starts) { if (isLocked(nk)) continue; nkSetPos(nk, { x: drag.starts[nk].x + wdx, y: drag.starts[nk].y + wdy }); }
       render();
     }
     else if (drag.mode === "marquee") {
@@ -1904,14 +1882,15 @@
     }
     if (pointers.size === 0) {
       stage.classList.remove("panning");
-      if (drag && drag.mode === "group") { if (drag.moved) { pushUndo(drag.pre); save(); } else if (drag.id) selectPerson(drag.id); }
+      if (drag && drag.mode === "group") { if (drag.moved) { pushUndo(drag.pre); save(); } else if (drag.id) selectPerson(pidOf(drag.id)); }
       else if (drag && drag.mode === "marquee") {
         if (drag.moved && marquee) {
           const x0 = Math.min(marquee.x0, marquee.x1), x1 = Math.max(marquee.x0, marquee.x1);
           const y0 = Math.min(marquee.y0, marquee.y1), y1 = Math.max(marquee.y0, marquee.y1);
-          echoScope = null;   // a marquee always selects MAIN nodes
           selection = new Set(drag.baseSel || []);   // shift+box = ADD to the selection
           visiblePersons().forEach((p) => { const q = posOf(p.id); if (q.x >= x0 && q.x <= x1 && q.y >= y0 && q.y <= y1) selection.add(p.id); });
+          // copies are appearances like any other — the box picks them up too
+          Object.keys(copyPos).forEach((nk) => { const q = nkPos(nk); if (q.x >= x0 && q.x <= x1 && q.y >= y0 && q.y <= y1) selection.add(nk); });
           if (selection.size) toast(selection.size + " selected — drag any of them to move the group");
         } else { selection = new Set(); }
         marquee = null; updateMarquee(); render();
@@ -1935,7 +1914,7 @@
     rearrange = on;
     $("#tbRearrange").classList.toggle("active", rearrange);
     stage.classList.toggle("rearranging", rearrange);
-    if (!rearrange) { selection = new Set(); echoScope = null; marquee = null; updateMarquee(); render(); }
+    if (!rearrange) { selection = new Set(); marquee = null; updateMarquee(); render(); }
     toast(rearrange ? "Rearrange mode ON — drag a person, or drag a box to select several. Nothing moves when it's off." : "Rearrange mode off");
   }
   // everyone in a person's block that should travel with them: the person, their
@@ -1984,7 +1963,6 @@
   // band with two or more people is snapped to that band's median height.
   // Someone sitting far from everyone else forms a band of one and never moves.
   function tidyUp() {
-    echoScope = null;   // tidy always works the MAIN arrangement
     const BAND_T = 70;   // "roughly the same height" tolerance (px)
     const pts = visiblePersons().map((p) => ({ id: p.id, x: posOf(p.id).x, y: posOf(p.id).y }));
     if (pts.length < 2) { toast("Nothing to tidy yet"); return; }
