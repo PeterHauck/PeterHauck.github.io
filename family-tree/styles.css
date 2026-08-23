@@ -705,6 +705,7 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 
 /* "continued elsewhere" portal stubs for far-away family branches */
 .drop-hit { stroke: transparent; stroke-width: 22; fill: none; }
+.jump-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 4px; }
 .jump-badge { cursor: pointer; }
 .jump-badge-bg { fill: var(--panel); stroke: var(--panel-border); stroke-width: 1; }
 .jump-badge-mark { font-size: 10px; text-anchor: middle; fill: var(--muted); font-weight: 700; }
