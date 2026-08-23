@@ -711,3 +711,5 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 .portal-tag:hover .portal-text { fill: var(--accent); }
 .drop-hit { stroke: transparent; stroke-width: 22; fill: none; }
 .echo-person { cursor: pointer; }
+.echo-badge-bg { fill: var(--panel); stroke: var(--panel-border); stroke-width: 1; }
+.echo-badge-mark { font-size: 10px; text-anchor: middle; fill: var(--muted); font-weight: 700; }

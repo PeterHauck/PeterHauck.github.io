@@ -1352,9 +1352,10 @@
   }
 
   // A person REPEATED on the other family's side of a jump — drawn exactly
-  // like their main node (photo, colour, dates), so they appear fully on both
-  // branches. Clicking it goes to their main spot.
-  function renderEchoPerson(gp, p, x, y) {
+  // like their main node (photo, colour, dates) plus a tiny ⤴ corner badge,
+  // so they appear fully on both branches. Clicking goes to their main spot;
+  // dragging rearranges this copy only.
+  function renderEchoPerson(gp, p, x, y, uid) {
     const g = el("g", { class: "echo-person", transform: `translate(${x},${y})`, "data-echo": p.id });
     const clip = { male: "clip-male", female: "clip-female", unknown: "clip-unknown" }[p.sex] || "clip-unknown";
     const decd = isDeceased(p);
@@ -1375,38 +1376,77 @@
     g.appendChild(el("rect", { class: "label-bg", x: -(w / 2) - 6, y: HALF + 6, width: w + 12, height: bgH, rx: 5 }));
     lines.forEach((l, i) => g.appendChild(el("text", { class: "label", x: 0, y: HALF + 22 + i * 18 }, txt(l))));
     if (d) g.appendChild(el("text", { class: "dates", x: 0, y: HALF + 24 + lines.length * 18 }, txt(d)));
-    g.appendChild(el("title", null, txt(treeDisplayName(p) + " — also appears with their own family. Click to go to their spot there.")));
-    g.addEventListener("pointerdown", (ev) => ev.stopPropagation());
-    g.addEventListener("click", (ev) => { ev.stopPropagation(); centerOn(p.id); });
+    // tiny corner badge marking this as a copy of a person who lives elsewhere
+    const eb = el("g", { class: "echo-badge", transform: `translate(${HALF - 5},${-HALF + 5})` });
+    eb.appendChild(el("circle", { class: "echo-badge-bg", r: 9, cx: 0, cy: 0 }));
+    eb.appendChild(el("text", { class: "echo-badge-mark", x: 0, y: 3.5 }, txt("⤴")));
+    g.appendChild(eb);
+    g.appendChild(el("title", null, txt(treeDisplayName(p) + " — also appears with their own family. Click to go to their spot there; drag to rearrange this copy.")));
+    if (!readonly) {
+      // Drag rearranges this copy (stored per jump so the main spot is
+      // untouched); a still click goes to the person's main spot.
+      g.addEventListener("pointerdown", (ev) => {
+        ev.stopPropagation(); ev.preventDefault();
+        const sx0 = ev.clientX, sy0 = ev.clientY; let moved = false;
+        const mv = (e2) => {
+          if (!moved && Math.hypot(e2.clientX - sx0, e2.clientY - sy0) > 4) moved = true;
+          if (moved) g.setAttribute("transform", `translate(${x + (e2.clientX - sx0) / view.scale},${y + (e2.clientY - sy0) / view.scale})`);
+        };
+        const up = (e2) => {
+          window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up);
+          if (moved) {
+            pushUndo();
+            (state.echoPos || (state.echoPos = {}))[uid + ":" + p.id] = { x: x + (e2.clientX - sx0) / view.scale, y: y + (e2.clientY - sy0) / view.scale };
+            save(); render();
+          } else centerOn(p.id);
+        };
+        window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+      });
+    } else {
+      g.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+      g.addEventListener("click", (ev) => { ev.stopPropagation(); centerOn(p.id); });
+    }
     gp.appendChild(g);
   }
   // The far-away child REPEATED on their parents' side — them, their spouse(s),
-  // and their children — so each branch reads complete on its own.
-  function renderEchoCluster(gu, childId, cx, rowY) {
-    const p = personById(childId); if (!p) return { anchorX: cx, width: COLW };
-    renderEchoPerson(gu, p, cx, rowY);
+  // and their children — so each branch reads complete on its own. Each copy
+  // starts at a tidy default spot but can be dragged anywhere (stored per
+  // jump+person in state.echoPos); the connecting lines follow the shapes.
+  function renderEchoCluster(gu, uid, childId, cx, rowY) {
+    const p = personById(childId); if (!p) return { anchorX: cx, anchorTop: rowY - HALF - 8, width: COLW };
     const spouses = spouseIdsOf(childId).map(personById).filter((sp) => sp && !isHidden(sp.id)).slice(0, 2);
-    let sx = cx;
-    spouses.forEach((sp) => {
-      const prev = sx; sx += COLW + 12;
-      gu.appendChild(el("line", { class: "link echo-link", x1: prev + HALF - 6, y1: rowY, x2: sx - HALF + 6, y2: rowY }));
-      renderEchoPerson(gu, sp, sx, rowY);
-    });
     const kids = [...new Set(unionsOfPerson(childId).flatMap((u2) => childLinksOfUnion(u2.id).map((l) => l.child)))]
       .map(personById).filter((k) => k && !isHidden(k.id));
-    const mid = (cx + sx) / 2;
+    const defSx = cx + spouses.length * (COLW + 12);
+    const mid0 = (cx + defSx) / 2, kidY0 = rowY + ROWH;
+    const startX = mid0 - ((kids.length - 1) * 150) / 2;
+    const spotOf = (id, dx, dy) => (state.echoPos && state.echoPos[uid + ":" + id]) || { x: dx, y: dy };
+    const cq = spotOf(childId, cx, rowY);
+    const sq = spouses.map((sp, i) => spotOf(sp.id, cx + (i + 1) * (COLW + 12), rowY));
+    const kq = kids.map((k, i) => spotOf(k.id, startX + i * 150, kidY0));
+    // partner line(s): chain child → spouse1 → spouse2 between shape edges
+    let prev = cq;
+    sq.forEach((q) => {
+      const a = prev.x <= q.x ? prev : q, b = prev.x <= q.x ? q : prev;
+      gu.appendChild(el("line", { class: "link echo-link", x1: a.x + HALF - 6, y1: a.y, x2: b.x - HALF + 6, y2: b.y }));
+      prev = q;
+    });
     if (kids.length) {
-      const kidY = rowY + ROWH, kb = rowY + 120;
-      gu.appendChild(el("line", { class: "link echo-link", x1: mid, y1: rowY, x2: mid, y2: kb }));
-      const startX = mid - ((kids.length - 1) * 150) / 2;
-      if (kids.length > 1) gu.appendChild(el("line", { class: "link echo-link", x1: startX, y1: kb, x2: startX + (kids.length - 1) * 150, y2: kb }));
-      kids.forEach((k, i) => {
-        const kx = startX + i * 150;
-        gu.appendChild(el("line", { class: "link echo-link", x1: kx, y1: kb, x2: kx, y2: kidY - HALF - 8 }));
-        renderEchoPerson(gu, k, kx, kidY);
-      });
+      // mini bus hanging below the couple's row, drops into each child copy
+      const par = [cq, ...sq];
+      const pmx = par.reduce((s, q) => s + q.x, 0) / par.length;
+      const pby = Math.max(...par.map((q) => q.y));
+      const kb = pby + 120;
+      gu.appendChild(el("line", { class: "link echo-link", x1: pmx, y1: pby, x2: pmx, y2: kb }));
+      const bxs = [pmx, ...kq.map((q) => q.x)];
+      if (Math.min(...bxs) !== Math.max(...bxs))
+        gu.appendChild(el("line", { class: "link echo-link", x1: Math.min(...bxs), y1: kb, x2: Math.max(...bxs), y2: kb }));
+      kq.forEach((q) => gu.appendChild(el("line", { class: "link echo-link", x1: q.x, y1: kb, x2: q.x, y2: q.y - HALF - 8 })));
     }
-    return { anchorX: cx, width: Math.max(sx - cx + 2 * HALF, kids.length * 150) };
+    renderEchoPerson(gu, p, cq.x, cq.y, uid);
+    spouses.forEach((sp, i) => renderEchoPerson(gu, sp, sq[i].x, sq[i].y, uid));
+    kids.forEach((k, i) => renderEchoPerson(gu, k, kq[i].x, kq[i].y, uid));
+    return { anchorX: cq.x, anchorTop: cq.y - HALF - 8, width: Math.max(defSx - cx + 2 * HALF, kids.length * 150) };
   }
 
   function renderUnion(u) {
@@ -1588,14 +1628,14 @@
       let ex = nearTops.length ? Math.max(dropX, ...nearTops.map((c) => c.x)) + 300 : dropX;
       const echoAnchors = [];
       farTops.forEach((c) => {
-        const r = renderEchoCluster(gu, c.id, ex, rowY2);
-        echoAnchors.push(r.anchorX);
-        ex = r.anchorX + r.width + 160;
+        const r = renderEchoCluster(gu, u.id, c.id, ex, rowY2);
+        echoAnchors.push(r);
+        ex += r.width + 160;
       });
       if (!nearTops.length) gu.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
-      const bmin = Math.min(dropX, ...echoAnchors), bmax = Math.max(dropX, ...echoAnchors);
+      const bmin = Math.min(dropX, ...echoAnchors.map((r) => r.anchorX)), bmax = Math.max(dropX, ...echoAnchors.map((r) => r.anchorX));
       if (bmin !== bmax) gu.appendChild(el("line", { class: "link", x1: bmin, y1: busY, x2: bmax, y2: busY, style: cstyle }));
-      echoAnchors.forEach((ax) => gu.appendChild(el("line", { class: "link", x1: ax, y1: busY, x2: ax, y2: rowY2 - HALF - 8, style: cstyle })));
+      echoAnchors.forEach((r) => gu.appendChild(el("line", { class: "link", x1: r.anchorX, y1: busY, x2: r.anchorX, y2: r.anchorTop, style: cstyle })));
     }
     gLinks.appendChild(gu);
   }
@@ -4976,7 +5016,8 @@
     const manual = {}; Object.keys(state.manual || {}).forEach((k) => { if (set.has(k)) manual[k] = state.manual[k]; });
     Object.keys(view.manual || {}).forEach((k) => { if (set.has(k)) manual[k] = view.manual[k]; });   // the view's own arrangement wins
     const portals = {}; links.forEach((l) => { if (state.portals && state.portals[l.id]) portals[l.id] = true; });
-    return { title: view.name || state.title, subtitle: state.subtitle, persons, unions, links, manual, portals, manualHidden: {}, hidden: {}, focus: [], version: state.version || 0, photoMigrated: true, namesSplit: true, viewOf: view.id, mediaKey: state.mediaKey || null };
+    const echoPos = {}; Object.keys(state.echoPos || {}).forEach((k) => { const i = k.indexOf(":"); if (uids.has(k.slice(0, i)) && set.has(k.slice(i + 1))) echoPos[k] = state.echoPos[k]; });
+    return { title: view.name || state.title, subtitle: state.subtitle, persons, unions, links, manual, portals, echoPos, manualHidden: {}, hidden: {}, focus: [], version: state.version || 0, photoMigrated: true, namesSplit: true, viewOf: view.id, mediaKey: state.mediaKey || null };
   }
   // Encrypt every published view under its own password and store them.
   async function publishViews(interactive) {
