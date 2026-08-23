@@ -1351,20 +1351,31 @@
     return baseX + (idx - (uids.length - 1) / 2) * 18;   // spread the attach points
   }
 
-  // A lightly-faded REPEAT of a person shown on the other family's side of a
-  // portal. Clicking it jumps to the real one.
+  // A person REPEATED on the other family's side of a jump — drawn exactly
+  // like their main node (photo, colour, dates), so they appear fully on both
+  // branches. Clicking it goes to their main spot.
   function renderEchoPerson(gp, p, x, y) {
     const g = el("g", { class: "echo-person", transform: `translate(${x},${y})`, "data-echo": p.id });
-    const ph = photoOf(p);
     const clip = { male: "clip-male", female: "clip-female", unknown: "clip-unknown" }[p.sex] || "clip-unknown";
-    if (ph) g.appendChild(el("image", { href: ph, x: -HALF, y: -HALF, width: HALF * 2, height: HALF * 2, preserveAspectRatio: "xMidYMid slice", "clip-path": `url(#${clip})` }));
-    else g.appendChild(el("text", { class: "placeholder-emoji", x: 0, y: 2 }, txt("👤")));
+    const decd = isDeceased(p);
+    const ph = photoOf(p);
+    if (ph) {
+      if (decd) g.appendChild(el("line", { class: "deceased", x1: -HALF - 9, y1: HALF + 9, x2: HALF + 9, y2: -HALF - 9 }));
+      g.appendChild(el("image", { href: ph, x: -HALF, y: -HALF, width: HALF * 2, height: HALF * 2, preserveAspectRatio: "xMidYMid slice", "clip-path": `url(#${clip})` }));
+    } else {
+      g.appendChild(el("text", { class: "placeholder-emoji", x: 0, y: 2 }, txt("👤")));
+    }
     g.appendChild(shapeOutline(p.sex, !!ph, effColor(p.id)));
-    if (isDeceased(p) && !ph) g.appendChild(el("line", { class: "deceased", x1: -HALF, y1: HALF, x2: HALF, y2: -HALF }));
-    const nm = treeDisplayName(p);
-    g.appendChild(el("rect", { class: "label-bg", x: -(nm.length * 7.5) / 2 - 6, y: HALF + 6, width: nm.length * 7.5 + 12, height: 24, rx: 5 }));
-    g.appendChild(el("text", { class: "label", x: 0, y: HALF + 22 }, txt(nm)));
-    g.appendChild(el("title", null, txt(nm + " — repeated here; their main spot is with their own family. Click to jump there.")));
+    if (decd && !ph) g.appendChild(el("line", { class: "deceased", x1: -HALF, y1: HALF, x2: HALF, y2: -HALF }));
+    const lines = nameLines(treeDisplayName(p));
+    const d = dateStr(p);
+    let w = 0; lines.forEach((l) => (w = Math.max(w, l.length * 7.5)));
+    if (d) w = Math.max(w, d.length * 6.5);
+    const bgH = lines.length * 18 + (d ? 15 : 0) + 8;
+    g.appendChild(el("rect", { class: "label-bg", x: -(w / 2) - 6, y: HALF + 6, width: w + 12, height: bgH, rx: 5 }));
+    lines.forEach((l, i) => g.appendChild(el("text", { class: "label", x: 0, y: HALF + 22 + i * 18 }, txt(l))));
+    if (d) g.appendChild(el("text", { class: "dates", x: 0, y: HALF + 24 + lines.length * 18 }, txt(d)));
+    g.appendChild(el("title", null, txt(treeDisplayName(p) + " — also appears with their own family. Click to go to their spot there.")));
     g.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     g.addEventListener("click", (ev) => { ev.stopPropagation(); centerOn(p.id); });
     gp.appendChild(g);

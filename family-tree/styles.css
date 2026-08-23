@@ -710,6 +710,4 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 .portal-tag:hover .portal-bg { stroke: var(--accent); }
 .portal-tag:hover .portal-text { fill: var(--accent); }
 .drop-hit { stroke: transparent; stroke-width: 22; fill: none; }
-.echo-person { opacity: .55; cursor: pointer; }
-.echo-person:hover { opacity: .9; }
-.echo-link { opacity: .5; }
+.echo-person { cursor: pointer; }
