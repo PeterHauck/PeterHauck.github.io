@@ -762,6 +762,7 @@
     const skip = new Set(anchorIds || []);
     moves.forEach((m) => { if (!isLocked(m.id)) posMap()[m.id] = { x: m.x, y: m.y }; });
     moves.forEach((m) => {
+      if (echoScope) return;   // groups tie MAIN spots; copies never drag mates along
       if (!m.dx || isLocked(m.id)) return;
       groupMatesOf(m.id).forEach((f) => {
         if (done.has(f) || skip.has(f) || isLocked(f)) return;
@@ -850,14 +851,40 @@
     colorMemo.set(pid, c);
     return c;
   }
+  // When a jump's COPIES are selected (echoScope = that jump's union id), the
+  // position layer redirects to their per-jump spots so drags and every layout
+  // tool (snap, distribute, center…) rearranges the copies, never the originals.
+  let echoScope = null;
+  let renderSelScope = null;   // echoScope as of the current draw (for highlights)
   const posMap = () => {
+    if (echoScope) {
+      const uid = echoScope, store = state.echoPos || (state.echoPos = {});
+      return new Proxy(store, {
+        get: (t, k) => (typeof k === "string" && !k.includes(":") ? t[uid + ":" + k] : t[k]),
+        set: (t, k, v) => { t[typeof k === "string" && !k.includes(":") ? uid + ":" + k : k] = v; return true; },
+      });
+    }
     if (viewPreview) { const v = viewPreview.view; return v.manual || (v.manual = {}); }
     return hiddenScope ? (state.manualHidden || (state.manualHidden = {})) : state.manual;
   };
   const posOf = (id) => posMap()[id] || (viewPreview ? (state.manual || {})[id] : null) || layoutPos[id] || { x: 0, y: 0 };
+  // Selecting a copy pins the WHOLE cluster's current spots into state.echoPos
+  // first, so tools that look at neighbours (snap, center) see copy positions.
+  function enterEchoScope(uid) {
+    echoScope = uid;
+    const store = state.echoPos || (state.echoPos = {});
+    copyPlacements.filter((c) => c.uid === uid).forEach((c) => { const k = uid + ":" + c.p.id; if (!store[k]) store[k] = { x: c.x, y: c.y }; });
+  }
 
   /* ============================================================= RENDER */
   function render() {
+    // Drawing always reads MAIN positions (copies draw from their own spots in
+    // renderEchoCluster), so the copy-selection scope is parked for the pass —
+    // renderSelScope keeps the highlight on the right appearance.
+    const esHold = echoScope; echoScope = null; renderSelScope = esHold;
+    try { renderPass(); } finally { echoScope = esHold; }
+  }
+  function renderPass() {
     // Inside a hidden branch, refresh which people belong to it (so ones you just
     // added show up) before drawing.
     colorMemo = null;   // family colours recompute each draw (inheritance is live)
@@ -917,11 +944,11 @@
       if (!state.hidden) state.hidden = {};
       const n = selection.size;
       selection.forEach((id) => { state.hidden[id] = true; if (id === selectedId) { selectedId = null; resetPersonForm(); } });
-      selection = new Set();
+      selection = new Set(); echoScope = null;
       relayoutAndSave(); fitView();
       toast("Hid " + n + " people — the counter chip at the top brings everyone back");
     });
-    const clr = btn("Clear", () => { selection = new Set(); render(); });
+    const clr = btn("Clear", () => { selection = new Set(); echoScope = null; render(); });
     clr.id = "sbClear";
   }
 
@@ -942,7 +969,10 @@
     // full profile, its own spot (state.echoPos), tagged so drags know which
     // appearance moved.
     const pos = inst ? inst : posOf(p.id);
-    const g = el("g", { class: "person" + (p.id === selectedId ? " selected" : "") + (selection.has(p.id) ? " multi" : ""), transform: `translate(${pos.x},${pos.y})`, "data-id": p.id });
+    // highlight the appearance that is actually selected: with a copy-selection
+    // active, only that jump's copies glow; otherwise only main nodes do.
+    const selHere = selection.has(p.id) && (renderSelScope ? !!(inst && inst.uid === renderSelScope) : !inst);
+    const g = el("g", { class: "person" + (p.id === selectedId ? " selected" : "") + (selHere ? " multi" : ""), transform: `translate(${pos.x},${pos.y})`, "data-id": p.id });
     if (inst) g.setAttribute("data-inst", inst.uid);
     // Hover tooltip carries the exact dates when known (the label stays year-only).
     if (p.birthDate || p.deathDate) {
@@ -1786,13 +1816,25 @@
         const id = personEl.getAttribute("data-id");
         const inst = personEl.getAttribute("data-inst");
         if (inst) {
-          // A copy moves by itself — its spot belongs to this jump, so dragging
-          // it never disturbs the person's place on their own branch.
-          if (isLocked(id)) { toast("🔒 Locked in place — unlock them to move them"); return; }
-          const m = /translate\(([-\d.e+]+)[ ,]([-\d.e+]+)\)/.exec(personEl.getAttribute("transform"));
-          drag = { mode: "copy", key: inst + ":" + id, id, startX: e.clientX, startY: e.clientY, start: { x: +m[1], y: +m[2] }, moved: false, pre: snapshot() };
+          // COPIES select and move through the normal machinery, scoped to this
+          // jump: their spots live per-jump, so tools and drags rearrange the
+          // copies and never the originals.
+          if (e.shiftKey) {
+            if (echoScope === inst && selection.size) { if (selection.has(id)) selection.delete(id); else selection.add(id); }
+            else { enterEchoScope(inst); selection = new Set([id]); }
+            render();
+            if (selection.size) toast(selection.size + " selected — drag any of them to move the group");
+            return;
+          }
+          if (isLocked(id)) toast("🔒 Locked in place — unlock them to move them");
+          if (echoScope !== inst || !selection.has(id)) { enterEchoScope(inst); selection = new Set([id]); render(); }
+          const starts = {};
+          selection.forEach((pid) => { const p = posOf(pid); starts[pid] = { x: p.x, y: p.y }; });
+          drag = { mode: "group", id, startX: e.clientX, startY: e.clientY, starts, moved: false, pre: snapshot() };
           return;
         }
+        // a main-node click while copies were selected starts a fresh selection
+        if (echoScope) { echoScope = null; selection = new Set(); }
         // Shift-click toggles a person in/out of the group selection without
         // moving anything — build up a set, then drag any of them to move all.
         if (e.shiftKey) {
@@ -1843,12 +1885,6 @@
       for (const pid in drag.starts) { if (isLocked(pid)) continue; posMap()[pid] = { x: drag.starts[pid].x + wdx, y: drag.starts[pid].y + wdy }; }
       render();
     }
-    else if (drag.mode === "copy") {
-      if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
-      const wdx = dx / view.scale, wdy = e.shiftKey ? 0 : dy / view.scale;
-      (state.echoPos || (state.echoPos = {}))[drag.key] = { x: drag.start.x + wdx, y: drag.start.y + wdy };
-      render();
-    }
     else if (drag.mode === "marquee") {
       drag.moved = true;
       const w = toWorld(e.clientX, e.clientY);
@@ -1868,11 +1904,12 @@
     }
     if (pointers.size === 0) {
       stage.classList.remove("panning");
-      if (drag && (drag.mode === "group" || drag.mode === "copy")) { if (drag.moved) { pushUndo(drag.pre); save(); } else if (drag.id) selectPerson(drag.id); }
+      if (drag && drag.mode === "group") { if (drag.moved) { pushUndo(drag.pre); save(); } else if (drag.id) selectPerson(drag.id); }
       else if (drag && drag.mode === "marquee") {
         if (drag.moved && marquee) {
           const x0 = Math.min(marquee.x0, marquee.x1), x1 = Math.max(marquee.x0, marquee.x1);
           const y0 = Math.min(marquee.y0, marquee.y1), y1 = Math.max(marquee.y0, marquee.y1);
+          echoScope = null;   // a marquee always selects MAIN nodes
           selection = new Set(drag.baseSel || []);   // shift+box = ADD to the selection
           visiblePersons().forEach((p) => { const q = posOf(p.id); if (q.x >= x0 && q.x <= x1 && q.y >= y0 && q.y <= y1) selection.add(p.id); });
           if (selection.size) toast(selection.size + " selected — drag any of them to move the group");
@@ -1898,7 +1935,7 @@
     rearrange = on;
     $("#tbRearrange").classList.toggle("active", rearrange);
     stage.classList.toggle("rearranging", rearrange);
-    if (!rearrange) { selection = new Set(); marquee = null; updateMarquee(); render(); }
+    if (!rearrange) { selection = new Set(); echoScope = null; marquee = null; updateMarquee(); render(); }
     toast(rearrange ? "Rearrange mode ON — drag a person, or drag a box to select several. Nothing moves when it's off." : "Rearrange mode off");
   }
   // everyone in a person's block that should travel with them: the person, their
@@ -1947,6 +1984,7 @@
   // band with two or more people is snapped to that band's median height.
   // Someone sitting far from everyone else forms a band of one and never moves.
   function tidyUp() {
+    echoScope = null;   // tidy always works the MAIN arrangement
     const BAND_T = 70;   // "roughly the same height" tolerance (px)
     const pts = visiblePersons().map((p) => ({ id: p.id, x: posOf(p.id).x, y: posOf(p.id).y }));
     if (pts.length < 2) { toast("Nothing to tidy yet"); return; }
