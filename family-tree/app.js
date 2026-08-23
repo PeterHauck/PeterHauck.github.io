@@ -1010,6 +1010,15 @@
       jb.appendChild(el("circle", { class: "jump-badge-bg", r: 9, cx: 0, cy: 0 }));
       jb.appendChild(el("text", { class: "jump-badge-mark", x: 0, y: 3.5 }, txt("⤴")));
       jb.appendChild(el("title", null, txt(inst ? "They also appear with their own family — click to go to their spot there" : "They also appear on another branch — click to go to that copy")));
+      // right-click the badge removes a hand-made jump (automatic ones explain themselves)
+      jb.addEventListener("contextmenu", (ev) => {
+        ev.preventDefault(); ev.stopPropagation();
+        if (readonly) return;
+        const lid = state.links.filter((l) => l.child === p.id && (!inst || l.union === inst.uid)).map((l) => l.id)
+          .find((x) => state.portals && state.portals[x]);
+        if (lid) { pushUndo(); delete state.portals[lid]; save(); render(); toast("Jump removed — the line is back"); }
+        else toast("This jump is automatic — it goes away if they're arranged nearer their family.");
+      });
       g.appendChild(jb);
     }
 
@@ -1540,25 +1549,6 @@
     }
     const nearTops = childTops.filter((c) => nearSet.has(c.id));
     const farTops = childTops.filter((c) => !nearSet.has(c.id));
-    const portalTag = (x, y, dir, text, goId, lid) => {
-      const t = el("g", { class: "portal-tag" });
-      t.appendChild(el("line", { class: "link", x1: x, y1: y, x2: x, y2: y + (dir === "down" ? 12 : -12), style: cstyle }));
-      const w = text.length * 6.2 + 16;
-      const ty = dir === "down" ? y + 24 : y - 24;
-      t.appendChild(el("rect", { class: "portal-bg", x: x - w / 2, y: ty - 10, width: w, height: 19, rx: 9.5 }));
-      t.appendChild(el("text", { class: "portal-text", x, y: ty + 3.5 }, txt(text)));
-      const isManual = !readonly && state.portals && state.portals[lid];
-      t.appendChild(el("title", null, txt("Continues elsewhere — click to jump there" + (isManual ? ". Right-click to remove this jump." : ""))));
-      t.addEventListener("pointerdown", (ev) => { ev.stopPropagation(); });
-      t.addEventListener("click", (ev) => { ev.stopPropagation(); centerOn(goId); });
-      t.addEventListener("contextmenu", (ev) => {
-        ev.preventDefault(); ev.stopPropagation();
-        if (readonly) return;
-        if (state.portals && state.portals[lid]) { pushUndo(); delete state.portals[lid]; save(); render(); toast("Jump removed — the line is back"); }
-        else toast("This jump is automatic — it goes away if they're arranged nearer their family.");
-      });
-      gu.appendChild(t);
-    };
     if (nearTops.length) {
       gu.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
       const minX = Math.min(dropX, ...nearTops.map((c) => c.x));
@@ -1577,18 +1567,16 @@
             pushUndo();
             (state.portals || (state.portals = {}))[c.lid] = true;
             save(); render();
-            toast("↷ Jump created for " + c.first + " — right-click the ⤴ tag to undo");
+            toast("↷ Jump created for " + c.first + " — right-click their ⤴ badge to undo");
           });
           gu.appendChild(hit);
         }
       });
     }
     if (farTops.length) {
-      // each far child's end: a stub naming the family it continues at
-      const famName = ((pa && (pa.last || pa.name)) || (pb && (pb.last || pb.name)) || "family") + " family";
-      farTops.forEach((c) => portalTag(c.x, c.top + 2, "up", "⤴ " + famName, u.a, c.lid));
-      // the parents' end: the far child REPEATED here with spouse & children,
-      // hooked to the family bus like an ordinary child.
+      // the far child gets no line at their own end — the ⤴ badge on each of
+      // their appearances is the way across. The parents' end gets the child
+      // REPEATED here with spouse & children, hooked to the family bus.
       const rowY2 = (pb ? (A.y + B.y) / 2 : A.y) + ROWH;
       let ex = nearTops.length ? Math.max(dropX, ...nearTops.map((c) => c.x)) + 300 : dropX;
       const echoAnchors = [];
