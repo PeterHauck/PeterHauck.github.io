@@ -1963,36 +1963,60 @@
   // band with two or more people is snapped to that band's median height.
   // Someone sitting far from everyone else forms a band of one and never moves.
   function tidyUp() {
-    const BAND_T = 70;   // "roughly the same height" tolerance (px)
-    const pts = visiblePersons().map((p) => ({ id: p.id, x: posOf(p.id).x, y: posOf(p.id).y }));
-    if (pts.length < 2) { toast("Nothing to tidy yet"); return; }
-    pts.sort((a, b) => a.y - b.y);
-    // Cluster into bands by vertical proximity (a point joins the current band
-    // only while it stays within BAND_T of that band's mean — so a big jump
-    // starts a fresh band and dramatically-offset people stay on their own).
-    const bands = [];
-    let cur = null;
-    for (const pt of pts) {
-      if (cur && Math.abs(pt.y - cur.mean) <= BAND_T) {
-        cur.items.push(pt);
-        cur.mean = cur.items.reduce((s, i) => s + i.y, 0) / cur.items.length;
-      } else { cur = { items: [pt], mean: pt.y }; bands.push(cur); }
-    }
+    // GENERATION lines, from the tree's structure — not from where people
+    // happen to sit. Spouses share a generation, children are one below their
+    // parents; every generation lands on its own exact horizontal line, one
+    // row (ROWH) apart. X positions are never touched. A 🔒 locked person
+    // anchors their family's grid (their line stays exactly where they are);
+    // otherwise the grid settles where it disturbs the fewest people.
+    const people = visiblePersons();
+    if (people.length < 2) { toast("Nothing to tidy yet"); return; }
+    const ids = new Set(people.map((p) => p.id));
+    const gen = new Map();
+    const neighbours = (id) => {
+      const out = [];
+      unionsOfPerson(id).forEach((u) => {
+        const o = u.a === id ? u.b : u.a;
+        if (o != null && ids.has(o)) out.push([o, 0]);
+        childLinksOfUnion(u.id).forEach((l) => { if (ids.has(l.child)) out.push([l.child, 1]); });
+      });
+      parentLinksOfPerson(id).forEach((l) => {
+        const u = unionById(l.union); if (!u) return;
+        [u.a, u.b].forEach((x) => { if (x != null && ids.has(x)) out.push([x, -1]); });
+      });
+      return out;
+    };
+    const comps = [];
+    people.forEach((p) => {
+      if (gen.has(p.id)) return;
+      const comp = [p.id];
+      gen.set(p.id, 0);
+      for (let i = 0; i < comp.length; i++) {
+        neighbours(comp[i]).forEach(([o, d]) => { if (!gen.has(o)) { gen.set(o, gen.get(comp[i]) + d); comp.push(o); } });
+      }
+      comps.push(comp);
+    });
     let moved = 0;
     const pre = snapshot();
-    for (const band of bands) {
-      if (band.items.length < 2) continue;              // a lone person: leave alone
-      const ys = band.items.map((i) => i.y).sort((a, b) => a - b);
-      const n = ys.length;
-      const ty = n % 2 ? ys[(n - 1) / 2] : (ys[n / 2 - 1] + ys[n / 2]) / 2;  // median height
-      for (const it of band.items) {
-        if (Math.abs(it.y - ty) > 0.5 && !isLocked(it.id)) { posMap()[it.id] = { x: it.x, y: ty }; moved++; }
+    comps.forEach((comp) => {
+      // baseline: a locked member pins the grid; else the median offset wins
+      const lockedId = comp.find((id) => isLocked(id));
+      let y0;
+      if (lockedId != null) y0 = posOf(lockedId).y - gen.get(lockedId) * ROWH;
+      else {
+        const offs = comp.map((id) => posOf(id).y - gen.get(id) * ROWH).sort((a, b) => a - b);
+        y0 = offs[Math.floor(offs.length / 2)];
       }
-    }
-    if (!moved) { toast("Everything's already lined up"); return; }
+      comp.forEach((id) => {
+        if (isLocked(id)) return;
+        const q = posOf(id), ty = y0 + gen.get(id) * ROWH;
+        if (Math.abs(q.y - ty) > 0.5) { posMap()[id] = { x: q.x, y: ty }; moved++; }
+      });
+    });
+    if (!moved) { toast("Everything's already lined up — one line per generation"); return; }
     pushUndo(pre);
     save(); render();
-    toast("Tidied up " + moved + " " + (moved === 1 ? "person" : "people") + " (Cmd+Z to undo)");
+    toast("Tidied up " + moved + " " + (moved === 1 ? "person" : "people") + " — each generation on its own line (Cmd+Z to undo)");
   }
   stage.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY); }, { passive: false });
 
