@@ -1351,6 +1351,53 @@
     return baseX + (idx - (uids.length - 1) / 2) * 18;   // spread the attach points
   }
 
+  // A lightly-faded REPEAT of a person shown on the other family's side of a
+  // portal. Clicking it jumps to the real one.
+  function renderEchoPerson(gp, p, x, y) {
+    const g = el("g", { class: "echo-person", transform: `translate(${x},${y})`, "data-echo": p.id });
+    const ph = photoOf(p);
+    const clip = { male: "clip-male", female: "clip-female", unknown: "clip-unknown" }[p.sex] || "clip-unknown";
+    if (ph) g.appendChild(el("image", { href: ph, x: -HALF, y: -HALF, width: HALF * 2, height: HALF * 2, preserveAspectRatio: "xMidYMid slice", "clip-path": `url(#${clip})` }));
+    else g.appendChild(el("text", { class: "placeholder-emoji", x: 0, y: 2 }, txt("👤")));
+    g.appendChild(shapeOutline(p.sex, !!ph, effColor(p.id)));
+    if (isDeceased(p) && !ph) g.appendChild(el("line", { class: "deceased", x1: -HALF, y1: HALF, x2: HALF, y2: -HALF }));
+    const nm = treeDisplayName(p);
+    g.appendChild(el("rect", { class: "label-bg", x: -(nm.length * 7.5) / 2 - 6, y: HALF + 6, width: nm.length * 7.5 + 12, height: 24, rx: 5 }));
+    g.appendChild(el("text", { class: "label", x: 0, y: HALF + 22 }, txt(nm)));
+    g.appendChild(el("title", null, txt(nm + " — repeated here; their main spot is with their own family. Click to jump there.")));
+    g.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    g.addEventListener("click", (ev) => { ev.stopPropagation(); centerOn(p.id); });
+    gp.appendChild(g);
+  }
+  // The far-away child REPEATED on their parents' side — them, their spouse(s),
+  // and their children — so each branch reads complete on its own.
+  function renderEchoCluster(gu, childId, cx, rowY) {
+    const p = personById(childId); if (!p) return { anchorX: cx, width: COLW };
+    renderEchoPerson(gu, p, cx, rowY);
+    const spouses = spouseIdsOf(childId).map(personById).filter((sp) => sp && !isHidden(sp.id)).slice(0, 2);
+    let sx = cx;
+    spouses.forEach((sp) => {
+      const prev = sx; sx += COLW + 12;
+      gu.appendChild(el("line", { class: "link echo-link", x1: prev + HALF - 6, y1: rowY, x2: sx - HALF + 6, y2: rowY }));
+      renderEchoPerson(gu, sp, sx, rowY);
+    });
+    const kids = [...new Set(unionsOfPerson(childId).flatMap((u2) => childLinksOfUnion(u2.id).map((l) => l.child)))]
+      .map(personById).filter((k) => k && !isHidden(k.id));
+    const mid = (cx + sx) / 2;
+    if (kids.length) {
+      const kidY = rowY + ROWH, kb = rowY + 120;
+      gu.appendChild(el("line", { class: "link echo-link", x1: mid, y1: rowY, x2: mid, y2: kb }));
+      const startX = mid - ((kids.length - 1) * 150) / 2;
+      if (kids.length > 1) gu.appendChild(el("line", { class: "link echo-link", x1: startX, y1: kb, x2: startX + (kids.length - 1) * 150, y2: kb }));
+      kids.forEach((k, i) => {
+        const kx = startX + i * 150;
+        gu.appendChild(el("line", { class: "link echo-link", x1: kx, y1: kb, x2: kx, y2: kidY - HALF - 8 }));
+        renderEchoPerson(gu, k, kx, kidY);
+      });
+    }
+    return { anchorX: cx, width: Math.max(sx - cx + 2 * HALF, kids.length * 150) };
+  }
+
   function renderUnion(u) {
     const pa = personById(u.a); if (!pa) return;
     const pb = u.b != null ? personById(u.b) : null;
@@ -1486,13 +1533,23 @@
       });
     }
     if (farTops.length) {
-      // the parents' end: one stub naming the far child(ren)
-      const label = "⤵ " + farTops[0].first + (farTops.length > 1 ? " +" + (farTops.length - 1) : "");
-      if (nearTops.length) portalTag(dropX, busY, "down", label, farTops[0].id);
-      else portalTag(dropX, dropTop, "down", label, farTops[0].id);
       // each far child's end: a stub naming the family it continues at
       const famName = ((pa && (pa.last || pa.name)) || (pb && (pb.last || pb.name)) || "family") + " family";
       farTops.forEach((c) => portalTag(c.x, c.top + 2, "up", "⤴ " + famName, u.a));
+      // the parents' end: the far child REPEATED here with spouse & children,
+      // hooked to the family bus like an ordinary child.
+      const rowY2 = (pb ? (A.y + B.y) / 2 : A.y) + ROWH;
+      let ex = nearTops.length ? Math.max(dropX, ...nearTops.map((c) => c.x)) + 300 : dropX;
+      const echoAnchors = [];
+      farTops.forEach((c) => {
+        const r = renderEchoCluster(gu, c.id, ex, rowY2);
+        echoAnchors.push(r.anchorX);
+        ex = r.anchorX + r.width + 160;
+      });
+      if (!nearTops.length) gu.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
+      const bmin = Math.min(dropX, ...echoAnchors), bmax = Math.max(dropX, ...echoAnchors);
+      if (bmin !== bmax) gu.appendChild(el("line", { class: "link", x1: bmin, y1: busY, x2: bmax, y2: busY, style: cstyle }));
+      echoAnchors.forEach((ax) => gu.appendChild(el("line", { class: "link", x1: ax, y1: busY, x2: ax, y2: rowY2 - HALF - 8, style: cstyle })));
     }
     gLinks.appendChild(gu);
   }
