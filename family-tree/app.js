@@ -169,7 +169,7 @@
 
   function addPerson(data) {
     const np = nameParts(data);
-    const p = { id: uid(), name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate || null, deathDate: data.deathDate || null, deceased: !!data.deceased, sex: data.sex || "unknown", color: data.color || null, photo: data.photo || null, docs: data.docs || [] };
+    const p = { id: uid(), name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate || null, deathDate: data.deathDate || null, deceased: !!data.deceased, causeOfDeath: data.causeOfDeath || undefined, sex: data.sex || "unknown", color: data.color || null, photo: data.photo || null, docs: data.docs || [] };
     state.persons.push(p);
     // Anyone added while inside a hidden branch stays hidden from the main tree.
     if (hiddenScope) { if (!state.hidden) state.hidden = {}; state.hidden[p.id] = true; }
@@ -1438,9 +1438,20 @@
     const place = (unit, centerX, y) => {
       const q = spot(unit.p.id, centerX, y);
       const sq = unit.spouses.map((sp, i) => spot(sp.id, centerX + (i === 0 ? SLOT : -SLOT), y));
-      sq.forEach((s) => {
+      sq.forEach((s, i) => {
         const a = s.x <= q.x ? s : q, b = s.x <= q.x ? q : s;
-        gu.appendChild(el("line", { class: "link echo-link", x1: a.x + HALF - 6, y1: a.y, x2: b.x - HALF + 6, y2: b.y }));
+        const u2 = unionBetween(unit.p.id, unit.spouses[i].id);
+        gu.appendChild(el("line", { class: "link echo-link", x1: a.x + HALF - 6, y1: a.y, x2: b.x - HALF + 6, y2: b.y, "stroke-dasharray": u2 && u2.status === "partners" ? "6 5" : null }));
+        if (u2) {
+          // same dressing as the main marriage line: date label + divorce ticks
+          const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
+          if (u2.status === "divorced") [-7, 5].forEach((dx) => gu.appendChild(el("line", { class: "divorce-tick", x1: midX + dx + 5, y1: midY - 11, x2: midX + dx - 5, y2: midY + 11 })));
+          const dlabel = unionDateLabel(u2);
+          if (dlabel) {
+            gu.appendChild(el("rect", { class: "union-date-bg", x: midX - dlabel.length * 3.3 - 4, y: midY - 21, width: dlabel.length * 6.6 + 8, height: 15, rx: 4 }));
+            gu.appendChild(el("text", { class: "union-date", x: midX, y: midY - 10 }, txt(dlabel)));
+          }
+        }
       });
       if (unit.kids.length) {
         const pmx = sq.length ? (q.x + sq[0].x) / 2 : q.x;   // bus hangs between the couple
@@ -2065,6 +2076,8 @@
     $("#pName").value = p.name || "";
     $("#pBirth").value = p.birth == null ? "" : p.birth;
     $("#pDeath").value = p.death == null ? "" : p.death;
+    $("#pCause").value = p.causeOfDeath || "";
+    $("#causeField").hidden = !isDeceased(p);
     $("#pBirthDate").value = p.birthDate || "";
     $("#pDeathDate").value = p.deathDate || "";
     // Expand the "Exact dates" section when there's a full date to show, so
@@ -2092,6 +2105,7 @@
   function resetPersonForm() {
     $("#personId").value = "";
     $("#personForm").reset();
+    $("#causeField").hidden = true;
     setSex("male");
     pendingPhoto = null; updatePhotoPreview();
     setColor("");
@@ -2387,6 +2401,21 @@
         // Marriage takes an exact date; only fill the picker from an ISO value
         // (a legacy year-only entry can't populate a date box but still shows on the tree).
         dRow.appendChild(dateField(st === "partners" ? "Together" : "Married", "marriage", "date", isISODate(u.marriage) ? u.marriage : ""));
+        // …or just a year when the exact day isn't known (either box works;
+        // whichever was filled last wins)
+        {
+          const yWrap = document.createElement("span"); yWrap.className = "rel-date-field";
+          const yLab = document.createElement("span"); yLab.className = "rel-date-label"; yLab.textContent = "or year";
+          const yi = document.createElement("input"); yi.type = "text"; yi.className = "rel-date"; yi.placeholder = "year";
+          yi.value = !isISODate(u.marriage) ? (u.marriage || "") : "";
+          yi.onchange = () => { relSetUnionField(u.id, "marriage", yi.value, pid, true); const di = dRow.querySelector('input[type="date"]'); if (di && yi.value.trim()) di.value = ""; };
+          yi.onblur = () => { relFieldUndoKey = null; refreshRel(pid); };
+          yi.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); yi.blur(); } };
+          const di = dRow.querySelector('input[type="date"]');
+          if (di) di.addEventListener("change", () => { if (di.value) yi.value = ""; });
+          yWrap.appendChild(yLab); yWrap.appendChild(yi);
+          dRow.appendChild(yWrap);
+        }
         if (st === "divorced") dRow.appendChild(dateField("Divorced", "divorce", "text", u.divorce));
         box.appendChild(dRow);
       });
@@ -2467,10 +2496,12 @@
     const birthYear = birthDate ? birthDate.slice(0, 4) : $("#pBirth").value;
     const deathYear = deathDate ? deathDate.slice(0, 4) : $("#pDeath").value;
     const np = nameParts({ first: $("#pFirst").value.trim(), middle: $("#pMiddle").value.trim(), last: $("#pLast").value.trim(), nickname: $("#pNick").value.trim(), maiden: formSex === "female" ? $("#pMaiden").value.trim() : "", suffix: $("#pSuffix").value.trim() });
-    const data = { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: birthYear, death: deathYear, birthDate, deathDate, deceased: $("#pDeceased").checked, sex: formSex, color: formColor, photo: pendingPhoto };
+    const data = { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: birthYear, death: deathYear, birthDate, deathDate, deceased: $("#pDeceased").checked, causeOfDeath: $("#pCause").value.trim() || null, sex: formSex, color: formColor, photo: pendingPhoto };
     if (id) {
       const p = personById(id);
       Object.assign(p, { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate, deathDate: data.deathDate, deceased: data.deceased, sex: data.sex, color: data.color || null });
+      const cause = $("#pCause").value.trim();
+      if (cause) p.causeOfDeath = cause; else delete p.causeOfDeath;
       // The photo only changes when the user actually changed it — an
       // externalised photo that hadn't finished loading is never wiped.
       if (photoDirty) {
@@ -2486,7 +2517,11 @@
   });
   // Entering a full date fills in (and keeps in sync) the year that shows on the tree.
   $("#pBirthDate").addEventListener("change", () => { const v = $("#pBirthDate").value; if (v) $("#pBirth").value = v.slice(0, 4); });
-  $("#pDeathDate").addEventListener("change", () => { const v = $("#pDeathDate").value; if (v) { $("#pDeath").value = v.slice(0, 4); $("#pDeceased").checked = true; } });
+  $("#pDeathDate").addEventListener("change", () => { const v = $("#pDeathDate").value; if (v) { $("#pDeath").value = v.slice(0, 4); $("#pDeceased").checked = true; } syncCauseVis(); });
+  // The cause-of-death box shows only once the form says they've passed away.
+  function syncCauseVis() { $("#causeField").hidden = !($("#pDeceased").checked || $("#pDeath").value || $("#pDeathDate").value); }
+  $("#pDeceased").addEventListener("change", syncCauseVis);
+  $("#pDeath").addEventListener("input", syncCauseVis);
   $("#personCancel").onclick = resetPersonForm;
   $("#personDelete").onclick = () => {
     const id = $("#personId").value; if (!id) return;
@@ -3830,6 +3865,7 @@
       const fmt = (exact, year) => exact ? new Date(exact + "T12:00:00").toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : (year != null ? String(year) : "—");
       line("Born", fmt(p.birthDate, p.birth));
       line(isDeceased(p) ? "Died" : "Status", isDeceased(p) ? fmt(p.deathDate, p.death) : "Living");
+      if (isDeceased(p) && p.causeOfDeath) line("Cause of death", p.causeOfDeath);
       s.appendChild(view);
       const bar = document.createElement("div"); bar.className = "pcard-notes-bar";
       const editBtn = document.createElement("button"); editBtn.className = "btn small"; editBtn.textContent = "✏️ Edit details";
@@ -3849,6 +3885,12 @@
         const dec = document.createElement("input"); dec.type = "checkbox"; dec.checked = isDeceased(p);
         const decWrap = document.createElement("label"); decWrap.className = "pcard-check"; decWrap.appendChild(dec); decWrap.appendChild(document.createTextNode(" Has passed away"));
         f.appendChild(decWrap);
+        const causeI = document.createElement("input"); causeI.type = "text"; causeI.value = p.causeOfDeath || ""; causeI.placeholder = "e.g. heart failure";
+        const causeW = document.createElement("label"); causeW.className = "pcard-field"; causeW.hidden = !isDeceased(p);
+        const causeT = document.createElement("span"); causeT.textContent = "Cause of death (optional)";
+        causeW.appendChild(causeT); causeW.appendChild(causeI); f.appendChild(causeW);
+        const syncCause = () => { causeW.hidden = !(dec.checked || dYear.value || dDate.value); };
+        dec.addEventListener("change", syncCause); dYear.addEventListener("input", syncCause); dDate.addEventListener("change", syncCause);
         const btns = document.createElement("div"); btns.className = "pcard-notes-bar";
         const cancel = document.createElement("button"); cancel.className = "btn small"; cancel.textContent = "Cancel";
         const saveB = document.createElement("button"); saveB.className = "btn primary small"; saveB.textContent = "Save details";
@@ -3863,6 +3905,7 @@
           p.birth = isNaN(by) ? null : by; p.birthDate = birthDate;
           p.death = isNaN(dy) ? null : dy; p.deathDate = deathDate;
           p.deceased = !!(dec.checked || dy || deathDate);
+          if (causeI.value.trim() && isDeceased(p)) p.causeOfDeath = causeI.value.trim(); else delete p.causeOfDeath;
           save(); try { cloudSaveTree(false); } catch (e) {}
           render(); closeProfileCard(); openProfileCard(id); toast("Details saved");
         };
