@@ -868,8 +868,10 @@
     emptyState.style.display = state.persons.length ? "none" : "flex";
 
     busLevels = computeBusLevels();
+    copyPlacements = []; copySpots = {};   // repopulated by the unions below
     visibleUnions().forEach(renderUnion);
-    visiblePersons().forEach(renderPerson);
+    visiblePersons().forEach((p) => renderPerson(p));
+    copyPlacements.forEach((c) => renderPerson(c.p, c));   // copies are full person nodes
     if (!hiddenScope) renderHiddenBadges();   // no eye-badges inside a hidden branch
     updatePeopleList();
     $("#peopleCount").textContent = state.persons.length;
@@ -935,9 +937,13 @@
     return e;
   }
 
-  function renderPerson(p) {
-    const pos = posOf(p.id);
+  function renderPerson(p, inst) {
+    // `inst` = this node is a COPY of the person placed across a jump: same
+    // full profile, its own spot (state.echoPos), tagged so drags know which
+    // appearance moved.
+    const pos = inst ? inst : posOf(p.id);
     const g = el("g", { class: "person" + (p.id === selectedId ? " selected" : "") + (selection.has(p.id) ? " multi" : ""), transform: `translate(${pos.x},${pos.y})`, "data-id": p.id });
+    if (inst) g.setAttribute("data-inst", inst.uid);
     // Hover tooltip carries the exact dates when known (the label stays year-only).
     if (p.birthDate || p.deathDate) {
       const tip = [p.name];
@@ -993,6 +999,18 @@
       const lk = el("text", { class: "lock-badge", x: -HALF + 2, y: -HALF + 12 }, txt("🔒"));
       lk.appendChild(el("title", null, txt("Locked in place")));
       g.appendChild(lk);
+    }
+
+    // ⤴ hop badge: a person appearing in two places gets one on EACH node —
+    // on a copy it goes to their main spot, on the main node to the copy.
+    const spots = inst ? null : copySpots[p.id];
+    if (inst || (spots && spots.length)) {
+      const go = inst ? posOf(p.id) : spots[0];
+      const jb = el("g", { class: "jump-badge", "data-x": go.x, "data-y": go.y, transform: `translate(${-HALF + 5},${HALF - 5})` });
+      jb.appendChild(el("circle", { class: "jump-badge-bg", r: 9, cx: 0, cy: 0 }));
+      jb.appendChild(el("text", { class: "jump-badge-mark", x: 0, y: 3.5 }, txt("⤴")));
+      jb.appendChild(el("title", null, txt(inst ? "They also appear with their own family — click to go to their spot there" : "They also appear on another branch — click to go to that copy")));
+      g.appendChild(jb);
     }
 
     // Four directional add-a-relative "+"s, revealed on hover (CSS). Left/right add
@@ -1351,63 +1369,11 @@
     return baseX + (idx - (uids.length - 1) / 2) * 18;   // spread the attach points
   }
 
-  // A person REPEATED on the other family's side of a jump — drawn exactly
-  // like their main node (photo, colour, dates) plus a tiny ⤴ corner badge,
-  // so they appear fully on both branches. Clicking goes to their main spot;
-  // dragging rearranges this copy only.
-  function renderEchoPerson(gp, p, x, y, uid) {
-    const g = el("g", { class: "echo-person", transform: `translate(${x},${y})`, "data-echo": p.id });
-    const clip = { male: "clip-male", female: "clip-female", unknown: "clip-unknown" }[p.sex] || "clip-unknown";
-    const decd = isDeceased(p);
-    const ph = photoOf(p);
-    if (ph) {
-      if (decd) g.appendChild(el("line", { class: "deceased", x1: -HALF - 9, y1: HALF + 9, x2: HALF + 9, y2: -HALF - 9 }));
-      g.appendChild(el("image", { href: ph, x: -HALF, y: -HALF, width: HALF * 2, height: HALF * 2, preserveAspectRatio: "xMidYMid slice", "clip-path": `url(#${clip})` }));
-    } else {
-      g.appendChild(el("text", { class: "placeholder-emoji", x: 0, y: 2 }, txt("👤")));
-    }
-    g.appendChild(shapeOutline(p.sex, !!ph, effColor(p.id)));
-    if (decd && !ph) g.appendChild(el("line", { class: "deceased", x1: -HALF, y1: HALF, x2: HALF, y2: -HALF }));
-    const lines = nameLines(treeDisplayName(p));
-    const d = dateStr(p);
-    let w = 0; lines.forEach((l) => (w = Math.max(w, l.length * 7.5)));
-    if (d) w = Math.max(w, d.length * 6.5);
-    const bgH = lines.length * 18 + (d ? 15 : 0) + 8;
-    g.appendChild(el("rect", { class: "label-bg", x: -(w / 2) - 6, y: HALF + 6, width: w + 12, height: bgH, rx: 5 }));
-    lines.forEach((l, i) => g.appendChild(el("text", { class: "label", x: 0, y: HALF + 22 + i * 18 }, txt(l))));
-    if (d) g.appendChild(el("text", { class: "dates", x: 0, y: HALF + 24 + lines.length * 18 }, txt(d)));
-    // tiny corner badge marking this as a copy of a person who lives elsewhere
-    const eb = el("g", { class: "echo-badge", transform: `translate(${HALF - 5},${-HALF + 5})` });
-    eb.appendChild(el("circle", { class: "echo-badge-bg", r: 9, cx: 0, cy: 0 }));
-    eb.appendChild(el("text", { class: "echo-badge-mark", x: 0, y: 3.5 }, txt("⤴")));
-    g.appendChild(eb);
-    g.appendChild(el("title", null, txt(treeDisplayName(p) + " — also appears with their own family. Click to go to their spot there; drag to rearrange this copy.")));
-    if (!readonly) {
-      // Drag rearranges this copy (stored per jump so the main spot is
-      // untouched); a still click goes to the person's main spot.
-      g.addEventListener("pointerdown", (ev) => {
-        ev.stopPropagation(); ev.preventDefault();
-        const sx0 = ev.clientX, sy0 = ev.clientY; let moved = false;
-        const mv = (e2) => {
-          if (!moved && Math.hypot(e2.clientX - sx0, e2.clientY - sy0) > 4) moved = true;
-          if (moved) g.setAttribute("transform", `translate(${x + (e2.clientX - sx0) / view.scale},${y + (e2.clientY - sy0) / view.scale})`);
-        };
-        const up = (e2) => {
-          window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up);
-          if (moved) {
-            pushUndo();
-            (state.echoPos || (state.echoPos = {}))[uid + ":" + p.id] = { x: x + (e2.clientX - sx0) / view.scale, y: y + (e2.clientY - sy0) / view.scale };
-            save(); render();
-          } else centerOn(p.id);
-        };
-        window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
-      });
-    } else {
-      g.addEventListener("pointerdown", (ev) => ev.stopPropagation());
-      g.addEventListener("click", (ev) => { ev.stopPropagation(); centerOn(p.id); });
-    }
-    gp.appendChild(g);
-  }
+  // People repeated across a jump this render: registered while the unions
+  // draw, then drawn as ORDINARY person nodes after them — a copy is the same
+  // full profile, dragging/selecting/editing exactly like anyone else. The
+  // only extra is a ⤴ badge for hopping between a person's appearances.
+  let copyPlacements = [], copySpots = {};
   // The far-away child REPEATED on their parents' side — them, their spouse(s),
   // and their children — so each branch reads complete on its own. Each copy
   // starts at a tidy default spot but can be dragged anywhere (stored per
@@ -1443,9 +1409,8 @@
         gu.appendChild(el("line", { class: "link echo-link", x1: Math.min(...bxs), y1: kb, x2: Math.max(...bxs), y2: kb }));
       kq.forEach((q) => gu.appendChild(el("line", { class: "link echo-link", x1: q.x, y1: kb, x2: q.x, y2: q.y - HALF - 8 })));
     }
-    renderEchoPerson(gu, p, cq.x, cq.y, uid);
-    spouses.forEach((sp, i) => renderEchoPerson(gu, sp, sq[i].x, sq[i].y, uid));
-    kids.forEach((k, i) => renderEchoPerson(gu, k, kq[i].x, kq[i].y, uid));
+    const reg = (pp, q) => { copyPlacements.push({ p: pp, uid, x: q.x, y: q.y }); (copySpots[pp.id] = copySpots[pp.id] || []).push({ uid, x: q.x, y: q.y }); };
+    reg(p, cq); spouses.forEach((sp, i) => reg(sp, sq[i])); kids.forEach((k, i) => reg(k, kq[i]));
     return { anchorX: cq.x, anchorTop: cq.y - HALF - 8, width: Math.max(defSx - cx + 2 * HALF, kids.length * 150) };
   }
 
@@ -1785,6 +1750,15 @@
     try { svg.setPointerCapture(e.pointerId); } catch (_) {}
     if (pointers.size >= 2) { startPinch(); marquee = null; updateMarquee(); return; }
 
+    const jb = e.target.closest && e.target.closest(".jump-badge");
+    if (jb) {
+      // hop to this person's other appearance
+      const r = stage.getBoundingClientRect();
+      view.tx = r.width / 2 - (+jb.getAttribute("data-x")) * view.scale;
+      view.ty = r.height / 2 - (+jb.getAttribute("data-y")) * view.scale;
+      applyView();
+      return;
+    }
     const badge = e.target.closest && e.target.closest(".doc-badge");
     if (badge) { openDocsForPerson(badge.getAttribute("data-id")); return; }
     const hb = e.target.closest && e.target.closest(".hidden-badge");
@@ -1809,6 +1783,15 @@
     if (rearrange && !readonly) {
       if (personEl) {
         const id = personEl.getAttribute("data-id");
+        const inst = personEl.getAttribute("data-inst");
+        if (inst) {
+          // A copy moves by itself — its spot belongs to this jump, so dragging
+          // it never disturbs the person's place on their own branch.
+          if (isLocked(id)) { toast("🔒 Locked in place — unlock them to move them"); return; }
+          const m = /translate\(([-\d.e+]+)[ ,]([-\d.e+]+)\)/.exec(personEl.getAttribute("transform"));
+          drag = { mode: "copy", key: inst + ":" + id, id, startX: e.clientX, startY: e.clientY, start: { x: +m[1], y: +m[2] }, moved: false, pre: snapshot() };
+          return;
+        }
         // Shift-click toggles a person in/out of the group selection without
         // moving anything — build up a set, then drag any of them to move all.
         if (e.shiftKey) {
@@ -1859,6 +1842,12 @@
       for (const pid in drag.starts) { if (isLocked(pid)) continue; posMap()[pid] = { x: drag.starts[pid].x + wdx, y: drag.starts[pid].y + wdy }; }
       render();
     }
+    else if (drag.mode === "copy") {
+      if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+      const wdx = dx / view.scale, wdy = e.shiftKey ? 0 : dy / view.scale;
+      (state.echoPos || (state.echoPos = {}))[drag.key] = { x: drag.start.x + wdx, y: drag.start.y + wdy };
+      render();
+    }
     else if (drag.mode === "marquee") {
       drag.moved = true;
       const w = toWorld(e.clientX, e.clientY);
@@ -1878,7 +1867,7 @@
     }
     if (pointers.size === 0) {
       stage.classList.remove("panning");
-      if (drag && drag.mode === "group") { if (drag.moved) { pushUndo(drag.pre); save(); } else if (drag.id) selectPerson(drag.id); }
+      if (drag && (drag.mode === "group" || drag.mode === "copy")) { if (drag.moved) { pushUndo(drag.pre); save(); } else if (drag.id) selectPerson(drag.id); }
       else if (drag && drag.mode === "marquee") {
         if (drag.moved && marquee) {
           const x0 = Math.min(marquee.x0, marquee.x1), x1 = Math.max(marquee.x0, marquee.x1);
@@ -3838,7 +3827,7 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [], locked: state.locked || {} };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [], locked: state.locked || {}, portals: state.portals || {}, echoPos: state.echoPos || {} };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
@@ -3851,6 +3840,8 @@
       mediaKey: obj.mediaKey || null,
       groups: Array.isArray(obj.groups) ? obj.groups : [],
       locked: obj.locked && typeof obj.locked === "object" ? obj.locked : {},
+      portals: obj.portals && typeof obj.portals === "object" ? obj.portals : {},
+      echoPos: obj.echoPos && typeof obj.echoPos === "object" ? obj.echoPos : {},
     });
   }
   /* -------- local storage: IndexedDB (roomy — holds photos/PDFs), with a
