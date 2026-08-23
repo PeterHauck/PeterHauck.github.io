@@ -2004,38 +2004,43 @@
     const genOf = (pid) => gen.get(find(pid)) || 0;
     const members = comps.map(() => []);
     people.forEach((p) => members[compOf.get(find(p.id))].push(p.id));
-    // 3) a baseline per family: a 🔒 locked member pins it exactly; otherwise
-    //    the median offset. Then every unlocked family snaps onto ONE shared
-    //    grid (the locked — else biggest — family sets it), so the generation
-    //    lines are the SAME across all trees on the canvas.
+    // 3) the grid's HEIGHT follows the tree's main family: the most common
+    //    surname (e.g. Hauck) picks the reference — the baseline is the median
+    //    offset of THAT family's people, so the grid settles where the main
+    //    family already sits. Every other family snaps onto the same shared
+    //    lines, so generation lines are identical across all trees.
+    const surnameOf = (id) => { const p = personById(id); return ((p && (p.last != null ? p.last : parseName(p.name || "").last)) || "").toLowerCase(); };
+    const surCount = {};
+    people.forEach((p) => { const s = surnameOf(p.id); if (s) surCount[s] = (surCount[s] || 0) + 1; });
+    const mainSurname = (Object.entries(surCount).sort((a, b) => b[1] - a[1])[0] || [""])[0];
     const y0s = members.map((mem) => {
-      const lockedId = mem.find((id) => isLocked(id));
-      if (lockedId != null) return { y: posOf(lockedId).y - genOf(lockedId) * ROWH, locked: true, n: mem.length };
-      const offs = mem.map((id) => posOf(id).y - genOf(id) * ROWH).sort((a, b) => a - b);
-      return { y: offs[Math.floor(offs.length / 2)], locked: false, n: mem.length };
+      const fam = mem.filter((id) => surnameOf(id) === mainSurname);
+      const base = (fam.length ? fam : mem).map((id) => posOf(id).y - genOf(id) * ROWH).sort((a, b) => a - b);
+      return { y: base[Math.floor(base.length / 2)], famN: fam.length, n: mem.length };
     });
-    const ref = y0s.filter((v) => v.locked).sort((a, b) => b.n - a.n)[0] || y0s.slice().sort((a, b) => b.n - a.n)[0];
-    y0s.forEach((v) => { if (!v.locked && v !== ref) v.y = ref.y + Math.round((v.y - ref.y) / ROWH) * ROWH; });
+    const ref = y0s.slice().sort((a, b) => (b.famN - a.famN) || (b.n - a.n))[0];
+    y0s.forEach((v) => { if (v !== ref) v.y = ref.y + Math.round((v.y - ref.y) / ROWH) * ROWH; });
     const lineFor = (pid) => y0s[compOf.get(find(pid))].y + genOf(pid) * ROWH;
-    // 4) move every appearance onto its line — main nodes AND copies alike
-    let moved = 0;
+    // 4) move every appearance onto its line — main nodes AND copies alike.
+    //    Uniform separation matters more than pinning here, so even 🔒 locked
+    //    people get their HEIGHT aligned (their left–right spot never moves,
+    //    and every other tool still refuses to touch them).
+    let moved = 0, movedLocked = 0;
     const pre = snapshot();
     people.forEach((p) => {
-      if (isLocked(p.id)) return;
       const q = posOf(p.id), ty = lineFor(p.id);
-      if (Math.abs(q.y - ty) > 0.5) { posMap()[p.id] = { x: q.x, y: ty }; moved++; }
+      if (Math.abs(q.y - ty) > 0.5) { posMap()[p.id] = { x: q.x, y: ty }; moved++; if (isLocked(p.id)) movedLocked++; }
     });
     Object.keys(copyPos).forEach((nk) => {
-      if (isLocked(nk)) return;
       const pid = pidOf(nk);
       if (!ids.has(pid)) return;
       const q = nkPos(nk), ty = lineFor(pid);
-      if (Math.abs(q.y - ty) > 0.5) { (state.echoPos || (state.echoPos = {}))[nk] = { x: q.x, y: ty }; moved++; }
+      if (Math.abs(q.y - ty) > 0.5) { (state.echoPos || (state.echoPos = {}))[nk] = { x: q.x, y: ty }; moved++; if (isLocked(nk)) movedLocked++; }
     });
     if (!moved) { toast("Everything's already lined up — one line per generation"); return; }
     pushUndo(pre);
     save(); render();
-    toast("Tidied up " + moved + " " + (moved === 1 ? "person" : "people") + " — each generation on its own line (Cmd+Z to undo)");
+    toast("Tidied up " + moved + " " + (moved === 1 ? "person" : "people") + " — each generation on its own line" + (movedLocked ? " (incl. " + movedLocked + " locked — heights only)" : "") + " (Cmd+Z to undo)");
   }
   stage.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY); }, { passive: false });
 
