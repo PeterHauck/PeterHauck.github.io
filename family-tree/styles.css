@@ -67,18 +67,18 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 /* node visuals */
 .person { cursor: pointer; }
-.person .shape {
+.person .shape, .echo-person .shape {
   fill: var(--node-fill);
   stroke: var(--line);
   stroke-width: 2.5;
 }
 .person.selected .shape { stroke: var(--accent-2); stroke-width: 4; }
-.person .label {
+.person .label, .echo-person .label {
   fill: var(--ink); font-size: 15px; font-weight: 600; text-anchor: middle;
 }
-.person .dates { fill: var(--muted); font-size: 12.5px; text-anchor: middle; }
-.person .deceased { stroke: var(--line); stroke-width: 2.5; }
-.person .placeholder-emoji { font-size: 34px; text-anchor: middle; dominant-baseline: central; fill: var(--muted); opacity: .5; }
+.person .dates, .echo-person .dates { fill: var(--muted); font-size: 12.5px; text-anchor: middle; }
+.person .deceased, .echo-person .deceased { stroke: var(--line); stroke-width: 2.5; }
+.person .placeholder-emoji, .echo-person .placeholder-emoji { font-size: 34px; text-anchor: middle; dominant-baseline: central; fill: var(--muted); opacity: .5; }
 
 .link { fill: none; stroke: var(--line); stroke-width: 2.2; }
 .link.adopt { stroke-dasharray: 7 6; stroke: var(--adopt); }
@@ -323,7 +323,7 @@ button.btn.danger { color: var(--divorce); }
   cursor: pointer; padding: 0; background: var(--paper); font-size: 12px; color: var(--muted);
 }
 .color-row .swatch.sel { box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--ink); }
-.person .label-bg { fill: var(--paper); stroke: none; }
+.person .label-bg, .echo-person .label-bg { fill: var(--paper); stroke: none; }
 .people-list li.hidden .meta::after { content: " · hidden"; }
 .people-list li.hidden { opacity: .5; }
 #hiddenChip {
