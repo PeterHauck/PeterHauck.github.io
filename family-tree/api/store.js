@@ -530,6 +530,17 @@ async function handleGitHub(req, res, passcode, ghToken) {
       return;
     }
 
+    // Every media id the store currently holds — lets the editor spot photo
+    // files the tree still references but the store lost (e.g. the old Blob
+    // store), and re-upload them from its local cache.
+    if (req.method === "GET" && req.query.action === "listMedia") {
+      const j = await gh("GET", repo + "/contents/media?ref=" + encodeURIComponent(GH_BRANCH));
+      const ids = Array.isArray(j) ? j.map((f) => ((f && f.name) || "").replace(/\.json$/, "")).filter((n) => MEDIA_ID.test(n)) : [];
+      res.setHeader("Cache-Control", "no-store");
+      res.status(200).json({ ids });
+      return;
+    }
+
     if (req.method === "GET" && req.query.action === "getView") {
       const id = (req.query.id || "").toString();
       if (!VIEW_ID.test(id)) { res.status(400).json({ error: "Bad view id." }); return; }
