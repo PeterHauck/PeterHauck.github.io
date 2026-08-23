@@ -2165,7 +2165,22 @@
   }
   function relSetStatus(unionId, status, personId) { pushUndo(); const u = unionById(unionId); if (u) u.status = status; refreshRel(personId); }
   // Marriage / divorce date (free text — a year like "1950" or a full date). Empty clears it.
-  function relSetUnionField(unionId, field, val, personId) { pushUndo(); const u = unionById(unionId); if (u) { val = (val || "").trim(); if (val) u[field] = val; else delete u[field]; } refreshRel(personId); }
+  // Date/year fields update QUIETLY while focused: the browser fires `change`
+  // on a date input at every keystroke once all segments are filled, and a
+  // form rebuild mid-typing would destroy the input under the user's cursor.
+  // So: write the value + repaint the tree label live, coalesce the whole
+  // typing burst into ONE undo step, and rebuild the form only on blur.
+  let relFieldUndoKey = null;
+  function relSetUnionField(unionId, field, val, personId, quiet) {
+    const u = unionById(unionId); if (!u) { if (!quiet) refreshRel(personId); return; }
+    val = (val || "").trim();
+    if (val === (u[field] || "")) { if (!quiet) refreshRel(personId); return; }
+    const key = unionId + "/" + field;
+    if (relFieldUndoKey !== key) { pushUndo(); relFieldUndoKey = key; }
+    if (val) u[field] = val; else delete u[field];
+    if (quiet) { save(); render(); }
+    else { relFieldUndoKey = null; refreshRel(personId); }
+  }
   function relSetChildType(linkId, type, personId) { pushUndo(); const l = state.links.find((x) => x.id === linkId); if (l) l.type = type; refreshRel(personId); }
   function relUnlinkUnion(unionId, personId) {
     if (!confirm("Remove this relationship? Both people stay in the tree; any children of this couple lose this parent link.")) return;
@@ -2339,7 +2354,8 @@
           i.type = type; i.className = "rel-date" + (type === "date" ? " rel-date-full" : "");
           if (type === "text") i.placeholder = "year";
           i.value = val || "";
-          i.onchange = () => relSetUnionField(u.id, field, i.value, pid);
+          i.onchange = () => relSetUnionField(u.id, field, i.value, pid, true);   // quiet: typing must not rebuild the form
+          i.onblur = () => { relFieldUndoKey = null; refreshRel(pid); };
           i.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); i.blur(); } };
           wrap.appendChild(lab); wrap.appendChild(i);
           return wrap;
