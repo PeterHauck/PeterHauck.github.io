@@ -702,3 +702,10 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
   #tbViews:not([hidden]) { display: flex; }
 }
 .lock-badge { font-size: 13px; pointer-events: none; }
+
+/* "continued elsewhere" portal stubs for far-away family branches */
+.portal-tag { cursor: pointer; }
+.portal-bg { fill: var(--panel); stroke: var(--panel-border); stroke-width: 1.2; }
+.portal-text { font-size: 11px; text-anchor: middle; fill: var(--muted); font-weight: 600; }
+.portal-tag:hover .portal-bg { stroke: var(--accent); }
+.portal-tag:hover .portal-text { fill: var(--accent); }

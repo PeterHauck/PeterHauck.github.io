@@ -1454,17 +1454,46 @@
     const famColor = kids.map((k) => effColor(k.p.id)).find(Boolean) || (pa && effColor(pa.id)) || (pb && effColor(pb.id)) || null;
     const cstyle = famColor ? "stroke:" + famColor + ";stroke-width:2.8" : null;
 
-    const childTops = kids.map((k) => ({ x: childAttachX(k.p.id, u.id, posOf(k.p.id).x), top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
+    const childTops = kids.map((k) => ({ id: k.p.id, first: k.p.first || k.p.name || "?", x: childAttachX(k.p.id, u.id, posOf(k.p.id).x), top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
     const dropX = dropXO != null ? dropXO : midX;
     const busY = (pb ? (A.y + B.y) / 2 : midY) + 120 + (busLevels[u.id] || 0) * 15;   // bus depth hangs from the couple's ROW, not a hopped line's top
-    gu.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
-    const minX = Math.min(dropX, ...childTops.map((c) => c.x));
-    const maxX = Math.max(dropX, ...childTops.map((c) => c.x));
-    if (childTops.length > 1 || minX !== maxX)
-      gu.appendChild(el("line", { class: "link", x1: minX, y1: busY, x2: maxX, y2: busY, style: cstyle }));
-    childTops.forEach((c) => {
-      gu.appendChild(el("line", { class: "link" + (c.type === "adopted" ? " adopt" : ""), x1: c.x, y1: busY, x2: c.x, y2: c.top, style: c.type === "adopted" ? null : cstyle }));
-    });
+    // PORTALS: a child living absurdly far away (a married-in spouse whose own
+    // family is drawn elsewhere) gets NO cross-canvas line. Both ends get a
+    // small labeled stub instead — "continued elsewhere", click to jump.
+    const PORTAL_DIST = 1600;
+    const nearTops = childTops.filter((c) => Math.abs(c.x - dropX) <= PORTAL_DIST);
+    const farTops = childTops.filter((c) => Math.abs(c.x - dropX) > PORTAL_DIST);
+    const portalTag = (x, y, dir, text, goId) => {
+      const t = el("g", { class: "portal-tag" });
+      t.appendChild(el("line", { class: "link", x1: x, y1: y, x2: x, y2: y + (dir === "down" ? 12 : -12), style: cstyle }));
+      const w = text.length * 6.2 + 16;
+      const ty = dir === "down" ? y + 24 : y - 24;
+      t.appendChild(el("rect", { class: "portal-bg", x: x - w / 2, y: ty - 10, width: w, height: 19, rx: 9.5 }));
+      t.appendChild(el("text", { class: "portal-text", x, y: ty + 3.5 }, txt(text)));
+      t.appendChild(el("title", null, txt("Continues elsewhere — click to jump there")));
+      t.addEventListener("pointerdown", (ev) => { ev.stopPropagation(); });
+      t.addEventListener("click", (ev) => { ev.stopPropagation(); centerOn(goId); });
+      gu.appendChild(t);
+    };
+    if (nearTops.length) {
+      gu.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
+      const minX = Math.min(dropX, ...nearTops.map((c) => c.x));
+      const maxX = Math.max(dropX, ...nearTops.map((c) => c.x));
+      if (nearTops.length > 1 || minX !== maxX)
+        gu.appendChild(el("line", { class: "link", x1: minX, y1: busY, x2: maxX, y2: busY, style: cstyle }));
+      nearTops.forEach((c) => {
+        gu.appendChild(el("line", { class: "link" + (c.type === "adopted" ? " adopt" : ""), x1: c.x, y1: busY, x2: c.x, y2: c.top, style: c.type === "adopted" ? null : cstyle }));
+      });
+    }
+    if (farTops.length) {
+      // the parents' end: one stub naming the far child(ren)
+      const label = "⤵ " + farTops[0].first + (farTops.length > 1 ? " +" + (farTops.length - 1) : "");
+      if (nearTops.length) portalTag(dropX, busY, "down", label, farTops[0].id);
+      else portalTag(dropX, dropTop, "down", label, farTops[0].id);
+      // each far child's end: a stub naming the family it continues at
+      const famName = ((pa && (pa.last || pa.name)) || (pb && (pb.last || pb.name)) || "family") + " family";
+      farTops.forEach((c) => portalTag(c.x, c.top + 2, "up", "⤴ " + famName, u.a));
+    }
     gLinks.appendChild(gu);
   }
 
