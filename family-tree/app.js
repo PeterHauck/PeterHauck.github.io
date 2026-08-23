@@ -893,11 +893,11 @@
     const ids = [...selection];
     const cu = ids.length === 2 ? unionBetween(ids[0], ids[1]) : null;
     if (ids.length >= 2) {
-      btn("⇤ Snap close", () => snapChainSpacing("sibling"));
-      btn("⇔ Snap wide", () => snapChainSpacing("couple"));
+      { const b = btn("⇤ Snap close", () => snapChainSpacing("sibling")); b.title = "Hotkey: C"; }
+      { const b = btn("⇔ Snap wide", () => snapChainSpacing("couple")); b.title = "Hotkey: W"; }
     }
-    if (cu && childLinksOfUnion(cu.id).length) btn("⌖ Center on children", () => centerCoupleOnChildren(cu));
-    if (commonParentUnion(ids)) btn("⌖ Center on parents", centerSelectionOnParents);
+    if (cu && childLinksOfUnion(cu.id).length) { const b = btn("⌖ Center on children", () => centerCoupleOnChildren(cu)); b.title = "Hotkey: K"; }
+    if (commonParentUnion(ids)) { const b = btn("⌖ Center on parents", centerSelectionOnParents); b.title = "Hotkey: P"; }
     if (ids.length >= 3) btn("↔ Space evenly", distributeSelection);
     if (ids.some((id) => !isLocked(id))) btn("🔒 Lock", () => {
       if (!state.locked) state.locked = {};
@@ -1652,7 +1652,7 @@
         drag = { mode: "group", id, startX: e.clientX, startY: e.clientY, starts, moved: false, pre: snapshot() };
       } else {
         const w = toWorld(e.clientX, e.clientY);
-        drag = { mode: "marquee", startX: e.clientX, startY: e.clientY, moved: false };
+        drag = { mode: "marquee", startX: e.clientX, startY: e.clientY, moved: false, baseSel: e.shiftKey ? [...selection] : null };
         marquee = { x0: w.x, y0: w.y, x1: w.x, y1: w.y }; updateMarquee();
       }
       return;
@@ -1683,7 +1683,7 @@
     }
     else if (drag.mode === "group") {
       if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
-      const wdx = dx / view.scale, wdy = dy / view.scale;
+      const wdx = dx / view.scale, wdy = e.shiftKey ? 0 : dy / view.scale;   // Shift = hold the row (horizontal-only move)
       for (const pid in drag.starts) { if (isLocked(pid)) continue; posMap()[pid] = { x: drag.starts[pid].x + wdx, y: drag.starts[pid].y + wdy }; }
       render();
     }
@@ -1711,7 +1711,7 @@
         if (drag.moved && marquee) {
           const x0 = Math.min(marquee.x0, marquee.x1), x1 = Math.max(marquee.x0, marquee.x1);
           const y0 = Math.min(marquee.y0, marquee.y1), y1 = Math.max(marquee.y0, marquee.y1);
-          selection = new Set();
+          selection = new Set(drag.baseSel || []);   // shift+box = ADD to the selection
           visiblePersons().forEach((p) => { const q = posOf(p.id); if (q.x >= x0 && q.x <= x1 && q.y >= y0 && q.y <= y1) selection.add(p.id); });
           if (selection.size) toast(selection.size + " selected — drag any of them to move the group");
         } else { selection = new Set(); }
@@ -4884,6 +4884,35 @@
       row("🔭 " + (v.name || "Untitled") + " (" + n + ")", !!(viewPreview && viewPreview.view.id === v.id), () => startViewPreview(v));
     });
   }
+  // Keyboard shortcuts: M move, T tidy; with a selection — C snap close,
+  // W snap wide, L lock/unlock, G group/ungroup, H hide, K center on children
+  // (kids), P center on parents. Ignored while typing or in a dialog.
+  document.addEventListener("keydown", (e) => {
+    if (readonly || e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+    if (document.querySelector(".modal-backdrop") || !$("#lock").hidden) return;
+    const k = (e.key || "").toLowerCase();
+    const barBtn = (re, re2) => {
+      const bs = [...document.querySelectorAll("#selBar button")];
+      const b = bs.find((x) => re.test(x.textContent)) || (re2 && bs.find((x) => re2.test(x.textContent)));
+      if (b) { e.preventDefault(); b.click(); }
+    };
+    if (k === "m") { e.preventDefault(); $("#tbRearrange").click(); }
+    else if (k === "t") { e.preventDefault(); $("#tbTidy").click(); }
+    else if (k === "c") barBtn(/Snap close/);
+    else if (k === "w") barBtn(/Snap wide/);
+    else if (k === "l") barBtn(/🔒 Lock/, /🔓 Unlock/);
+    else if (k === "g") {
+      const ids2 = [...selection];
+      const g0 = ids2.length ? groupOf(ids2[0]) : null;
+      const sameGroup = !!g0 && ids2.every((id) => groupOf(id) === g0);
+      barBtn(sameGroup ? /⛓ Ungroup/ : /🔗 Group/, sameGroup ? null : /⛓ Ungroup/);
+    }
+    else if (k === "h") barBtn(/Hide selected/);
+    else if (k === "k") barBtn(/Center on children/);
+    else if (k === "p") barBtn(/Center on parents/);
+  });
   function updateViewSwitcher() {
     const sec = document.getElementById("viewSwitchSec");
     const tb = document.getElementById("tbViews");
