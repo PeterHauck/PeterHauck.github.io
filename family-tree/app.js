@@ -1501,7 +1501,7 @@
     const famColor = kids.map((k) => effColor(k.p.id)).find(Boolean) || (pa && effColor(pa.id)) || (pb && effColor(pb.id)) || null;
     const cstyle = famColor ? "stroke:" + famColor + ";stroke-width:2.8" : null;
 
-    const childTops = kids.map((k) => ({ id: k.p.id, first: k.p.first || k.p.name || "?", x: childAttachX(k.p.id, u.id, posOf(k.p.id).x), top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
+    const childTops = kids.map((k) => ({ id: k.p.id, lid: k.l.id, first: k.p.first || k.p.name || "?", x: childAttachX(k.p.id, u.id, posOf(k.p.id).x), top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
     const dropX = dropXO != null ? dropXO : midX;
     const busY = (pb ? (A.y + B.y) / 2 : midY) + 120 + (busLevels[u.id] || 0) * 15;   // bus depth hangs from the couple's ROW, not a hopped line's top
     // PORTALS: a child drawn far off with their own marital family (a
@@ -1509,28 +1509,38 @@
     // "Far" means separated from the family cluster by a big EMPTY gap, not
     // merely distant from the drop point: siblings chain together, so a wide
     // row where each sibling sits near the next all stays wired to the bus.
+    // A jump can also be forced by hand (right-click a child's line); forced
+    // children never join the near cluster.
+    const forcedJump = (c) => !!(state.portals && state.portals[c.lid]);
     const PORTAL_GAP = 2200;
     const nearSet = new Set();
     let nLo = dropX, nHi = dropX, grew = true;
     while (grew) {
       grew = false;
       childTops.forEach((c) => {
-        if (nearSet.has(c.id)) return;
+        if (nearSet.has(c.id) || forcedJump(c)) return;
         if (c.x >= nLo - PORTAL_GAP && c.x <= nHi + PORTAL_GAP) { nearSet.add(c.id); nLo = Math.min(nLo, c.x); nHi = Math.max(nHi, c.x); grew = true; }
       });
     }
     const nearTops = childTops.filter((c) => nearSet.has(c.id));
     const farTops = childTops.filter((c) => !nearSet.has(c.id));
-    const portalTag = (x, y, dir, text, goId) => {
+    const portalTag = (x, y, dir, text, goId, lid) => {
       const t = el("g", { class: "portal-tag" });
       t.appendChild(el("line", { class: "link", x1: x, y1: y, x2: x, y2: y + (dir === "down" ? 12 : -12), style: cstyle }));
       const w = text.length * 6.2 + 16;
       const ty = dir === "down" ? y + 24 : y - 24;
       t.appendChild(el("rect", { class: "portal-bg", x: x - w / 2, y: ty - 10, width: w, height: 19, rx: 9.5 }));
       t.appendChild(el("text", { class: "portal-text", x, y: ty + 3.5 }, txt(text)));
-      t.appendChild(el("title", null, txt("Continues elsewhere — click to jump there")));
+      const isManual = !readonly && state.portals && state.portals[lid];
+      t.appendChild(el("title", null, txt("Continues elsewhere — click to jump there" + (isManual ? ". Right-click to remove this jump." : ""))));
       t.addEventListener("pointerdown", (ev) => { ev.stopPropagation(); });
       t.addEventListener("click", (ev) => { ev.stopPropagation(); centerOn(goId); });
+      t.addEventListener("contextmenu", (ev) => {
+        ev.preventDefault(); ev.stopPropagation();
+        if (readonly) return;
+        if (state.portals && state.portals[lid]) { pushUndo(); delete state.portals[lid]; save(); render(); toast("Jump removed — the line is back"); }
+        else toast("This jump is automatic — it goes away if they're arranged nearer their family.");
+      });
       gu.appendChild(t);
     };
     if (nearTops.length) {
@@ -1541,12 +1551,26 @@
         gu.appendChild(el("line", { class: "link", x1: minX, y1: busY, x2: maxX, y2: busY, style: cstyle }));
       nearTops.forEach((c) => {
         gu.appendChild(el("line", { class: "link" + (c.type === "adopted" ? " adopt" : ""), x1: c.x, y1: busY, x2: c.x, y2: c.top, style: c.type === "adopted" ? null : cstyle }));
+        if (!readonly) {
+          // Wide invisible strip over the child's drop line: right-click turns
+          // this connection into a jump (stub + echo) by hand.
+          const hit = el("line", { class: "drop-hit", x1: c.x, y1: busY, x2: c.x, y2: c.top });
+          hit.appendChild(el("title", null, txt("Right-click to turn " + c.first + "'s connection into a jump")));
+          hit.addEventListener("contextmenu", (ev) => {
+            ev.preventDefault(); ev.stopPropagation();
+            pushUndo();
+            (state.portals || (state.portals = {}))[c.lid] = true;
+            save(); render();
+            toast("↷ Jump created for " + c.first + " — right-click the ⤴ tag to undo");
+          });
+          gu.appendChild(hit);
+        }
       });
     }
     if (farTops.length) {
       // each far child's end: a stub naming the family it continues at
       const famName = ((pa && (pa.last || pa.name)) || (pb && (pb.last || pb.name)) || "family") + " family";
-      farTops.forEach((c) => portalTag(c.x, c.top + 2, "up", "⤴ " + famName, u.a));
+      farTops.forEach((c) => portalTag(c.x, c.top + 2, "up", "⤴ " + famName, u.a, c.lid));
       // the parents' end: the far child REPEATED here with spouse & children,
       // hooked to the family bus like an ordinary child.
       const rowY2 = (pb ? (A.y + B.y) / 2 : A.y) + ROWH;
@@ -4940,7 +4964,8 @@
     const links = state.links.filter((l) => uids.has(l.union) && set.has(l.child));
     const manual = {}; Object.keys(state.manual || {}).forEach((k) => { if (set.has(k)) manual[k] = state.manual[k]; });
     Object.keys(view.manual || {}).forEach((k) => { if (set.has(k)) manual[k] = view.manual[k]; });   // the view's own arrangement wins
-    return { title: view.name || state.title, subtitle: state.subtitle, persons, unions, links, manual, manualHidden: {}, hidden: {}, focus: [], version: state.version || 0, photoMigrated: true, namesSplit: true, viewOf: view.id, mediaKey: state.mediaKey || null };
+    const portals = {}; links.forEach((l) => { if (state.portals && state.portals[l.id]) portals[l.id] = true; });
+    return { title: view.name || state.title, subtitle: state.subtitle, persons, unions, links, manual, portals, manualHidden: {}, hidden: {}, focus: [], version: state.version || 0, photoMigrated: true, namesSplit: true, viewOf: view.id, mediaKey: state.mediaKey || null };
   }
   // Encrypt every published view under its own password and store them.
   async function publishViews(interactive) {
