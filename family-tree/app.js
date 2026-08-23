@@ -960,6 +960,70 @@
     return e;
   }
 
+  // ---- jumping between a person's appearances ----------------------------
+  // Every place a person is drawn is a destination: their main spot plus each
+  // copy across a jump. Each one is named by the family whose branch it sits on.
+  const surnameOfPerson = (p) => (p && (p.last != null ? p.last : parseName(p.name || "").last)) || "";
+  function familyNameOfUnion(uid) {
+    const u = unionById(uid); if (!u) return "";
+    const s = surnameOfPerson(personById(u.a)) || (u.b != null ? surnameOfPerson(personById(u.b)) : "");
+    return s ? s + " family" : "";
+  }
+  const unionCoupleNames = (uid) => {
+    const u = unionById(uid); if (!u) return "";
+    const nm = (x) => (x ? (x.first || x.name || "") : "");
+    return [nm(personById(u.a)), u.b != null ? nm(personById(u.b)) : ""].filter(Boolean).join(" & ");
+  };
+  // Everywhere this person can be jumped TO from the appearance they're on now
+  // (curUid = null on their main node, else the union of the copy clicked).
+  // The main spot is named as such — naming it by family would collide with the
+  // copy sitting on that very family's branch.
+  function jumpTargets(pid, curUid) {
+    const out = [];
+    if (curUid) { const q = posOf(pid); out.push({ label: "Their main spot", x: q.x, y: q.y, uid: null }); }
+    (copySpots[pid] || []).forEach((s) => {
+      if (s.uid === curUid) return;
+      out.push({ label: familyNameOfUnion(s.uid) || "another branch", x: s.x, y: s.y, uid: s.uid });
+    });
+    // two branches of the same surname: tell them apart by the couple's names
+    out.forEach((d, i) => {
+      if (d.uid && out.some((o, j) => j !== i && o.label === d.label)) {
+        const who = unionCoupleNames(d.uid);
+        if (who) d.label += " (" + who + ")";
+      }
+    });
+    return out;
+  }
+  function centerAt(x, y) {
+    const r = stage.getBoundingClientRect();
+    view.tx = r.width / 2 - x * view.scale;
+    view.ty = r.height / 2 - y * view.scale;
+    applyView();
+  }
+  function openJumpPicker(name, dests) {
+    const back = document.createElement("div"); back.className = "modal-backdrop";
+    const m = document.createElement("div"); m.className = "modal";
+    const h = document.createElement("h2"); h.textContent = "Jump to…"; m.appendChild(h);
+    const hint = document.createElement("div"); hint.className = "hint";
+    hint.textContent = name + " appears in " + (dests.length + 1) + " places. Which one do you want to see?";
+    m.appendChild(hint);
+    const list = document.createElement("div"); list.className = "jump-list";
+    dests.forEach((d) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "btn wide";
+      b.textContent = "⤴ " + d.label;
+      b.onclick = () => { back.remove(); centerAt(d.x, d.y); };
+      list.appendChild(b);
+    });
+    m.appendChild(list);
+    const row = document.createElement("div"); row.className = "btn-row";
+    const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "Cancel";
+    cancel.onclick = () => back.remove();
+    row.appendChild(cancel); m.appendChild(row);
+    back.appendChild(m); document.body.appendChild(back);
+    back.addEventListener("click", (e) => { if (e.target === back) back.remove(); });
+    return back;
+  }
+
   function renderPerson(p, inst) {
     // `inst` = this node is a COPY of the person placed across a jump: same
     // full profile, its own spot (state.echoPos), tagged so drags know which
@@ -1026,15 +1090,24 @@
       g.appendChild(lk);
     }
 
-    // ⤴ hop badge: a person appearing in two places gets one on EACH node —
-    // on a copy it goes to their main spot, on the main node to the copy.
-    const spots = inst ? null : copySpots[p.id];
-    if (inst || (spots && spots.length)) {
-      const go = inst ? posOf(p.id) : spots[0];
-      const jb = el("g", { class: "jump-badge", "data-x": go.x, "data-y": go.y, transform: `translate(${-HALF + 5},${HALF - 5})` });
+    // ⤴ hop badge: a person appearing in several places gets one on EACH node.
+    // With exactly one other appearance it jumps straight there; when someone
+    // sits on three or more branches it asks which family to jump to.
+    const spots = copySpots[p.id] || [];
+    const dests = jumpTargets(p.id, inst ? inst.uid : null);
+    if (inst || spots.length) {
+      const jb = el("g", { class: "jump-badge", transform: `translate(${-HALF + 5},${HALF - 5})` });
       jb.appendChild(el("circle", { class: "jump-badge-bg", r: 9, cx: 0, cy: 0 }));
       jb.appendChild(el("text", { class: "jump-badge-mark", x: 0, y: 3.5 }, txt("⤴")));
-      jb.appendChild(el("title", null, txt(inst ? "They also appear with their own family — click to go to their spot there" : "They also appear on another branch — click to go to that copy")));
+      jb.appendChild(el("title", null, txt(dests.length > 1
+        ? "They appear in " + (dests.length + 1) + " places — click to choose where to jump"
+        : "They also appear on another branch — click to jump there")));
+      jb.addEventListener("pointerdown", (ev) => {
+        ev.stopPropagation(); ev.preventDefault();
+        if (!dests.length) return;
+        if (dests.length === 1) centerAt(dests[0].x, dests[0].y);
+        else openJumpPicker(treeDisplayName(p), dests);
+      });
       // right-click the badge removes a hand-made jump (automatic ones explain themselves)
       jb.addEventListener("contextmenu", (ev) => {
         ev.preventDefault(); ev.stopPropagation();
@@ -1787,15 +1860,6 @@
     try { svg.setPointerCapture(e.pointerId); } catch (_) {}
     if (pointers.size >= 2) { startPinch(); marquee = null; updateMarquee(); return; }
 
-    const jb = e.target.closest && e.target.closest(".jump-badge");
-    if (jb) {
-      // hop to this person's other appearance
-      const r = stage.getBoundingClientRect();
-      view.tx = r.width / 2 - (+jb.getAttribute("data-x")) * view.scale;
-      view.ty = r.height / 2 - (+jb.getAttribute("data-y")) * view.scale;
-      applyView();
-      return;
-    }
     const badge = e.target.closest && e.target.closest(".doc-badge");
     if (badge) { openDocsForPerson(badge.getAttribute("data-id")); return; }
     const hb = e.target.closest && e.target.closest(".hidden-badge");
