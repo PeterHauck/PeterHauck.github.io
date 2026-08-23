@@ -1504,12 +1504,23 @@
     const childTops = kids.map((k) => ({ id: k.p.id, first: k.p.first || k.p.name || "?", x: childAttachX(k.p.id, u.id, posOf(k.p.id).x), top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
     const dropX = dropXO != null ? dropXO : midX;
     const busY = (pb ? (A.y + B.y) / 2 : midY) + 120 + (busLevels[u.id] || 0) * 15;   // bus depth hangs from the couple's ROW, not a hopped line's top
-    // PORTALS: a child living absurdly far away (a married-in spouse whose own
-    // family is drawn elsewhere) gets NO cross-canvas line. Both ends get a
-    // small labeled stub instead — "continued elsewhere", click to jump.
-    const PORTAL_DIST = 1600;
-    const nearTops = childTops.filter((c) => Math.abs(c.x - dropX) <= PORTAL_DIST);
-    const farTops = childTops.filter((c) => Math.abs(c.x - dropX) > PORTAL_DIST);
+    // PORTALS: a child drawn far off with their own marital family (a
+    // married-in spouse) gets NO cross-canvas line — a stub + echo instead.
+    // "Far" means separated from the family cluster by a big EMPTY gap, not
+    // merely distant from the drop point: siblings chain together, so a wide
+    // row where each sibling sits near the next all stays wired to the bus.
+    const PORTAL_GAP = 2200;
+    const nearSet = new Set();
+    let nLo = dropX, nHi = dropX, grew = true;
+    while (grew) {
+      grew = false;
+      childTops.forEach((c) => {
+        if (nearSet.has(c.id)) return;
+        if (c.x >= nLo - PORTAL_GAP && c.x <= nHi + PORTAL_GAP) { nearSet.add(c.id); nLo = Math.min(nLo, c.x); nHi = Math.max(nHi, c.x); grew = true; }
+      });
+    }
+    const nearTops = childTops.filter((c) => nearSet.has(c.id));
+    const farTops = childTops.filter((c) => !nearSet.has(c.id));
     const portalTag = (x, y, dir, text, goId) => {
       const t = el("g", { class: "portal-tag" });
       t.appendChild(el("line", { class: "link", x1: x, y1: y, x2: x, y2: y + (dir === "down" ? 12 : -12), style: cstyle }));
