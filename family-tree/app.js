@@ -1615,13 +1615,34 @@
         const rank = Math.max(fL.r, fR.r);
         const stub = 12 + 6 * rank;
         const top = Math.min(left.y, right.y, ...blockers.map((q) => q.y)) - HALF - 18 - 14 * Math.max(0, rank - 1);
-        const d = `M ${x1} ${yL} L ${x1 + stub} ${yL} L ${x1 + stub} ${top} L ${x2 - stub} ${top} L ${x2 - stub} ${yR} L ${x2} ${yR}`;
+        // The descending leg normally lands INSIDE the couple, beside the far
+        // spouse. When their children sit BEYOND that spouse, it comes down on
+        // the far spouse's outer side instead and enters from that edge — so a
+        // child just past a parent connects straight up, never doubling back
+        // underneath them. Only when that outer lane is clear air.
+        const kidXs = kids.map((k) => posOf(k.p.id).x);
+        const outward = kidXs.length && Math.min(...kidXs) > right.x + HALF;
+        const outLane = right.x + HALF - 6 + stub;
+        const laneClear = outward && !state.persons.some((pp) => {
+          if (pp.id === u.a || pp.id === u.b || !inView(pp.id)) return false;
+          const q = posOf(pp.id);
+          return Math.abs(q.y - right.y) < HALF * 1.5 && Math.abs(q.x - outLane) < HALF + 8;
+        }) && !unionsOfPerson(rightId).some((uu) => {
+          if (uu.id === u.id) return false;
+          const oid = uu.a === rightId ? uu.b : uu.a;
+          if (oid == null || !inView(oid) || !personById(oid)) return false;
+          const q = posOf(oid);
+          return q.x > right.x && Math.abs(q.y - right.y) < HALF * 1.5;   // a spouse already uses that side
+        });
+        const xEnd = laneClear ? right.x + HALF - 6 : x2;      // which edge the line enters
+        const xLeg = laneClear ? outLane : x2 - stub;          // where it comes down
+        const d = `M ${x1} ${yL} L ${x1 + stub} ${yL} L ${x1 + stub} ${top} L ${xLeg} ${top} L ${xLeg} ${yR} L ${xEnd} ${yR}`;
         gu.appendChild(el("path", { class: "link", d, fill: "none", "stroke-dasharray": dash }));
-        segX1 = x1 + stub; segX2 = x2 - stub; segY = top;
+        segX1 = x1 + stub; segX2 = xLeg; segY = top;
         midX = (x1 + x2) / 2; midY = top;
-        // Children of a hopped marriage drop from the descending leg beside the
-        // far spouse — through clear air, never through anyone's shape.
-        dropXO = x2 - stub; dropTop = yR;
+        // Children of a hopped marriage drop from that descending leg — through
+        // clear air, never through anyone's shape.
+        dropXO = xLeg; dropTop = yR;
       }
       if (u.status === "divorced") {
         [-7, 5].forEach((dx) => gu.appendChild(el("line", { class: "divorce-tick", x1: midX + dx + 5, y1: segY - 11, x2: midX + dx - 5, y2: segY + 11 })));
