@@ -774,29 +774,39 @@
   }
 
   // The parent couple every selected person has in common. A married-in spouse
-  // counts through their partner, so a row of siblings WITH their spouses can
-  // still be centered under the siblings' parents.
+  // counts through their partner — ALWAYS, even when their own parents are in
+  // the tree — so adding a spouse to the selection can never cancel the match
+  // (selecting a couple must still offer "Center on parents").
   function commonParentUnion(ids) {
-    const inSel = new Set(ids.map(pidOf));
+    const pids = ids.map(pidOf);
+    const inSel = new Set(pids);
+    const ownUnions = (id) => parentLinksOfPerson(id).map((l) => l.union);
     const unionsFor = (id) => {
-      const own = parentLinksOfPerson(id).map((l) => l.union);
-      if (own.length) return own;
-      const viaSpouse = [];
+      const set = new Set(ownUnions(id));
       unionsOfPerson(id).forEach((u) => {
         const o = u.a === id ? u.b : u.a;
-        if (o != null && inSel.has(o)) parentLinksOfPerson(o).forEach((l) => viaSpouse.push(l.union));
+        if (o != null && inSel.has(o)) ownUnions(o).forEach((x) => set.add(x));
       });
-      return viaSpouse;
+      return set;
     };
     let common = null;
-    for (const id of ids.map(pidOf)) {
-      const us = new Set(unionsFor(id));
+    for (const id of pids) {
+      const us = unionsFor(id);
       if (!us.size) return null;
       if (common === null) common = us;
       else { common = new Set([...common].filter((x) => us.has(x))); if (!common.size) return null; }
     }
-    const uid = common ? [...common][0] : null;
-    return uid ? unionById(uid) : null;
+    const cands = [...common].map(unionById).filter(Boolean);
+    if (cands.length < 2) return cands[0] || null;
+    // Both spouses' families qualify (each partner counts through the other):
+    // prefer the couple whose OWN children are in the selection, then the one
+    // drawn nearest — never a family parked across the canvas.
+    const anchor = ids[0];
+    const xOf = (pid) => nkPos(nkFor(pid, anchor)).x;
+    const selX = pids.reduce((s, id) => s + xOf(id), 0) / pids.length;
+    const score = (u) => childLinksOfUnion(u.id).filter((l) => inSel.has(l.child)).length;
+    const dist = (u) => Math.abs((u.b != null ? (xOf(u.a) + xOf(u.b)) / 2 : xOf(u.a)) - selX);
+    return cands.slice().sort((a, b) => score(b) - score(a) || dist(a) - dist(b))[0];
   }
   // Slide the selected children sideways as a group (keeping their spacing)
   // so they sit centered under their parents.
