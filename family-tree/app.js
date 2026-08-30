@@ -685,18 +685,40 @@
   // Both respect the same floors: shapes never overlap, and a couple can never
   // get closer than its date label needs.
   const SIBLING_GAP = 140;
+  // The exact spacing "Snap close" / "Snap wide" would use between two people —
+  // shared with the drag gravity so a hand-drag lands on the very same spot.
+  function standardGap(aNk, bNk, mode) {
+    const u = unionBetween(pidOf(aNk), pidOf(bNk));
+    const dlabel = u ? unionDateLabel(u) : "";
+    const floor = dlabel ? dlabel.length * 6.6 + 8 + 2 * HALF + 16 : 2 * HALF + 12;
+    const base = mode === "sibling" ? SIBLING_GAP : (u ? coupleStandardGap(u) : COLW + 12);
+    return Math.max(floor, base);
+  }
+  // Gravity while dragging: when the person lands within a whisker of a snap
+  // spacing beside a neighbour on their row, ease exactly onto it. Hold Alt to
+  // place them freely.
+  const GRAVITY = 16;
+  function gravityDX(nk, px, py, dragging) {
+    const pid = pidOf(nk);
+    let best = null, bd = GRAVITY;
+    const consider = (oNk, q) => {
+      if (dragging[oNk] !== undefined || pidOf(oNk) === pid) return;
+      if (Math.abs(q.y - py) > HALF * 1.5) return;   // only people on this row
+      ["sibling", "couple"].forEach((mode) => {
+        const g = standardGap(nk, oNk, mode);
+        [q.x + g, q.x - g].forEach((c) => { const d = Math.abs(c - px); if (d < bd) { bd = d; best = c; } });
+      });
+    };
+    visiblePersons().forEach((p) => consider(p.id, posOf(p.id)));
+    Object.keys(copyPos).forEach((k) => consider(k, copyPos[k]));
+    return best == null ? 0 : best - px;
+  }
   function snapChainSpacing(mode) {
     const ids = [...selection].filter((nk) => personById(pidOf(nk)));
     if (ids.length < 2) return;
     pushUndo();
     const rows = ids.map((id) => ({ id, p: nkPos(id) })).sort((a, b) => a.p.x - b.p.x);
-    const gapFor = (aId, bId) => {
-      const u = unionBetween(pidOf(aId), pidOf(bId));
-      const dlabel = u ? unionDateLabel(u) : "";
-      const floor = dlabel ? dlabel.length * 6.6 + 8 + 2 * HALF + 16 : 2 * HALF + 12;
-      const base = mode === "sibling" ? SIBLING_GAP : (u ? coupleStandardGap(u) : COLW + 12);
-      return Math.max(floor, base);
-    };
+    const gapFor = (aId, bId) => standardGap(aId, bId, mode);
     // A 🔒 locked person in the selection becomes the anchor: everyone else
     // snaps OUTWARD from them. Two locked people would fight over the spacing,
     // so that's refused outright. With no lock, the leftmost anchors as before.
@@ -2012,7 +2034,12 @@
     }
     else if (drag.mode === "group") {
       if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
-      const wdx = dx / view.scale, wdy = e.shiftKey ? 0 : dy / view.scale;   // Shift = hold the row (horizontal-only move)
+      let wdx = dx / view.scale;
+      const wdy = e.shiftKey ? 0 : dy / view.scale;   // Shift = hold the row (horizontal-only move)
+      if (!e.altKey && drag.id && drag.starts[drag.id]) {
+        const s0 = drag.starts[drag.id];
+        wdx += gravityDX(drag.id, s0.x + wdx, s0.y + wdy, drag.starts);
+      }
       for (const nk in drag.starts) { if (isLocked(nk)) continue; nkSetPos(nk, { x: drag.starts[nk].x + wdx, y: drag.starts[nk].y + wdy }); }
       render();
     }
@@ -2069,7 +2096,7 @@
     stage.classList.toggle("rearranging", rearrange);
     if (!rearrange) { selection = new Set(); marquee = null; updateMarquee(); }
     render();   // the generation row lines appear/disappear with the mode
-    toast(rearrange ? "Rearrange mode ON — drag a person, or drag a box to select several. Nothing moves when it's off." : "Rearrange mode off");
+    toast(rearrange ? "Rearrange mode ON — drag a person, or drag a box to select several. Dragging eases onto the snap spacings; hold Alt to place freely." : "Rearrange mode off");
   }
   // everyone in a person's block that should travel with them: the person, their
   // spouse(s), and all descendants (with the descendants' spouses).
@@ -2205,6 +2232,32 @@
     });
     if (best) state.genAnchor = { id: best, g: plan.absOf(best) };
   }
+  // A connector you dragged snaps onto the family line beside it, so two
+  // hand-placed connectors end up sharing one height instead of nearly.
+  function alignBusLines() {
+    const lv = computeBusLevels();
+    const buses = [];
+    state.unions.forEach((u) => {
+      if (!personById(u.a) || !inView(u.a)) return;
+      if (!childLinksOfUnion(u.id).some((l) => personById(l.child) && inView(l.child))) return;
+      const A = posOf(u.a), B = u.b != null && personById(u.b) && inView(u.b) ? posOf(u.b) : null;
+      const base = B ? (A.y + B.y) / 2 : A.y;
+      const ov = state.busOff && state.busOff[u.id];
+      buses.push({ id: u.id, base, ov: ov != null, y: base + (ov != null ? ov : 120 + (lv[u.id] || 0) * 15) });
+    });
+    const TOL = 100;   // "the one next to it" — never a different generation's
+    let n = 0;
+    buses.filter((b) => b.ov).forEach((b) => {
+      const near = buses.filter((o) => o !== b && Math.abs(o.y - b.y) <= TOL);
+      if (!near.length) return;
+      // an untouched family line is the one to line up WITH; else meet in the middle
+      const autos = near.filter((o) => !o.ov);
+      const ys = (autos.length ? autos : near).map((o) => o.y).sort((x, y) => x - y);
+      const target = ys[Math.floor(ys.length / 2)];
+      if (Math.abs(target - b.y) > 0.5) { (state.busOff || (state.busOff = {}))[b.id] = target - b.base; b.y = target; n++; }
+    });
+    return n;
+  }
   function tidyUp() {
     // Every generation on its own horizontal line — from the tree's structure,
     // not from where people happen to sit. X positions are never touched.
@@ -2227,13 +2280,16 @@
       const q = nkPos(nk), ty = plan.lineY(plan.absOf(pid));
       if (Math.abs(q.y - ty) > 0.5) { (state.echoPos || (state.echoPos = {}))[nk] = { x: q.x, y: ty }; moved++; if (isLocked(nk)) movedLocked++; }
     });
+    const busFixed = alignBusLines();   // dragged connectors line up with their neighbours
+    const busNote = busFixed ? " · " + busFixed + " connector" + (busFixed > 1 ? "s" : "") + " aligned" : "";
     // A couple whose two families join at different levels can't share a row:
     // say so plainly, so a partner sitting one line up never looks like a bug.
     const straddle = plan.skipped ? " · " + plan.skipped + " cross-generation marriage" + (plan.skipped > 1 ? "s" : "") + " left a row apart" : "";
-    if (!moved) { save(); render(); toast("Everything's already lined up — one line per generation" + straddle); return; }
+    if (!moved && !busFixed) { save(); render(); toast("Everything's already lined up — one line per generation" + straddle); return; }
+    if (!moved) { pushUndo(pre); save(); render(); toast("Connectors aligned" + busNote.replace(/^ · /, " — ") + straddle); return; }
     pushUndo(pre);
     save(); render();
-    toast("Tidied up " + moved + " " + (moved === 1 ? "person" : "people") + " — each generation on its own line" + (movedLocked ? " (incl. " + movedLocked + " locked — heights only)" : "") + straddle + " (Cmd+Z to undo)");
+    toast("Tidied up " + moved + " " + (moved === 1 ? "person" : "people") + " — each generation on its own line" + (movedLocked ? " (incl. " + movedLocked + " locked — heights only)" : "") + busNote + straddle + " (Cmd+Z to undo)");
   }
   // Move the selected people to the row above/below and KEEP them there: the
   // hand-set row wins over the one their relatives imply, so Tidy Up won't
