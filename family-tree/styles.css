@@ -711,11 +711,5 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 .jump-badge-mark { font-size: 10px; text-anchor: middle; fill: var(--muted); font-weight: 700; }
 .jump-badge:hover .jump-badge-bg { stroke: var(--accent); }
 .jump-badge:hover .jump-badge-mark { fill: var(--accent); }
-/* Generation rows: the line each generation sits on (Rearrange mode only) */
-.gen-line-rule { stroke: var(--accent-2); stroke-width: 1; stroke-dasharray: 2 10; opacity: .45; pointer-events: none; }
-.gen-line-hit { stroke: transparent; stroke-width: 16; cursor: ns-resize; }
-.gen-line-tab { cursor: ns-resize; opacity: .5; transition: opacity .12s; }
-.gen-line:hover .gen-line-tab { opacity: 1; }
-.gen-line:hover .gen-line-rule { opacity: .9; stroke-dasharray: none; }
-.gen-tab-bg { fill: var(--panel); stroke: var(--accent-2); stroke-width: 1; }
-.gen-tab-text { font-size: 11px; text-anchor: middle; fill: var(--accent-2); font-weight: 600; }
+/* A family's child connector: drag it up or down */
+.bus-hit { stroke: transparent; stroke-width: 18; cursor: ns-resize; }
