@@ -905,7 +905,6 @@
     visibleUnions().forEach(renderUnion);
     visiblePersons().forEach((p) => renderPerson(p));
     copyPlacements.forEach((c) => renderPerson(c.p, c));   // copies are full person nodes
-    renderGenerationLines();
     if (!hiddenScope) renderHiddenBadges();   // no eye-badges inside a hidden branch
     updatePeopleList();
     $("#peopleCount").textContent = state.persons.length;
@@ -1040,59 +1039,6 @@
     back.appendChild(m); document.body.appendChild(back);
     back.addEventListener("click", (e) => { if (e.target === back) back.remove(); });
     return back;
-  }
-
-  // The horizontal line each generation sits on — shown while arranging, and
-  // draggable: pull one up or down and that whole generation comes with it.
-  function renderGenerationLines() {
-    if (!rearrange || readonly || hiddenScope) return;
-    const people = visiblePersons();
-    if (people.length < 2) return;
-    const plan = generationPlan();
-    const xs = people.map((p) => posOf(p.id).x).concat(Object.keys(copyPos).map((k) => copyPos[k].x));
-    const x0 = Math.min(...xs) - 140, x1 = Math.max(...xs) + 140;
-    [...plan.rows.keys()].sort((a, b) => a - b).forEach((g) => {
-      const y = plan.lineY(g);
-      const gl = el("g", { class: "gen-line", "data-gen": g });
-      gl.appendChild(el("line", { class: "gen-line-rule", x1: x0, y1: y, x2: x1, y2: y }));
-      gl.appendChild(el("line", { class: "gen-line-hit", x1: x0, y1: y, x2: x1, y2: y }));
-      const tab = el("g", { class: "gen-line-tab", transform: `translate(${x0 - 6},${y})` });
-      tab.appendChild(el("rect", { class: "gen-tab-bg", x: -54, y: -11, width: 54, height: 22, rx: 6 }));
-      tab.appendChild(el("text", { class: "gen-tab-text", x: -27, y: 4 }, txt("⇕ row")));
-      gl.appendChild(tab);
-      gl.appendChild(el("title", null, txt("Drag to move this whole generation up or down")));
-      gu_dragRow(gl, g, plan);
-      gLinks.insertBefore(gl, gLinks.firstChild);
-    });
-  }
-  function gu_dragRow(gl, g, plan) {
-    gl.addEventListener("pointerdown", (ev) => {
-      ev.stopPropagation(); ev.preventDefault();
-      freezeRows(plan);
-      const y0 = plan.lineY(g), sy = ev.clientY, pre = snapshot();
-      const movers = plan.rows.get(g) || [];
-      const starts = {};
-      movers.forEach((pid) => { starts[pid] = posOf(pid).y; });
-      const copyKeys = Object.keys(copyPos).filter((nk) => plan.ids.has(pidOf(nk)) && plan.absOf(pidOf(nk)) === g);
-      const cStarts = {};
-      copyKeys.forEach((nk) => { cStarts[nk] = nkPos(nk).y; });
-      let moved = false;
-      const mv = (e2) => {
-        const dy = (e2.clientY - sy) / view.scale;
-        if (!moved && Math.abs(e2.clientY - sy) > 3) moved = true;
-        if (!moved) return;
-        if (!state.rowY) state.rowY = {};
-        state.rowY[g] = y0 + dy;
-        movers.forEach((pid) => { const q = posOf(pid); posMap()[pid] = { x: q.x, y: starts[pid] + dy }; });
-        copyKeys.forEach((nk) => { const q = nkPos(nk); (state.echoPos || (state.echoPos = {}))[nk] = { x: q.x, y: cStarts[nk] + dy }; });
-        render();
-      };
-      const up = () => {
-        window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up);
-        if (moved) { pushUndo(pre); save(); render(); toast("Generation moved — Tidy Up keeps it at this height"); }
-      };
-      window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
-    });
   }
 
   function renderPerson(p, inst) {
@@ -1616,6 +1562,29 @@
     return { anchorX: rootQ.x, anchorTop: rootQ.y - HALF - 8, width: root.w };
   }
 
+  // Drag a family's child connector up or down. It stays clear of the couple
+  // above and the children below, so the drop lines can never invert.
+  function startBusDrag(ev, u, busBase, busY, nearTops) {
+    ev.stopPropagation(); ev.preventDefault();
+    const sy = ev.clientY, pre = snapshot();
+    const start = busY - busBase;
+    const lo = HALF + 24;
+    const hi = Math.max(lo, Math.min(...nearTops.map((c) => c.top)) - busBase - 8);
+    let moved = false;
+    const mv = (e2) => {
+      if (!moved && Math.abs(e2.clientY - sy) > 3) moved = true;
+      if (!moved) return;
+      const dy = (e2.clientY - sy) / view.scale;
+      (state.busOff || (state.busOff = {}))[u.id] = Math.max(lo, Math.min(hi, start + dy));
+      render();
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up);
+      if (moved) { pushUndo(pre); save(); render(); toast("Connector moved — right-click it to go back to automatic"); }
+    };
+    window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+  }
+
   function renderUnion(u) {
     const pa = personById(u.a); if (!pa) return;
     const pb = u.b != null ? personById(u.b) : null;
@@ -1742,7 +1711,12 @@
 
     const childTops = kids.map((k) => ({ id: k.p.id, lid: k.l.id, first: k.p.first || k.p.name || "?", x: childAttachX(k.p.id, u.id, posOf(k.p.id).x), top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
     const dropX = dropXO != null ? dropXO : midX;
-    const busY = (pb ? (A.y + B.y) / 2 : midY) + 120 + (busLevels[u.id] || 0) * 15;   // bus depth hangs from the couple's ROW, not a hopped line's top
+    // The connector's depth hangs from the couple's ROW (not a hopped line's
+    // top) — or wherever you dragged this family's line to.
+    const busBase = pb ? (A.y + B.y) / 2 : midY;
+    const busAuto = 120 + (busLevels[u.id] || 0) * 15;
+    const busOv = state.busOff && state.busOff[u.id];
+    const busY = busBase + (busOv != null ? busOv : busAuto);
     // PORTALS: a child drawn far off with their own marital family (a
     // married-in spouse) gets NO cross-canvas line — a stub + echo instead.
     // "Far" means separated from the family cluster by a big EMPTY gap, not
@@ -1769,6 +1743,18 @@
       const maxX = Math.max(dropX, ...nearTops.map((c) => c.x));
       if (nearTops.length > 1 || minX !== maxX)
         gu.appendChild(el("line", { class: "link", x1: minX, y1: busY, x2: maxX, y2: busY, style: cstyle }));
+      if (!readonly) {
+        const h1 = Math.min(dropX, minX) - 30, h2 = Math.max(dropX, maxX) + 30;
+        const bh = el("line", { class: "bus-hit", x1: h1, y1: busY, x2: h2, y2: busY });
+        bh.appendChild(el("title", null, txt("Drag to move this family's connector up or down · right-click to reset")));
+        bh.addEventListener("pointerdown", (ev) => startBusDrag(ev, u, busBase, busY, nearTops));
+        bh.addEventListener("contextmenu", (ev) => {
+          ev.preventDefault(); ev.stopPropagation();
+          if (state.busOff && state.busOff[u.id] != null) { pushUndo(); delete state.busOff[u.id]; save(); render(); toast("Connector back to its automatic height"); }
+          else toast("This connector is already at its automatic height");
+        });
+        gu.appendChild(bh);
+      }
       nearTops.forEach((c) => {
         gu.appendChild(el("line", { class: "link" + (c.type === "adopted" ? " adopt" : ""), x1: c.x, y1: busY, x2: c.x, y2: c.top, style: c.type === "adopted" ? null : cstyle }));
         if (!readonly) {
@@ -2203,27 +2189,10 @@
       if (fixed != null) return fixed;
       return rawGen(pid) + shiftFor(compOf(pid)) + base0;
     };
-    // A row's height: the one you dragged it to, else the default spacing.
-    const lineY = (g) => {
-      const stored = state.rowY && state.rowY[g];
-      if (stored != null) return stored;
-      const keys = Object.keys(state.rowY || {}).map(Number).filter((k) => !isNaN(k));
-      if (keys.length) {   // hang off the nearest row you HAVE placed
-        const near = keys.reduce((b, k) => (Math.abs(k - g) < Math.abs(b - g) ? k : b), keys[0]);
-        return state.rowY[near] + (g - near) * ROWH;
-      }
-      return ref.y + (g - base0) * ROWH;
-    };
+    const lineY = (g) => ref.y + (g - base0) * ROWH;   // one row per generation
     const rows = new Map();   // generation -> people on it
     people.forEach((p) => { const g = absOf(p.id); if (!rows.has(g)) rows.set(g, []); rows.get(g).push(p.id); });
     return { people, ids, absOf, lineY, rows, skipped, anchorless: !anchor, refY: ref.y, base0 };
-  }
-  // Pin every generation at the height it has right now, so changing ONE row
-  // never drags the others along (an unstored row is otherwise re-derived from
-  // whichever row happens to be stored).
-  function freezeRows(plan) {
-    if (!state.rowY) state.rowY = {};
-    plan.rows.forEach((_, g) => { if (state.rowY[g] == null) state.rowY[g] = plan.lineY(g); });
   }
   // Remember which person defines generation numbering, so stored row heights
   // survive later edits. The most-connected person in the biggest family wins.
@@ -2258,7 +2227,6 @@
       const q = nkPos(nk), ty = plan.lineY(plan.absOf(pid));
       if (Math.abs(q.y - ty) > 0.5) { (state.echoPos || (state.echoPos = {}))[nk] = { x: q.x, y: ty }; moved++; if (isLocked(nk)) movedLocked++; }
     });
-    freezeRows(plan);   // each line is draggable from here on, and stays put
     // A couple whose two families join at different levels can't share a row:
     // say so plainly, so a partner sitting one line up never looks like a bug.
     const straddle = plan.skipped ? " · " + plan.skipped + " cross-generation marriage" + (plan.skipped > 1 ? "s" : "") + " left a row apart" : "";
@@ -2276,7 +2244,6 @@
     const plan = generationPlan();
     ensureGenAnchor(plan);
     pushUndo();
-    freezeRows(plan);
     if (!state.genFix) state.genFix = {};
     const pids = [...new Set(ids.map(pidOf))].filter((pid) => plan.ids.has(pid));
     pids.forEach((pid) => { state.genFix[pid] = plan.absOf(pid) + dir; });
@@ -4218,7 +4185,7 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [], locked: state.locked || {}, portals: state.portals || {}, echoPos: state.echoPos || {}, rowY: state.rowY || {}, genFix: state.genFix || {}, genAnchor: state.genAnchor || null };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [], locked: state.locked || {}, portals: state.portals || {}, echoPos: state.echoPos || {}, genFix: state.genFix || {}, genAnchor: state.genAnchor || null, busOff: state.busOff || {} };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
@@ -4233,7 +4200,7 @@
       locked: obj.locked && typeof obj.locked === "object" ? obj.locked : {},
       portals: obj.portals && typeof obj.portals === "object" ? obj.portals : {},
       echoPos: obj.echoPos && typeof obj.echoPos === "object" ? obj.echoPos : {},
-      rowY: obj.rowY && typeof obj.rowY === "object" ? obj.rowY : {},
+      busOff: obj.busOff && typeof obj.busOff === "object" ? obj.busOff : {},
       genFix: obj.genFix && typeof obj.genFix === "object" ? obj.genFix : {},
       genAnchor: obj.genAnchor || null,
     });
@@ -5404,7 +5371,7 @@
     const portals = {}; links.forEach((l) => { if (state.portals && state.portals[l.id]) portals[l.id] = true; });
     const echoPos = {}; Object.keys(state.echoPos || {}).forEach((k) => { const i = k.indexOf(":"); if (uids.has(k.slice(0, i)) && set.has(k.slice(i + 1))) echoPos[k] = state.echoPos[k]; });
     const genFix = {}; Object.keys(state.genFix || {}).forEach((k) => { if (set.has(k)) genFix[k] = state.genFix[k]; });
-    return { title: view.name || state.title, subtitle: state.subtitle, persons, unions, links, manual, portals, echoPos, rowY: state.rowY || {}, genFix, genAnchor: state.genAnchor || null, manualHidden: {}, hidden: {}, focus: [], version: state.version || 0, photoMigrated: true, namesSplit: true, viewOf: view.id, mediaKey: state.mediaKey || null };
+    return { title: view.name || state.title, subtitle: state.subtitle, persons, unions, links, manual, portals, echoPos, genFix, genAnchor: state.genAnchor || null, busOff, manualHidden: {}, hidden: {}, focus: [], version: state.version || 0, photoMigrated: true, namesSplit: true, viewOf: view.id, mediaKey: state.mediaKey || null };
   }
   // Encrypt every published view under its own password and store them.
   async function publishViews(interactive) {
