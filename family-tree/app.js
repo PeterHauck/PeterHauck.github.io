@@ -905,6 +905,7 @@
     visibleUnions().forEach(renderUnion);
     visiblePersons().forEach((p) => renderPerson(p));
     copyPlacements.forEach((c) => renderPerson(c.p, c));   // copies are full person nodes
+    renderGenerationLines();
     if (!hiddenScope) renderHiddenBadges();   // no eye-badges inside a hidden branch
     updatePeopleList();
     $("#peopleCount").textContent = state.persons.length;
@@ -942,6 +943,13 @@
     if (ids.some((id) => isLocked(id))) btn("🔓 Unlock", () => {
       ids.forEach((id) => { if (state.locked) delete state.locked[id]; });
       save(); render(); toast("Unlocked — they can move again");
+    });
+    { const b = btn("⤒ Row up", () => nudgeGeneration(-1)); b.title = "Move to the generation above (Tidy Up keeps them there) — hotkey: ["; }
+    { const b = btn("⤓ Row down", () => nudgeGeneration(1)); b.title = "Move to the generation below (Tidy Up keeps them there) — hotkey: ]"; }
+    if (ids.some((nk) => state.genFix && state.genFix[pidOf(nk)] != null)) btn("↺ Row auto", () => {
+      pushUndo();
+      ids.forEach((nk) => { if (state.genFix) delete state.genFix[pidOf(nk)]; });
+      save(); render(); toast("Back to the generation their family implies — run Tidy Up to move them");
     });
     if (ids.length >= 2) btn("🔗 Group", () => { makeGroup(ids); render(); toast("Grouped — they now move together (any tool, any drag)"); });
     if (ids.some((id) => groupOf(id))) btn("⛓ Ungroup", () => { ungroup(ids); render(); toast("Ungrouped — they move separately again"); });
@@ -1032,6 +1040,59 @@
     back.appendChild(m); document.body.appendChild(back);
     back.addEventListener("click", (e) => { if (e.target === back) back.remove(); });
     return back;
+  }
+
+  // The horizontal line each generation sits on — shown while arranging, and
+  // draggable: pull one up or down and that whole generation comes with it.
+  function renderGenerationLines() {
+    if (!rearrange || readonly || hiddenScope) return;
+    const people = visiblePersons();
+    if (people.length < 2) return;
+    const plan = generationPlan();
+    const xs = people.map((p) => posOf(p.id).x).concat(Object.keys(copyPos).map((k) => copyPos[k].x));
+    const x0 = Math.min(...xs) - 140, x1 = Math.max(...xs) + 140;
+    [...plan.rows.keys()].sort((a, b) => a - b).forEach((g) => {
+      const y = plan.lineY(g);
+      const gl = el("g", { class: "gen-line", "data-gen": g });
+      gl.appendChild(el("line", { class: "gen-line-rule", x1: x0, y1: y, x2: x1, y2: y }));
+      gl.appendChild(el("line", { class: "gen-line-hit", x1: x0, y1: y, x2: x1, y2: y }));
+      const tab = el("g", { class: "gen-line-tab", transform: `translate(${x0 - 6},${y})` });
+      tab.appendChild(el("rect", { class: "gen-tab-bg", x: -54, y: -11, width: 54, height: 22, rx: 6 }));
+      tab.appendChild(el("text", { class: "gen-tab-text", x: -27, y: 4 }, txt("⇕ row")));
+      gl.appendChild(tab);
+      gl.appendChild(el("title", null, txt("Drag to move this whole generation up or down")));
+      gu_dragRow(gl, g, plan);
+      gLinks.insertBefore(gl, gLinks.firstChild);
+    });
+  }
+  function gu_dragRow(gl, g, plan) {
+    gl.addEventListener("pointerdown", (ev) => {
+      ev.stopPropagation(); ev.preventDefault();
+      freezeRows(plan);
+      const y0 = plan.lineY(g), sy = ev.clientY, pre = snapshot();
+      const movers = plan.rows.get(g) || [];
+      const starts = {};
+      movers.forEach((pid) => { starts[pid] = posOf(pid).y; });
+      const copyKeys = Object.keys(copyPos).filter((nk) => plan.ids.has(pidOf(nk)) && plan.absOf(pidOf(nk)) === g);
+      const cStarts = {};
+      copyKeys.forEach((nk) => { cStarts[nk] = nkPos(nk).y; });
+      let moved = false;
+      const mv = (e2) => {
+        const dy = (e2.clientY - sy) / view.scale;
+        if (!moved && Math.abs(e2.clientY - sy) > 3) moved = true;
+        if (!moved) return;
+        if (!state.rowY) state.rowY = {};
+        state.rowY[g] = y0 + dy;
+        movers.forEach((pid) => { const q = posOf(pid); posMap()[pid] = { x: q.x, y: starts[pid] + dy }; });
+        copyKeys.forEach((nk) => { const q = nkPos(nk); (state.echoPos || (state.echoPos = {}))[nk] = { x: q.x, y: cStarts[nk] + dy }; });
+        render();
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up);
+        if (moved) { pushUndo(pre); save(); render(); toast("Generation moved — Tidy Up keeps it at this height"); }
+      };
+      window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+    });
   }
 
   function renderPerson(p, inst) {
@@ -2020,7 +2081,8 @@
     rearrange = on;
     $("#tbRearrange").classList.toggle("active", rearrange);
     stage.classList.toggle("rearranging", rearrange);
-    if (!rearrange) { selection = new Set(); marquee = null; updateMarquee(); render(); }
+    if (!rearrange) { selection = new Set(); marquee = null; updateMarquee(); }
+    render();   // the generation row lines appear/disappear with the mode
     toast(rearrange ? "Rearrange mode ON — drag a person, or drag a box to select several. Nothing moves when it's off." : "Rearrange mode off");
   }
   // everyone in a person's block that should travel with them: the person, their
@@ -2068,26 +2130,21 @@
   // horizontal bands (each within BAND_T px of the band's running centre); any
   // band with two or more people is snapped to that band's median height.
   // Someone sitting far from everyone else forms a band of one and never moves.
-  function tidyUp() {
-    // GENERATION lines, from the tree's structure — not from where people
-    // happen to sit. Spouses share a generation, children are one below their
-    // parents; every generation lands on its own exact horizontal line, one
-    // row (ROWH) apart. X positions are never touched. A 🔒 locked person
-    // anchors their family's grid (their line stays exactly where they are);
-    // otherwise the grid settles where it disturbs the fewest people.
+  // ------------------------------------------------------------- generations
+  // Where each person belongs vertically, and where each generation's line
+  // sits. Shared by Tidy Up, the draggable row lines, and the row up/down
+  // buttons, so all three always agree.
+  function generationPlan() {
     const people = visiblePersons();
-    if (people.length < 2) { toast("Nothing to tidy yet"); return; }
     const ids = new Set(people.map((p) => p.id));
-    // 1) Two rules set the generations: a child sits one row below each parent,
-    //    and a couple shares a row. Real families can make those contradict —
-    //    e.g. a niece marrying the brother of the woman her uncle married, so
-    //    the same two families join at two different levels. No numbering can
-    //    satisfy every relationship then, so they are applied strongest-first:
-    //    BLOOD DESCENT outranks marriage, and within each kind the ones the
-    //    current layout already agrees with go first. Anything that would
-    //    contradict an accepted rule is skipped — that couple simply sits a row
-    //    apart — instead of quietly reshuffling whole branches, which made
-    //    tidying jump around depending on where it happened to start.
+    // Two rules set the generations: a child sits one row below each parent,
+    // and a couple shares a row. Real families can make those contradict —
+    // e.g. a niece marrying the brother of the woman her uncle married, so the
+    // same two families join at two different levels. No numbering can satisfy
+    // every relationship then, so they are applied strongest-first: BLOOD
+    // DESCENT outranks marriage, and within each kind the ones the current
+    // layout already agrees with go first. Anything that would contradict an
+    // accepted rule is skipped — that couple simply sits a row apart.
     const uf = new Map();   // id -> { up, off }, off = gen(id) - gen(up)
     people.forEach((p) => uf.set(p.id, { up: p.id, off: 0 }));
     const ufFind = (x) => { let r = x, d = 0, guard = 0;
@@ -2111,55 +2168,129 @@
     edges.sort((x, y) => y.blood - x.blood || disagree(x) - disagree(y));
     let skipped = 0;
     edges.forEach((e) => { if (!link(e.a, e.b, e.d)) skipped++; });
-    const genOf = (pid) => ufFind(pid).off;
+    const rawGen = (pid) => ufFind(pid).off;
     const compIdx = new Map(), members = [];
     people.forEach((p) => {
       const r = ufFind(p.id).root;
       if (!compIdx.has(r)) { compIdx.set(r, members.length); members.push([]); }
       members[compIdx.get(r)].push(p.id);
     });
-    const compOf = { get: (pid) => compIdx.get(ufFind(pid).root) };
-    const find = (pid) => pid;   // positions are keyed by person from here on
-    // 3) the grid's HEIGHT follows the tree's main family: the most common
-    //    surname (e.g. Hauck) picks the reference — the baseline is the median
-    //    offset of THAT family's people, so the grid settles where the main
-    //    family already sits. Every other family snaps onto the same shared
-    //    lines, so generation lines are identical across all trees.
+    const compOf = (pid) => compIdx.get(ufFind(pid).root);
+    // The grid's HEIGHT follows the tree's main family: the most common surname
+    // picks the reference, and the baseline is the median offset of THAT
+    // family's people, so the grid settles where the main family already sits.
+    // Every other family snaps onto the same shared lines.
     const surnameOf = (id) => { const p = personById(id); return ((p && (p.last != null ? p.last : parseName(p.name || "").last)) || "").toLowerCase(); };
     const surCount = {};
     people.forEach((p) => { const s = surnameOf(p.id); if (s) surCount[s] = (surCount[s] || 0) + 1; });
     const mainSurname = (Object.entries(surCount).sort((a, b) => b[1] - a[1])[0] || [""])[0];
     const y0s = members.map((mem) => {
       const fam = mem.filter((id) => surnameOf(id) === mainSurname);
-      const base = (fam.length ? fam : mem).map((id) => posOf(id).y - genOf(id) * ROWH).sort((a, b) => a - b);
+      const base = (fam.length ? fam : mem).map((id) => posOf(id).y - rawGen(id) * ROWH).sort((a, b) => a - b);
       return { y: base[Math.floor(base.length / 2)], famN: fam.length, n: mem.length };
     });
-    const ref = y0s.slice().sort((a, b) => (b.famN - a.famN) || (b.n - a.n))[0];
+    const ref = y0s.slice().sort((a, b) => (b.famN - a.famN) || (b.n - a.n))[0] || { y: 0 };
     y0s.forEach((v) => { if (v !== ref) v.y = ref.y + Math.round((v.y - ref.y) / ROWH) * ROWH; });
-    const lineFor = (pid) => y0s[compOf.get(find(pid))].y + genOf(pid) * ROWH;
-    // 4) move every appearance onto its line — main nodes AND copies alike.
-    //    Uniform separation matters more than pinning here, so even 🔒 locked
-    //    people get their HEIGHT aligned (their left–right spot never moves,
-    //    and every other tool still refuses to touch them).
+    // Absolute generation numbers, stable across runs: an anchor person keeps
+    // their number, so stored row heights and hand-set rows stay put even as
+    // people are added above or below.
+    const anchor = state.genAnchor && personById(state.genAnchor.id) && ids.has(state.genAnchor.id) ? state.genAnchor : null;
+    const shiftFor = (ci) => Math.round((y0s[ci].y - ref.y) / ROWH);
+    let base0 = 0;
+    if (anchor) base0 = anchor.g - (rawGen(anchor.id) + shiftFor(compOf(anchor.id)));
+    const absOf = (pid) => {
+      const fixed = state.genFix && state.genFix[pid];
+      if (fixed != null) return fixed;
+      return rawGen(pid) + shiftFor(compOf(pid)) + base0;
+    };
+    // A row's height: the one you dragged it to, else the default spacing.
+    const lineY = (g) => {
+      const stored = state.rowY && state.rowY[g];
+      if (stored != null) return stored;
+      const keys = Object.keys(state.rowY || {}).map(Number).filter((k) => !isNaN(k));
+      if (keys.length) {   // hang off the nearest row you HAVE placed
+        const near = keys.reduce((b, k) => (Math.abs(k - g) < Math.abs(b - g) ? k : b), keys[0]);
+        return state.rowY[near] + (g - near) * ROWH;
+      }
+      return ref.y + (g - base0) * ROWH;
+    };
+    const rows = new Map();   // generation -> people on it
+    people.forEach((p) => { const g = absOf(p.id); if (!rows.has(g)) rows.set(g, []); rows.get(g).push(p.id); });
+    return { people, ids, absOf, lineY, rows, skipped, anchorless: !anchor, refY: ref.y, base0 };
+  }
+  // Pin every generation at the height it has right now, so changing ONE row
+  // never drags the others along (an unstored row is otherwise re-derived from
+  // whichever row happens to be stored).
+  function freezeRows(plan) {
+    if (!state.rowY) state.rowY = {};
+    plan.rows.forEach((_, g) => { if (state.rowY[g] == null) state.rowY[g] = plan.lineY(g); });
+  }
+  // Remember which person defines generation numbering, so stored row heights
+  // survive later edits. The most-connected person in the biggest family wins.
+  function ensureGenAnchor(plan) {
+    if (!plan.anchorless) return;
+    let best = null, bestN = -1;
+    plan.people.forEach((p) => {
+      const n = unionsOfPerson(p.id).length + parentLinksOfPerson(p.id).length;
+      if (n > bestN) { bestN = n; best = p.id; }
+    });
+    if (best) state.genAnchor = { id: best, g: plan.absOf(best) };
+  }
+  function tidyUp() {
+    // Every generation on its own horizontal line — from the tree's structure,
+    // not from where people happen to sit. X positions are never touched.
+    // Uniform separation matters more than pinning here, so even 🔒 locked
+    // people get their HEIGHT aligned (their left–right spot never moves, and
+    // every other tool still refuses to touch them).
+    const people = visiblePersons();
+    if (people.length < 2) { toast("Nothing to tidy yet"); return; }
+    const plan = generationPlan();
+    ensureGenAnchor(plan);
     let moved = 0, movedLocked = 0;
     const pre = snapshot();
     people.forEach((p) => {
-      const q = posOf(p.id), ty = lineFor(p.id);
+      const q = posOf(p.id), ty = plan.lineY(plan.absOf(p.id));
       if (Math.abs(q.y - ty) > 0.5) { posMap()[p.id] = { x: q.x, y: ty }; moved++; if (isLocked(p.id)) movedLocked++; }
     });
     Object.keys(copyPos).forEach((nk) => {
       const pid = pidOf(nk);
-      if (!ids.has(pid)) return;
-      const q = nkPos(nk), ty = lineFor(pid);
+      if (!plan.ids.has(pid)) return;
+      const q = nkPos(nk), ty = plan.lineY(plan.absOf(pid));
       if (Math.abs(q.y - ty) > 0.5) { (state.echoPos || (state.echoPos = {}))[nk] = { x: q.x, y: ty }; moved++; if (isLocked(nk)) movedLocked++; }
     });
+    freezeRows(plan);   // each line is draggable from here on, and stays put
     // A couple whose two families join at different levels can't share a row:
     // say so plainly, so a partner sitting one line up never looks like a bug.
-    const straddle = skipped ? " · " + skipped + " cross-generation marriage" + (skipped > 1 ? "s" : "") + " left a row apart" : "";
-    if (!moved) { toast("Everything's already lined up — one line per generation" + straddle); return; }
+    const straddle = plan.skipped ? " · " + plan.skipped + " cross-generation marriage" + (plan.skipped > 1 ? "s" : "") + " left a row apart" : "";
+    if (!moved) { save(); render(); toast("Everything's already lined up — one line per generation" + straddle); return; }
     pushUndo(pre);
     save(); render();
     toast("Tidied up " + moved + " " + (moved === 1 ? "person" : "people") + " — each generation on its own line" + (movedLocked ? " (incl. " + movedLocked + " locked — heights only)" : "") + straddle + " (Cmd+Z to undo)");
+  }
+  // Move the selected people to the row above/below and KEEP them there: the
+  // hand-set row wins over the one their relatives imply, so Tidy Up won't
+  // pull them back.
+  function nudgeGeneration(dir) {
+    const ids = [...selection];
+    if (!ids.length) return;
+    const plan = generationPlan();
+    ensureGenAnchor(plan);
+    pushUndo();
+    freezeRows(plan);
+    if (!state.genFix) state.genFix = {};
+    const pids = [...new Set(ids.map(pidOf))].filter((pid) => plan.ids.has(pid));
+    pids.forEach((pid) => { state.genFix[pid] = plan.absOf(pid) + dir; });
+    // land them on that row — every appearance of theirs, like Tidy Up does
+    const set = new Set(pids);
+    pids.forEach((pid) => { const q = posOf(pid); posMap()[pid] = { x: q.x, y: plan.lineY(state.genFix[pid]) }; });
+    Object.keys(copyPos).forEach((nk) => {
+      const pid = pidOf(nk);
+      if (!set.has(pid)) return;
+      const q = nkPos(nk);
+      (state.echoPos || (state.echoPos = {}))[nk] = { x: q.x, y: plan.lineY(state.genFix[pid]) };
+    });
+    save(); render();
+    toast((pids.length === 1 ? (personById(pids[0]).first || "They") : pids.length + " people") + " moved a row " + (dir < 0 ? "up" : "down") + " — Tidy Up will keep them there");
   }
   stage.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY); }, { passive: false });
 
@@ -4087,7 +4218,7 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [], locked: state.locked || {}, portals: state.portals || {}, echoPos: state.echoPos || {} };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [], locked: state.locked || {}, portals: state.portals || {}, echoPos: state.echoPos || {}, rowY: state.rowY || {}, genFix: state.genFix || {}, genAnchor: state.genAnchor || null };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
@@ -4102,6 +4233,9 @@
       locked: obj.locked && typeof obj.locked === "object" ? obj.locked : {},
       portals: obj.portals && typeof obj.portals === "object" ? obj.portals : {},
       echoPos: obj.echoPos && typeof obj.echoPos === "object" ? obj.echoPos : {},
+      rowY: obj.rowY && typeof obj.rowY === "object" ? obj.rowY : {},
+      genFix: obj.genFix && typeof obj.genFix === "object" ? obj.genFix : {},
+      genAnchor: obj.genAnchor || null,
     });
   }
   /* -------- local storage: IndexedDB (roomy — holds photos/PDFs), with a
@@ -5269,7 +5403,8 @@
     Object.keys(view.manual || {}).forEach((k) => { if (set.has(k)) manual[k] = view.manual[k]; });   // the view's own arrangement wins
     const portals = {}; links.forEach((l) => { if (state.portals && state.portals[l.id]) portals[l.id] = true; });
     const echoPos = {}; Object.keys(state.echoPos || {}).forEach((k) => { const i = k.indexOf(":"); if (uids.has(k.slice(0, i)) && set.has(k.slice(i + 1))) echoPos[k] = state.echoPos[k]; });
-    return { title: view.name || state.title, subtitle: state.subtitle, persons, unions, links, manual, portals, echoPos, manualHidden: {}, hidden: {}, focus: [], version: state.version || 0, photoMigrated: true, namesSplit: true, viewOf: view.id, mediaKey: state.mediaKey || null };
+    const genFix = {}; Object.keys(state.genFix || {}).forEach((k) => { if (set.has(k)) genFix[k] = state.genFix[k]; });
+    return { title: view.name || state.title, subtitle: state.subtitle, persons, unions, links, manual, portals, echoPos, rowY: state.rowY || {}, genFix, genAnchor: state.genAnchor || null, manualHidden: {}, hidden: {}, focus: [], version: state.version || 0, photoMigrated: true, namesSplit: true, viewOf: view.id, mediaKey: state.mediaKey || null };
   }
   // Encrypt every published view under its own password and store them.
   async function publishViews(interactive) {
@@ -5326,6 +5461,8 @@
     };
     if (k === "m") { e.preventDefault(); $("#tbRearrange").click(); }
     else if (k === "t") { e.preventDefault(); $("#tbTidy").click(); }
+    else if (k === "[" && selection.size) { e.preventDefault(); nudgeGeneration(-1); }
+    else if (k === "]" && selection.size) { e.preventDefault(); nudgeGeneration(1); }
     else if (k === "c") barBtn(/Snap close/);
     else if (k === "w") barBtn(/Snap wide/);
     else if (k === "l") barBtn(/🔒 Lock/, /🔓 Unlock/);
