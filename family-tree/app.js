@@ -2078,38 +2078,48 @@
     const people = visiblePersons();
     if (people.length < 2) { toast("Nothing to tidy yet"); return; }
     const ids = new Set(people.map((p) => p.id));
-    // 1) merge every couple first, so a marriage can NEVER split a line —
-    //    spouses land on the same row no matter which path reached them
-    const up = new Map();
-    people.forEach((p) => up.set(p.id, p.id));
-    const find = (x) => { let r = x; while (up.get(r) !== undefined && up.get(r) !== r) r = up.get(r); up.set(x, r); return r; };
-    state.unions.forEach((u) => { if (u.b != null && ids.has(u.a) && ids.has(u.b)) { const a = find(u.a), b = find(u.b); if (a !== b) up.set(a, b); } });
-    // 2) generations over the condensed couple graph (children one row down)
-    const adjR = new Map();
-    const addE = (a, b, d) => { if (!adjR.has(a)) adjR.set(a, []); adjR.get(a).push([b, d]); };
+    // 1) Two rules set the generations: a child sits one row below each parent,
+    //    and a couple shares a row. Real families can make those contradict —
+    //    e.g. a niece marrying the brother of the woman her uncle married, so
+    //    the same two families join at two different levels. No numbering can
+    //    satisfy every relationship then, so they are applied strongest-first:
+    //    BLOOD DESCENT outranks marriage, and within each kind the ones the
+    //    current layout already agrees with go first. Anything that would
+    //    contradict an accepted rule is skipped — that couple simply sits a row
+    //    apart — instead of quietly reshuffling whole branches, which made
+    //    tidying jump around depending on where it happened to start.
+    const uf = new Map();   // id -> { up, off }, off = gen(id) - gen(up)
+    people.forEach((p) => uf.set(p.id, { up: p.id, off: 0 }));
+    const ufFind = (x) => { let r = x, d = 0, guard = 0;
+      while (uf.get(r).up !== r && guard++ < 100000) { d += uf.get(r).off; r = uf.get(r).up; }
+      return { root: r, off: d }; };
+    const link = (a, b, d) => {   // assert gen(b) - gen(a) === d
+      const ra = ufFind(a), rb = ufFind(b);
+      if (ra.root === rb.root) return rb.off - ra.off === d;
+      uf.set(rb.root, { up: ra.root, off: ra.off + d - rb.off });
+      return true;
+    };
+    const edges = [];
     state.unions.forEach((u) => {
-      const anchor = ids.has(u.a) ? u.a : (u.b != null && ids.has(u.b) ? u.b : null);
-      if (anchor == null) return;
-      const par = find(anchor);
+      const par = [u.a, u.b].filter((x) => x != null && ids.has(x));
       childLinksOfUnion(u.id).forEach((l) => {
-        if (!ids.has(l.child)) return;
-        const c = find(l.child);
-        addE(par, c, 1); addE(c, par, -1);
+        if (ids.has(l.child)) par.forEach((x) => edges.push({ a: x, b: l.child, d: 1, blood: 1 }));
       });
+      if (par.length === 2) edges.push({ a: par[0], b: par[1], d: 0, blood: 0 });
     });
-    const gen = new Map(), compOf = new Map();
-    const comps = [];
+    const disagree = (e) => Math.abs((posOf(e.b).y - posOf(e.a).y) / ROWH - e.d);
+    edges.sort((x, y) => y.blood - x.blood || disagree(x) - disagree(y));
+    let skipped = 0;
+    edges.forEach((e) => { if (!link(e.a, e.b, e.d)) skipped++; });
+    const genOf = (pid) => ufFind(pid).off;
+    const compIdx = new Map(), members = [];
     people.forEach((p) => {
-      const r0 = find(p.id);
-      if (gen.has(r0)) return;
-      const comp = [r0]; gen.set(r0, 0); compOf.set(r0, comps.length);
-      for (let i = 0; i < comp.length; i++)
-        (adjR.get(comp[i]) || []).forEach(([o, d]) => { if (!gen.has(o)) { gen.set(o, gen.get(comp[i]) + d); compOf.set(o, comps.length); comp.push(o); } });
-      comps.push(comp);
+      const r = ufFind(p.id).root;
+      if (!compIdx.has(r)) { compIdx.set(r, members.length); members.push([]); }
+      members[compIdx.get(r)].push(p.id);
     });
-    const genOf = (pid) => gen.get(find(pid)) || 0;
-    const members = comps.map(() => []);
-    people.forEach((p) => members[compOf.get(find(p.id))].push(p.id));
+    const compOf = { get: (pid) => compIdx.get(ufFind(pid).root) };
+    const find = (pid) => pid;   // positions are keyed by person from here on
     // 3) the grid's HEIGHT follows the tree's main family: the most common
     //    surname (e.g. Hauck) picks the reference — the baseline is the median
     //    offset of THAT family's people, so the grid settles where the main
@@ -2143,10 +2153,13 @@
       const q = nkPos(nk), ty = lineFor(pid);
       if (Math.abs(q.y - ty) > 0.5) { (state.echoPos || (state.echoPos = {}))[nk] = { x: q.x, y: ty }; moved++; if (isLocked(nk)) movedLocked++; }
     });
-    if (!moved) { toast("Everything's already lined up — one line per generation"); return; }
+    // A couple whose two families join at different levels can't share a row:
+    // say so plainly, so a partner sitting one line up never looks like a bug.
+    const straddle = skipped ? " · " + skipped + " cross-generation marriage" + (skipped > 1 ? "s" : "") + " left a row apart" : "";
+    if (!moved) { toast("Everything's already lined up — one line per generation" + straddle); return; }
     pushUndo(pre);
     save(); render();
-    toast("Tidied up " + moved + " " + (moved === 1 ? "person" : "people") + " — each generation on its own line" + (movedLocked ? " (incl. " + movedLocked + " locked — heights only)" : "") + " (Cmd+Z to undo)");
+    toast("Tidied up " + moved + " " + (moved === 1 ? "person" : "people") + " — each generation on its own line" + (movedLocked ? " (incl. " + movedLocked + " locked — heights only)" : "") + straddle + " (Cmd+Z to undo)");
   }
   stage.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY); }, { passive: false });
 
