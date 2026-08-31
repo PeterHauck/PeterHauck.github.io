@@ -713,3 +713,7 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 .jump-badge:hover .jump-badge-mark { fill: var(--accent); }
 /* A family's child connector: drag it up or down */
 .bus-hit { stroke: transparent; stroke-width: 18; cursor: ns-resize; }
+
+.rel-copy { padding: 2px 8px 6px; }
+.rel-copy .btn { width: 100%; justify-content: center; font-size: 12px; color: var(--muted); }
+.rel-copy .btn:hover { color: var(--ink); }
