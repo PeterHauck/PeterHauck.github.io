@@ -1146,10 +1146,12 @@
       jb.addEventListener("contextmenu", (ev) => {
         ev.preventDefault(); ev.stopPropagation();
         if (readonly) return;
-        const lid = state.links.filter((l) => l.child === p.id && (!inst || l.union === inst.uid)).map((l) => l.id)
-          .find((x) => state.portals && state.portals[x]);
-        if (lid) { pushUndo(); delete state.portals[lid]; save(); render(); toast("Jump removed — the line is back"); }
-        else toast("This jump is automatic — it goes away if they're arranged nearer their family.");
+        const lid = (state.links.find((l) => l.child === p.id && (!inst || l.union === inst.uid)) || {}).id;
+        if (!lid) return;
+        pushUndo();
+        (state.portals || (state.portals = {}))[lid] = false;   // never repeat them here
+        save(); render();
+        toast("Copy removed — they're drawn in one place now");
       });
       g.appendChild(jb);
     }
@@ -1341,6 +1343,9 @@
   }
   const spotOccupied = (x, y, exceptId) => visiblePersons().some((p) => p.id !== exceptId && Math.abs(posOf(p.id).x - x) < COLW * 0.85 && Math.abs(posOf(p.id).y - y) < ROWH * 0.55);
   // Pin `id` at (x,y); if that spot is taken, open room by shifting the right side over.
+  // Linking someone who is already on the canvas must never teleport them: pin
+  // the spot they are standing on before the structure changes underneath.
+  function pinInPlace(id) { if (id && !isManual(id) && personById(id)) { const q = posOf(id); posMap()[id] = { x: q.x, y: q.y }; } }
   function placeAt(id, x, y) {
     if (spotOccupied(x, y, id)) makeRoomAt(x - COLW * 0.5, COLW, new Set([id]));
     posMap()[id] = { x, y };
@@ -1739,9 +1744,10 @@
     // "Far" means separated from the family cluster by a big EMPTY gap, not
     // merely distant from the drop point: siblings chain together, so a wide
     // row where each sibling sits near the next all stays wired to the bus.
-    // A jump can also be forced by hand (right-click a child's line); forced
-    // children never join the near cluster.
-    const forcedJump = (c) => !!(state.portals && state.portals[c.lid]);
+    // Copies are three-way per parent-child link: true = always show a copy
+    // here, false = never (draw the line however long), unset = automatic.
+    const pFlag = (c) => (state.portals || {})[c.lid];
+    const forcedJump = (c) => pFlag(c) === true;
     const PORTAL_GAP = 2200;
     const nearSet = new Set();
     let nLo = dropX, nHi = dropX, grew = true;
@@ -1752,8 +1758,9 @@
         if (c.x >= nLo - PORTAL_GAP && c.x <= nHi + PORTAL_GAP) { nearSet.add(c.id); nLo = Math.min(nLo, c.x); nHi = Math.max(nHi, c.x); grew = true; }
       });
     }
-    const nearTops = childTops.filter((c) => nearSet.has(c.id));
-    const farTops = childTops.filter((c) => !nearSet.has(c.id));
+    const nearTops = childTops.filter((c) => !forcedJump(c) && (nearSet.has(c.id) || pFlag(c) === false));
+    const nearIds = new Set(nearTops.map((c) => c.id));
+    const farTops = childTops.filter((c) => !nearIds.has(c.id));
     if (nearTops.length) {
       gu.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
       const minX = Math.min(dropX, ...nearTops.map((c) => c.x));
@@ -2401,7 +2408,9 @@
       if (pid === personId) return toast("Pick someone else");
       pushUndo();
       let partnerId = pid;
+      pinInPlace(personId);
       if (!partnerId) partnerId = addPerson({ name: "New spouse", sex: guessSpouseSex(personById(personId)) }).id;
+      else pinInPlace(partnerId);
       addUnion(personId, partnerId, "married");
       if (isManual(personId) && !isManual(partnerId)) { const pp = posOf(personId); placeAt(partnerId, pp.x + COLW, pp.y); }
       if (!pid) focusNewPerson(personById(partnerId), "Added spouse — type their name and Save");
@@ -2413,8 +2422,10 @@
       pushUndo();
       let childId = cid;
       if (!childId) childId = addPerson({ name: "New person", sex: "unknown" }).id;
+      else pinInPlace(childId);   // an existing person keeps the spot they're on
       addChild(unionId, childId, "bio");
-      const u = unionById(unionId); if (u) placeNewChild(u, childId);
+      // only a brand-new child gets placed under these parents
+      if (!cid) { const u = unionById(unionId); if (u) placeNewChild(u, childId); }
       if (!cid) focusNewPerson(personById(childId));
       else { refreshRel(personId); toast("Child linked"); }
     }, [personId]);
@@ -2424,6 +2435,7 @@
       (pid) => {
         if (pid === personId) return toast("Pick someone else");
         pushUndo();
+        pinInPlace(personId);   // gaining a parent must not move them
         const parId = pid || addPerson({ name: "New parent", sex: "unknown" }).id;
         const existing = parentLinksOfPerson(personId).map((l) => unionById(l.union)).find(Boolean);
         if (existing && existing.b == null && existing.a !== parId) existing.b = parId;   // fill the empty slot
@@ -2526,6 +2538,27 @@
         const adopted = l.type === "adopted";
         const kn = kindToggle(nounParent(s, adopted), () => relSetChildType(l.id, adopted ? "bio" : "adopted", pid));
         rowFor(parId, kn, removeBtn(() => relRemoveParent(pid, parId, l.id)));
+      });
+      // One person can appear in more than one place: repeat them (with their
+      // spouse and children) beside these parents, while their main spot stays
+      // wherever you put it.
+      [...new Set(parentRows.map((r) => r.l.id))].forEach((lid) => {
+        const l = state.links.find((x) => x.id === lid); if (!l) return;
+        const flag = (state.portals || {})[lid];
+        const shown = flag === true || (flag !== false && (copySpots[pid] || []).some((c) => c.uid === l.union));
+        const li = document.createElement("li"); li.className = "rel-copy";
+        const b = document.createElement("button"); b.type = "button"; b.className = "btn small";
+        b.textContent = shown ? "⧉ Also shown here — remove this copy" : "⧉ Also show a copy here";
+        b.title = shown
+          ? "Stop repeating them beside these parents — the line is drawn instead, however long"
+          : "Repeat them here — with their spouse and children — while their main spot stays where it is";
+        b.onclick = () => {
+          pushUndo();
+          (state.portals || (state.portals = {}))[lid] = !shown;
+          save(); render(); refreshRel(pid);
+          toast(shown ? "Copy removed — they're drawn in one place now" : "Now shown in both places — drag either one wherever you like");
+        };
+        li.appendChild(b); box.appendChild(li);
       });
     }
 
