@@ -717,3 +717,20 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 .rel-copy { padding: 2px 8px 6px; }
 .rel-copy .btn { width: 100%; justify-content: center; font-size: 12px; color: var(--muted); }
 .rel-copy .btn:hover { color: var(--ink); }
+/* Extra photos on a profile */
+.gal-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.gal-cell { position: relative; width: 74px; height: 74px; border-radius: 8px; overflow: hidden; border: 1px solid var(--panel-border); background: var(--paper); }
+.gal-cell img { width: 100%; height: 100%; object-fit: cover; cursor: zoom-in; display: block; }
+.gal-act { position: absolute; width: 22px; height: 22px; border-radius: 50%; border: none; cursor: pointer;
+  background: rgba(0,0,0,.55); color: #fff; font-size: 12px; line-height: 22px; padding: 0; opacity: 0; transition: opacity .12s; }
+.gal-cell:hover .gal-act, .gal-cell:focus-within .gal-act { opacity: 1; }
+.gal-star { left: 3px; bottom: 3px; }
+.gal-del { right: 3px; top: 3px; }
+@media (hover: none) { .gal-act { opacity: 1; } }
+.lightbox-back { position: fixed; inset: 0; background: rgba(0,0,0,.88); z-index: 90; display: flex;
+  flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 20px; }
+.lightbox-img { max-width: 96vw; max-height: 82vh; object-fit: contain; border-radius: 8px; }
+.lightbox-cap { color: #eee; font-size: 13px; }
+.lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,.14);
+  color: #fff; border: none; font-size: 34px; width: 52px; height: 72px; cursor: pointer; border-radius: 8px; }
+.lightbox-nav.prev { left: 12px; } .lightbox-nav.next { right: 12px; }

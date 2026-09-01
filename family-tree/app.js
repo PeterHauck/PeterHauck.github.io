@@ -2248,6 +2248,8 @@
     $("#pMaiden").value = np.maiden || "";
     $("#pSuffix").value = np.suffix || "";
     renderNotesPanel(p);
+    { const host = $("#galleryStrip"); if (host) renderGallery(host, p, () => { const cur = personById($("#personId").value); if (cur) fillPersonForm(cur); }); }
+    { const box = $("#galleryBox"); if (box) box.hidden = readonly; }
     $("#pName").value = p.name || "";
     $("#pBirth").value = p.birth == null ? "" : p.birth;
     $("#pDeath").value = p.death == null ? "" : p.death;
@@ -2723,6 +2725,15 @@
   function syncCauseVis() { $("#causeField").hidden = !($("#pDeceased").checked || $("#pDeath").value || $("#pDeathDate").value); }
   $("#pDeceased").addEventListener("change", syncCauseVis);
   $("#pDeath").addEventListener("input", syncCauseVis);
+  { const b = $("#galleryAddBtn"), inp = $("#galleryInput");
+    if (b && inp) {
+      b.onclick = () => { if (!$("#personId").value) return toast("Save this person first, then add photos"); inp.click(); };
+      inp.onchange = async () => {
+        const p = personById($("#personId").value); if (!p) return;
+        const n = await galleryAdd(p, inp.files); inp.value = "";
+        if (n) { fillPersonForm(p); toast(n === 1 ? "Photo added" : n + " photos added"); }
+      };
+    } }
   $("#personCancel").onclick = resetPersonForm;
   $("#personDelete").onclick = () => {
     const id = $("#personId").value; if (!id) return;
@@ -3027,7 +3038,7 @@
       const r = await fetch("api/store?action=listMedia"); if (!r.ok) return;
       const have = new Set(((await r.json()).ids) || []);
       const wanted = new Set();
-      state.persons.forEach((p) => { if (p.photoRef) wanted.add(p.photoRef); (p.docs || []).forEach((d) => { if (d.ref) wanted.add(d.ref); }); });
+      state.persons.forEach((p) => { if (p.photoRef) wanted.add(p.photoRef); (p.docs || []).forEach((d) => { if (d.ref) wanted.add(d.ref); }); (p.gallery || []).forEach((g) => { if (g.ref) wanted.add(g.ref); }); });
       const missing = [...wanted].filter((id) => !have.has(id));
       if (!missing.length) return;
       const items = [];
@@ -3051,6 +3062,7 @@
     const jobs = [];
     state.persons.forEach((p) => {
       if (p.photo && /^data:/.test(p.photo)) jobs.push({ kind: "photo", p });
+      (p.gallery || []).forEach((g) => { if (g && g.data && /^data:/.test(g.data)) jobs.push({ kind: "gal", g }); });
       (p.docs || []).forEach((d) => {
         if (!d) return;
         if ((d.kind === "image" || d.kind === "pdf") && d.content && /^data:/.test(d.content)) jobs.push({ kind: "doc", d });
@@ -3066,6 +3078,7 @@
       try {
         let dataUrl;
         if (j.kind === "photo") dataUrl = j.p.photo;
+        else if (j.kind === "gal") dataUrl = j.g.data;
         else if (j.kind === "doc") dataUrl = j.d.content;
         else {   // legacy record stored server-side unencrypted: pull it back in, re-store encrypted
           const rr = await fetch(recordSrc(j.d.path)); if (!rr.ok) throw new Error("record fetch failed");
@@ -3077,6 +3090,7 @@
         if (!vr.ok) throw new Error("verify fetch failed");
         if ((await mediaDecrypt((await vr.json()).payload)) !== dataUrl) throw new Error("verify mismatch");
         if (j.kind === "photo") { j.p.photoRef = id; delete j.p.photo; }
+        else if (j.kind === "gal") { j.g.ref = id; delete j.g.data; }
         else { j.d.ref = id; delete j.d.content; delete j.d.path; }
         moved++;
         if (moved % 5 === 0) { save(); if (firstRun) toast("Slimming storage… " + moved + "/" + jobs.length); }
@@ -3095,6 +3109,9 @@
       if (p.photoRef) { try { const u = await mediaGet(p.photoRef); if (u) { p.photo = u; delete p.photoRef; } } catch (e) {} }
       for (const d of (p.docs || [])) {
         if (d && d.ref) { try { const u = await mediaGet(d.ref); if (u) { d.content = u; delete d.ref; } } catch (e) {} }
+      }
+      for (const g of (p.gallery || [])) {
+        if (g && g.ref) { try { const u = await mediaGet(g.ref); if (u) { g.data = u; delete g.ref; } } catch (e) {} }
       }
     }
     delete obj.mediaKey;
@@ -3919,6 +3936,104 @@
   }
   function readFileDataURL(file) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(file); }); }
 
+  /* ---------------- extra photos: as many per person as you like -------- */
+  // The tree picture stays p.photo/p.photoRef; everything else lives in
+  // p.gallery as media refs (embedded data only while offline, until the sweep
+  // externalises it). Shared by the computer panel and the phone card.
+  const galleryOf = (p) => (Array.isArray(p.gallery) ? p.gallery : []);
+  async function galleryAdd(p, files) {
+    const list = [...files].slice(0, 20);
+    if (!list.length) return 0;
+    let added = 0;
+    for (let f of list) {
+      try { f = await normalizeImageFile(f); } catch (e) { toast("Couldn’t read " + (f.name || "that photo") + " — try a JPG."); continue; }
+      let full = null;
+      try {
+        const dataUrl = await readFileDataURL(f);
+        full = await new Promise((res) => { const im = new Image(); im.onload = () => { try { res(downscale(im, 1400)); } catch (e2) { res(null); } }; im.onerror = () => res(null); im.src = dataUrl; });
+      } catch (e) {}
+      if (!full) { toast("Couldn’t read that image"); continue; }
+      if (!Array.isArray(p.gallery)) p.gallery = [];
+      try { p.gallery.push({ ref: await mediaUpload(full) }); }
+      catch (e) { p.gallery.push({ data: full }); }   // offline: keep it here for now
+      added++;
+    }
+    if (added) { save(); try { cloudSaveTree(false); } catch (e) {} scheduleSweep(); }
+    return added;
+  }
+  const galleryPicSrc = (g) => (g.data || (g.ref && mediaMem.get(g.ref)) || null);
+  // A strip of thumbnails: tap to enlarge, ★ to make it the tree picture, ✕ to remove.
+  function renderGallery(host, p, onChange) {
+    host.textContent = "";
+    const gal = galleryOf(p);
+    if (!gal.length) return;
+    const strip = document.createElement("div"); strip.className = "gal-strip";
+    gal.forEach((g, i) => {
+      const cell = document.createElement("div"); cell.className = "gal-cell";
+      const img = document.createElement("img");
+      const src = galleryPicSrc(g);
+      if (src) img.src = src;
+      else if (g.ref) mediaGet(g.ref).then((u) => { if (u && img.isConnected) img.src = u; }).catch(() => {});
+      img.alt = "Photo " + (i + 1);
+      img.onclick = () => openPhotoLightbox(p, i);
+      cell.appendChild(img);
+      if (!readonly && isOwner()) {
+        const star = document.createElement("button"); star.type = "button"; star.className = "gal-act gal-star"; star.textContent = "★";
+        star.title = "Use as their tree picture";
+        star.onclick = async (ev) => {
+          ev.stopPropagation();
+          const full = galleryPicSrc(g) || (g.ref ? await mediaGet(g.ref).catch(() => null) : null);
+          if (!full) return toast("That photo is still loading");
+          const sq = await imageDataToPhoto(full);
+          if (!sq) return toast("Couldn’t use that photo");
+          try { p.photoRef = await mediaUpload(sq); delete p.photo; } catch (e) { p.photo = sq; delete p.photoRef; }
+          p.photoMobile = true;
+          save(); try { cloudSaveTree(false); } catch (e) {}
+          render(); toast("Tree picture updated"); if (onChange) onChange();
+        };
+        const del = document.createElement("button"); del.type = "button"; del.className = "gal-act gal-del"; del.textContent = "✕";
+        del.title = "Remove this photo";
+        del.onclick = (ev) => {
+          ev.stopPropagation();
+          if (!confirm("Remove this photo?")) return;
+          pushUndo();
+          p.gallery = galleryOf(p).filter((x) => x !== g);
+          save(); try { cloudSaveTree(false); } catch (e) {}
+          toast("Photo removed"); if (onChange) onChange();
+        };
+        cell.appendChild(star); cell.appendChild(del);
+      }
+      strip.appendChild(cell);
+    });
+    host.appendChild(strip);
+  }
+  // Full-size viewer with next/previous.
+  function openPhotoLightbox(p, idx) {
+    const gal = galleryOf(p); if (!gal.length) return;
+    let i = Math.max(0, Math.min(idx, gal.length - 1));
+    const back = document.createElement("div"); back.className = "lightbox-back";
+    const img = document.createElement("img"); img.className = "lightbox-img";
+    const cap = document.createElement("div"); cap.className = "lightbox-cap";
+    const show = async () => {
+      const g = gal[i];
+      const src = galleryPicSrc(g) || (g.ref ? await mediaGet(g.ref).catch(() => null) : null);
+      img.src = src || "";
+      cap.textContent = (p.name || "") + "  ·  " + (i + 1) + " of " + gal.length;
+    };
+    const nav = (d) => { i = (i + d + gal.length) % gal.length; show(); };
+    back.appendChild(img); back.appendChild(cap);
+    if (gal.length > 1) {
+      const prev = document.createElement("button"); prev.className = "lightbox-nav prev"; prev.textContent = "‹";
+      const next = document.createElement("button"); next.className = "lightbox-nav next"; next.textContent = "›";
+      prev.onclick = (e) => { e.stopPropagation(); nav(-1); };
+      next.onclick = (e) => { e.stopPropagation(); nav(1); };
+      back.appendChild(prev); back.appendChild(next);
+    }
+    back.onclick = () => back.remove();
+    document.body.appendChild(back);
+    show();
+  }
+
   function personDatesLine(p) {
     const parts = [];
     if (p.birthDate) parts.push("Born " + fmtDate(p.birthDate));
@@ -4038,23 +4153,31 @@
       };
       fileInput.onchange = () => setFromFile(fileInput.files[0]);
       const addBtn = (label) => { const b = document.createElement("button"); b.className = "btn small"; b.textContent = label; s.appendChild(b); return b; };
-      if (!p.photo && !p.photoRef) {
-        addBtn("📷 Add a photo").onclick = () => fileInput.click();
-      } else if (mobileAdded) {
-        addBtn("📷 Change photo").onclick = () => fileInput.click();
+      const hasPic = !!(p.photo || p.photoRef);
+      addBtn(hasPic ? "📷 Change photo" : "📷 Add a photo").onclick = () => fileInput.click();
+      if (hasPic) {
         const rm = addBtn("Remove photo"); rm.classList.add("danger");
         rm.onclick = () => {
-          if (!confirm("Remove this photo?")) return;
+          if (!confirm("Remove their tree picture? Any other photos on their profile stay.")) return;
+          pushUndo();
           delete p.photo; delete p.photoRef; delete p.photoMobile;
           save(); try { cloudSaveTree(false); } catch (e) {}
           render(); openProfileCard(id); toast("Photo removed");
         };
-      } else {
-        const note = document.createElement("div"); note.className = "pcard-subhint";
-        note.textContent = "This photo is saved with their records and is protected here. You can change it on the computer.";
-        s.appendChild(note);
       }
       s.appendChild(fileInput);
+      // …and as many extra photos as they like
+      const galInput = document.createElement("input"); galInput.type = "file"; galInput.accept = "image/*,.heic,.heif"; galInput.multiple = true; galInput.style.display = "none";
+      galInput.onchange = async () => {
+        const n = await galleryAdd(p, galInput.files); galInput.value = "";
+        closeProfileCard(); openProfileCard(id);
+        if (n) toast(n === 1 ? "Photo added" : n + " photos added");
+      };
+      addBtn("🖼 Add photos").onclick = () => galInput.click();
+      s.appendChild(galInput);
+      const galHost = document.createElement("div");
+      renderGallery(galHost, p, () => { closeProfileCard(); openProfileCard(id); });
+      s.appendChild(galHost);
     }
     // Details — birth/death dates and records, view-only until the owner
     // explicitly taps Edit (so nothing gets changed by a stray touch). Adding
@@ -4069,7 +4192,7 @@
       if (isDeceased(p) && p.causeOfDeath) line("Cause of death", p.causeOfDeath);
       s.appendChild(view);
       const bar = document.createElement("div"); bar.className = "pcard-notes-bar";
-      const editBtn = document.createElement("button"); editBtn.className = "btn small"; editBtn.textContent = "✏️ Edit details";
+      const editBtn = document.createElement("button"); editBtn.className = "btn small"; editBtn.textContent = "✏️ Edit name & details";
       const attachBtn = document.createElement("button"); attachBtn.className = "btn small"; attachBtn.textContent = "📄 Add obituary / record";
       attachBtn.onclick = () => openAttachModal(id, () => { closeProfileCard(); openProfileCard(id); });
       bar.appendChild(editBtn); bar.appendChild(attachBtn); s.appendChild(bar);
@@ -4079,6 +4202,14 @@
         const field = (label, input) => { const w = document.createElement("label"); w.className = "pcard-field"; const t = document.createElement("span"); t.textContent = label; w.appendChild(t); w.appendChild(input); f.appendChild(w); return input; };
         const num = (v) => { const i = document.createElement("input"); i.type = "number"; i.value = v == null ? "" : v; return i; };
         const date = (v) => { const i = document.createElement("input"); i.type = "date"; i.value = v || ""; return i; };
+        const txt2 = (v) => { const i = document.createElement("input"); i.type = "text"; i.value = v || ""; return i; };
+        const np0 = (p.first !== undefined || p.last !== undefined) ? p : parseName(p.name || "");
+        const fFirst = field("First name", txt2(np0.first));
+        const fMiddle = field("Middle name", txt2(np0.middle));
+        const fLast = field("Last name", txt2(np0.last));
+        const fNick = field("Nickname", txt2(np0.nickname));
+        const fMaiden = field("Maiden name", txt2(np0.maiden));
+        const fSuffix = field("Suffix (Jr., III…)", txt2(np0.suffix));
         const bYear = field("Born (year)", num(p.birth));
         const bDate = field("Exact birth date (optional)", date(p.birthDate));
         const dYear = field("Died (year, if applicable)", num(p.death));
@@ -4107,6 +4238,9 @@
           p.death = isNaN(dy) ? null : dy; p.deathDate = deathDate;
           p.deceased = !!(dec.checked || dy || deathDate);
           if (causeI.value.trim() && isDeceased(p)) p.causeOfDeath = causeI.value.trim(); else delete p.causeOfDeath;
+          const np = nameParts({ first: fFirst.value.trim(), middle: fMiddle.value.trim(), last: fLast.value.trim(),
+            nickname: fNick.value.trim(), maiden: p.sex === "female" ? fMaiden.value.trim() : "", suffix: fSuffix.value.trim() });
+          if (np.first || np.last) Object.assign(p, { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix });
           save(); try { cloudSaveTree(false); } catch (e) {}
           render(); closeProfileCard(); openProfileCard(id); toast("Details saved");
         };
@@ -5549,7 +5683,7 @@
         <select id="vMode">
           <option value="family">+ everyone related to them</option>
           <option value="descendants">+ all their descendants</option>
-          <option value="ancestors">+ all their ancestors</option>
+          <option value="ancestors">+ only their direct ancestors (no siblings or cousins)</option>
         </select>
         <button type="button" class="btn small" id="vAddRule">Add</button>
       </div>
@@ -5571,7 +5705,7 @@
       if (isHidden(p.id)) return;
       const o = document.createElement("option"); o.value = p.id; o.textContent = p.name || "Unnamed"; sel.appendChild(o);
     });
-    const modeWord = { family: "everyone related", descendants: "all descendants", ancestors: "all ancestors" };
+    const modeWord = { family: "everyone related", descendants: "all descendants", ancestors: "direct ancestors only" };
     const rulesEl = back.querySelector("#vRules"), countEl = back.querySelector("#vCount");
     const hidSec = back.querySelector("#vHiddenSec"), hidEl = back.querySelector("#vHidden");
     const renderHiddenChoices = () => {
