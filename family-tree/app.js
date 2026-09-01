@@ -891,7 +891,28 @@
     if (viewPreview) { const v = viewPreview.view; return v.manual || (v.manual = {}); }
     return hiddenScope ? (state.manualHidden || (state.manualHidden = {})) : state.manual;
   };
-  const posOf = (id) => posMap()[id] || (viewPreview ? (state.manual || {})[id] : null) || layoutPos[id] || { x: 0, y: 0 };
+  // A view is its own tidy tree: people you haven't placed inside the view are
+  // laid out compactly from the view's own members, rather than inheriting the
+  // master's coordinates (which leaves big holes wherever a relative is absent).
+  let viewLayout = null, viewLayoutKey = "";
+  function viewAutoPos() {
+    if (!viewPreview) return null;
+    const ids = [...viewPreview.set].filter((id) => personById(id)).sort();
+    const key = viewPreview.view.id + "|" + ids.join(",");
+    if (viewLayoutKey === key && viewLayout) return viewLayout;
+    const persons = state.persons.filter((p) => viewPreview.set.has(p.id));
+    const unions = state.unions.filter((u) => viewPreview.set.has(u.a) && (u.b == null || viewPreview.set.has(u.b)));
+    const uById = {}; unions.forEach((u) => (uById[u.id] = u));
+    const links = state.links.filter((l) => uById[l.union] && viewPreview.set.has(l.child));
+    let pos = {};
+    try {
+      const gen = computeGenerations(persons, unions, links, uById);
+      pos = layoutComponent(new Set(persons.map((p) => p.id)), persons, unions, links, uById, gen).pos || {};
+    } catch (e) { pos = {}; }
+    viewLayout = pos; viewLayoutKey = key;
+    return viewLayout;
+  }
+  const posOf = (id) => posMap()[id] || (viewPreview ? (viewAutoPos() || {})[id] : null) || layoutPos[id] || { x: 0, y: 0 };
   // NODE KEYS: every APPEARANCE on the canvas has its own key — a main node is
   // just the person id, a copy across a jump is "unionId:personId". Selection,
   // locks, groups, drags and every layout tool work on appearances, so an
@@ -917,7 +938,7 @@
     // added show up) before drawing.
     colorMemo = null;   // family colours recompute each draw (inheritance is live)
     if (hiddenScope) hiddenScope.set = new Set(hiddenMembersFrom(hiddenScope.seedIds).members);
-    if (viewPreview) viewPreview.set = viewMembers(viewPreview.view.rules, viewPreview.view.withHidden);
+    if (viewPreview) viewPreview.set = viewMembers(viewPreview.view.rules, viewPreview.view.withHidden, viewPreview.view.hide);
     gNodes.textContent = "";
     gLinks.textContent = "";
     emptyState.style.display = state.persons.length ? "none" : "flex";
@@ -969,7 +990,17 @@
     { const b = btn("⤓ Row down", () => nudgeGeneration(1)); b.title = "Move down one row — hotkey: ]"; }
     if (ids.length >= 2) btn("🔗 Group", () => { makeGroup(ids); render(); toast("Grouped — they now move together (any tool, any drag)"); });
     if (ids.some((id) => groupOf(id))) btn("⛓ Ungroup", () => { ungroup(ids); render(); toast("Ungrouped — they move separately again"); });
-    btn("Hide selected", () => {
+    if (viewPreview) btn("🚫 Hide from this view", () => {
+      const v = viewPreview.view;
+      pushUndo();
+      if (!Array.isArray(v.hide)) v.hide = [];
+      const pids = [...new Set(ids.map(pidOf))].filter((id) => personById(id));
+      pids.forEach((id) => { if (!v.hide.includes(id)) v.hide.push(id); });
+      selection = new Set();
+      save(); render();
+      toast(pids.length + " hidden from this view only — the master tree keeps them");
+    });
+    if (!viewPreview) btn("Hide selected", () => {
       pushUndo();
       if (!state.hidden) state.hidden = {};
       const n = selection.size;
@@ -1534,10 +1565,10 @@
       if (seen.has(pid)) return null;
       seen.add(pid);
       const p = personById(pid); if (!p) return null;
-      const spouses = spouseIdsOf(pid).map(personById).filter((sp) => sp && !isHidden(sp.id) && !seen.has(sp.id)).slice(0, 2);
+      const spouses = spouseIdsOf(pid).map(personById).filter((sp) => sp && inView(sp.id) && !seen.has(sp.id)).slice(0, 2);
       spouses.forEach((sp) => seen.add(sp.id));
       const kids = [...new Set(unionsOfPerson(pid).flatMap((u2) => childLinksOfUnion(u2.id).map((l) => l.child)))]
-        .filter((k) => personById(k) && !isHidden(k)).map(unitOf).filter(Boolean);
+        .filter((k) => personById(k) && inView(k)).map(unitOf).filter(Boolean);
       const rowW = (1 + spouses.length) * SLOT;
       const kidsW = kids.reduce((s, k) => s + k.w, 0) + GAPC * Math.max(0, kids.length - 1);
       return { p, spouses, kids, w: Math.max(rowW, kidsW) };
@@ -5420,7 +5451,7 @@
      that slice, read-only. Private notes never leave the master tree, and
      hidden people are never included in a view. */
   const spouseIdsOf = (pid) => unionsOfPerson(pid).map((u) => (u.a === pid ? u.b : u.a)).filter((x) => x != null && personById(x));
-  function viewMembers(rules, withHidden) {
+  function viewMembers(rules, withHidden, hideList) {
     const set = new Set();
     const addDescendants = (pid) => {
       const stack = [pid];
@@ -5446,6 +5477,18 @@
       return anc;
     };
     const addDirect = (pid) => directLine(pid).forEach((id) => set.add(id));
+    // Immediate family: them, their partner(s), their children, and the home
+    // they grew up in — parents and siblings. Nothing further out.
+    const addImmediate = (pid) => {
+      set.add(pid);
+      spouseIdsOf(pid).forEach((sp) => set.add(sp));
+      unionsOfPerson(pid).forEach((u) => childLinksOfUnion(u.id).forEach((l) => { if (personById(l.child)) set.add(l.child); }));
+      parentLinksOfPerson(pid).forEach((l) => {
+        const u = unionById(l.union); if (!u) return;
+        [u.a, u.b].forEach((x) => { if (x != null && personById(x)) set.add(x); });
+        childLinksOfUnion(u.id).forEach((cl) => { if (personById(cl.child)) set.add(cl.child); });   // siblings
+      });
+    };
     // The whole family line: walk the direct line up to the oldest ancestors on
     // record, then come back DOWN through everyone descended from them — all
     // their children, grandchildren and so on. Spouses are shown so couples
@@ -5496,7 +5539,8 @@
     };
     (rules || []).forEach((r) => {
       if (!personById(r.person)) return;
-      if (r.mode === "descendants") addDescendants(r.person);
+      if (r.mode === "immediate") addImmediate(r.person);
+      else if (r.mode === "descendants") addDescendants(r.person);
       else if (r.mode === "direct") addDirect(r.person);
       else if (r.mode === "ancestors") addLine(r.person);
       else addRelated(r.person);
@@ -5509,6 +5553,7 @@
       if (!set.has(u.a) && !(u.b != null && set.has(u.b))) return;
       hiddenMembersFrom([u.a, u.b].filter((x) => x != null)).members.forEach((m) => { if (isHidden(m)) set.add(m); });
     });
+    (hideList || []).forEach((id) => set.delete(id));   // people you hid from THIS view
     return set;
   }
   // The hidden branches hanging under a member-couple of the given rule set —
@@ -5526,7 +5571,7 @@
   // The shareable copy of a view: only its members, their couples/children,
   // and their saved positions. Private notes are stripped.
   function viewSlice(view) {
-    const set = viewMembers(view.rules, view.withHidden);
+    const set = viewMembers(view.rules, view.withHidden, view.hide);
     const persons = state.persons.filter((p) => set.has(p.id)).map((p) => { const q = Object.assign({}, p); delete q.notes; return q; });
     const unions = state.unions.filter((u) => set.has(u.a) && (u.b == null || set.has(u.b)));
     const uids = new Set(unions.map((u) => u.id));
@@ -5630,7 +5675,7 @@
   }
   function startViewPreview(view, temporary) {
     try { localStorage.setItem("familyTree.currentView", view.id); } catch (e) {}
-    viewPreview = { view, set: viewMembers(view.rules, view.withHidden) };
+    viewPreview = { view, set: viewMembers(view.rules, view.withHidden, view.hide) };
     // Switching views is a normal mode — the ☰ menu is the way in AND out, so
     // no pop-up bar. Only the fleeting Preview from the view editor gets one.
     const old = document.getElementById("viewScopeBar"); if (old) old.remove();
@@ -5720,6 +5765,7 @@
         <select id="vPerson"></select>
         <select id="vMode">
           <option value="family">+ everyone related to them</option>
+          <option value="immediate">+ their immediate family (parents, siblings, partner, children)</option>
           <option value="descendants">+ all their descendants</option>
           <option value="ancestors">+ their whole family line (up to the oldest ancestor, then everyone down from them)</option>
           <option value="direct">+ only their direct ancestors (parents, grandparents… nobody else)</option>
@@ -5727,6 +5773,7 @@
         <button type="button" class="btn small" id="vAddRule">Add</button>
       </div>
       <div id="vHiddenSec" hidden><label class="field"><span>Hidden branches under people in this view</span></label><div id="vHidden"></div></div>
+      <div id="vDroppedSec" hidden><label class="field"><span>Hidden from this view</span></label><div id="vDropped"></div></div>
       <p class="hint" id="vCount"></p>
       <div class="btn-row" style="margin-top:10px">
         <button type="button" class="btn" data-cancel>Cancel</button>
@@ -5744,7 +5791,7 @@
       if (isHidden(p.id)) return;
       const o = document.createElement("option"); o.value = p.id; o.textContent = p.name || "Unnamed"; sel.appendChild(o);
     });
-    const modeWord = { family: "everyone related", descendants: "all descendants", ancestors: "their whole family line", direct: "direct ancestors only" };
+    const modeWord = { family: "everyone related", immediate: "immediate family", descendants: "all descendants", ancestors: "their whole family line", direct: "direct ancestors only" };
     const rulesEl = back.querySelector("#vRules"), countEl = back.querySelector("#vCount");
     const hidSec = back.querySelector("#vHiddenSec"), hidEl = back.querySelector("#vHidden");
     const renderHiddenChoices = () => {
@@ -5765,7 +5812,23 @@
         row.appendChild(cb); row.appendChild(t); hidEl.appendChild(row);
       });
     };
-    const updateCount = () => { countEl.textContent = rules.length ? viewMembers(rules, withHidden).size + " people in this view so far." : ""; };
+    // People taken out of this view by hand (via "Hide from this view") — each
+    // can be put back here.
+    let dropped = Array.isArray(v.hide) ? v.hide.slice() : [];
+    const dropSec = back.querySelector("#vDroppedSec"), dropEl = back.querySelector("#vDropped");
+    const renderDropped = () => {
+      dropped = dropped.filter((id) => personById(id));
+      dropSec.hidden = !dropped.length;
+      dropEl.textContent = "";
+      dropped.forEach((id) => {
+        const row = document.createElement("div"); row.className = "view-drop-row";
+        const t = document.createElement("span"); t.textContent = (personById(id) || {}).name || "Someone";
+        const b = document.createElement("button"); b.type = "button"; b.className = "btn small"; b.textContent = "Put back";
+        b.onclick = () => { dropped = dropped.filter((x) => x !== id); renderDropped(); updateCount(); };
+        row.appendChild(t); row.appendChild(b); dropEl.appendChild(row);
+      });
+    };
+    const updateCount = () => { countEl.textContent = rules.length ? viewMembers(rules, withHidden, dropped).size + " people in this view so far." : ""; };
     const renderRules = () => {
       rulesEl.textContent = "";
       if (!rules.length) rulesEl.innerHTML = '<p class="hint">No one yet — pick a person below and add a rule.</p>';
@@ -5780,9 +5843,9 @@
       renderHiddenChoices();
       updateCount();
     };
-    renderRules();
+    renderRules(); renderDropped();
     back.querySelector("#vAddRule").onclick = () => { if (sel.value) { rules.push({ person: sel.value, mode: back.querySelector("#vMode").value }); renderRules(); } };
-    const collect = () => { v.name = back.querySelector("#vName").value.trim(); v.pass = back.querySelector("#vPass").value.trim(); v.rules = rules; v.withHidden = withHidden; };
+    const collect = () => { v.name = back.querySelector("#vName").value.trim(); v.pass = back.querySelector("#vPass").value.trim(); v.rules = rules; v.withHidden = withHidden; v.hide = dropped; };
     back.querySelector("#vPreviewBtn").onclick = () => { collect(); close(); startViewPreview(v, true); };
     back.querySelector("#vSave").onclick = () => {
       collect();

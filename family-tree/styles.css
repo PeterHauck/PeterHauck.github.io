@@ -734,3 +734,4 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 .lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,.14);
   color: #fff; border: none; font-size: 34px; width: 52px; height: 72px; cursor: pointer; border-radius: 8px; }
 .lightbox-nav.prev { left: 12px; } .lightbox-nav.next { right: 12px; }
+.view-drop-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 0; font-size: 13px; }
