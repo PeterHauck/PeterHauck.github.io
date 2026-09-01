@@ -4314,7 +4314,7 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [], locked: state.locked || {}, portals: state.portals || {}, echoPos: state.echoPos || {}, busOff: state.busOff || {} };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, viewModesV2: !!state.viewModesV2, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [], locked: state.locked || {}, portals: state.portals || {}, echoPos: state.echoPos || {}, busOff: state.busOff || {} };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
@@ -4323,6 +4323,7 @@
       focus: Array.isArray(obj.focus) ? obj.focus : [], version: obj.version || 0,
       photoMigrated: !!obj.photoMigrated,
       namesSplit: !!obj.namesSplit,
+      viewModesV2: !!obj.viewModesV2,
       views: Array.isArray(obj.views) ? obj.views : [],
       mediaKey: obj.mediaKey || null,
       groups: Array.isArray(obj.groups) ? obj.groups : [],
@@ -5338,6 +5339,12 @@
     }
     if (!readonly && dedupeParentUnions()) save();   // heal any duplicate parentage in existing data
     if (!readonly && !state.namesSplit) { splitNames(); state.namesSplit = true; save(); }   // one-time: split names into parts
+    // One-time: "ancestors" used to mean the strict pedigree and now means the
+    // whole family line, so views written before the split keep their meaning.
+    if (!readonly && !state.viewModesV2) {
+      (state.views || []).forEach((v) => (v.rules || []).forEach((r) => { if (r.mode === "ancestors") r.mode = "direct"; }));
+      state.viewModesV2 = true; save();
+    }
     autoLayout(); render(); syncTitle(); setupTitleEditing();
     try {
       const vid = localStorage.getItem("familyTree.currentView");
@@ -5424,15 +5431,45 @@
         unionsOfPerson(cur).forEach((u) => childLinksOfUnion(u.id).forEach((l) => { if (!set.has(l.child) && personById(l.child)) stack.push(l.child); }));
       }
     };
-    const addAncestors = (pid) => {
-      const stack = [pid]; set.add(pid);
+    // Every direct ancestor: parents, grandparents, great-grandparents… and
+    // nobody else. No siblings, aunts, uncles or cousins — a plain pedigree.
+    const directLine = (pid) => {
+      const anc = new Set([pid]);
+      const stack = [pid];
       while (stack.length) {
         const cur = stack.pop();
         parentLinksOfPerson(cur).forEach((l) => {
           const u = unionById(l.union); if (!u) return;
-          [u.a, u.b].forEach((par) => { if (par != null && personById(par) && !set.has(par)) { set.add(par); stack.push(par); } });
+          [u.a, u.b].forEach((par) => { if (par != null && personById(par) && !anc.has(par)) { anc.add(par); stack.push(par); } });
         });
       }
+      return anc;
+    };
+    const addDirect = (pid) => directLine(pid).forEach((id) => set.add(id));
+    // The whole family line: walk the direct line up to the oldest ancestors on
+    // record, then come back DOWN through everyone descended from them — all
+    // their children, grandchildren and so on. Spouses are shown so couples
+    // read properly, but a married-in spouse's own family is left out.
+    const addLine = (pid) => {
+      const anc = directLine(pid);
+      const hasParents = (id) => parentLinksOfPerson(id).some((l) => {
+        const u = unionById(l.union);
+        return u && [u.a, u.b].some((x) => x != null && personById(x));
+      });
+      const apex = [...anc].filter((id) => !hasParents(id));
+      const mine = new Set(anc);
+      const seen = new Set();   // separate from membership: the walk has to pass
+      const stack = apex.length ? [...apex] : [...anc];   // THROUGH the line itself
+      while (stack.length) {   // down from the oldest ancestors
+        const cur = stack.pop();
+        if (seen.has(cur)) continue;
+        seen.add(cur); mine.add(cur);
+        unionsOfPerson(cur).forEach((u) => childLinksOfUnion(u.id).forEach((l) => {
+          if (personById(l.child)) { mine.add(l.child); stack.push(l.child); }
+        }));
+      }
+      [...mine].forEach((id) => spouseIdsOf(id).forEach((sp) => mine.add(sp)));   // married-ins, and no further
+      mine.forEach((id) => set.add(id));
     };
     // "Everyone related": the person's blood relatives — all ancestors, plus
     // every descendant of those ancestors (that's what brings in siblings,
@@ -5460,7 +5497,8 @@
     (rules || []).forEach((r) => {
       if (!personById(r.person)) return;
       if (r.mode === "descendants") addDescendants(r.person);
-      else if (r.mode === "ancestors") addAncestors(r.person);
+      else if (r.mode === "direct") addDirect(r.person);
+      else if (r.mode === "ancestors") addLine(r.person);
       else addRelated(r.person);
     });
     [...set].forEach((id) => { if (isHidden(id)) set.delete(id); });   // hidden branches stay out unless chosen below
@@ -5683,7 +5721,8 @@
         <select id="vMode">
           <option value="family">+ everyone related to them</option>
           <option value="descendants">+ all their descendants</option>
-          <option value="ancestors">+ only their direct ancestors (no siblings or cousins)</option>
+          <option value="ancestors">+ their whole family line (up to the oldest ancestor, then everyone down from them)</option>
+          <option value="direct">+ only their direct ancestors (parents, grandparents… nobody else)</option>
         </select>
         <button type="button" class="btn small" id="vAddRule">Add</button>
       </div>
@@ -5705,7 +5744,7 @@
       if (isHidden(p.id)) return;
       const o = document.createElement("option"); o.value = p.id; o.textContent = p.name || "Unnamed"; sel.appendChild(o);
     });
-    const modeWord = { family: "everyone related", descendants: "all descendants", ancestors: "direct ancestors only" };
+    const modeWord = { family: "everyone related", descendants: "all descendants", ancestors: "their whole family line", direct: "direct ancestors only" };
     const rulesEl = back.querySelector("#vRules"), countEl = back.querySelector("#vCount");
     const hidSec = back.querySelector("#vHiddenSec"), hidEl = back.querySelector("#vHidden");
     const renderHiddenChoices = () => {
