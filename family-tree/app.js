@@ -913,6 +913,13 @@
     return viewLayout;
   }
   const posOf = (id) => posMap()[id] || (viewPreview ? (viewAutoPos() || {})[id] : null) || layoutPos[id] || { x: 0, y: 0 };
+  // Dragged connector heights live with the arrangement they were dragged in:
+  // a View lays the same family out with its own rows, so a height measured on
+  // the master tree means nothing there (and vice versa).
+  const busMap = () => {
+    if (viewPreview) { const v = viewPreview.view; return v.busOff || (v.busOff = {}); }
+    return state.busOff || (state.busOff = {});
+  };
   // NODE KEYS: every APPEARANCE on the canvas has its own key — a main node is
   // just the person id, a copy across a jump is "unionId:personId". Selection,
   // locks, groups, drags and every layout tool work on appearances, so an
@@ -991,6 +998,13 @@
     { const b = btn("⤓ Row down", () => nudgeGeneration(1)); b.title = "Move down one row — hotkey: ]"; }
     if (ids.length >= 2) btn("🔗 Group", () => { makeGroup(ids); render(); toast("Grouped — they now move together (any tool, any drag)"); });
     if (ids.some((id) => groupOf(id))) btn("⛓ Ungroup", () => { ungroup(ids); render(); toast("Ungrouped — they move separately again"); });
+    // A repeated person selected here can be taken off the canvas without being
+    // taken off the tree — the copy goes, the person stays.
+    if (ids.some((nk) => removableCopy(nk))) btn("⧉ Remove copy", () => {
+      const n = removeCopies(ids);
+      selection = new Set(); render();
+      toast(n ? (n === 1 ? "Copy removed — they're drawn in one place now" : n + " copies removed") : "Nothing to remove here");
+    }).title = "Stop repeating them here — they stay on the tree, drawn in one place";
     if (viewPreview) btn("🚫 Hide from this view", () => {
       const v = viewPreview.view;
       pushUndo();
@@ -1059,6 +1073,26 @@
       }
     });
     return out;
+  }
+  // Switch OFF the copies named by these appearance keys: each one's
+  // parent-child link is pinned to "never repeat here", so the person is drawn
+  // in one place again. The person, their family and their links are untouched.
+  const copyLinkOf = (pid, uid) => ((state.links || []).find((x) => x.child === pid && x.union === uid) || null);
+  // Whose jump is responsible for the copy of `pid` sitting on union `uid`.
+  const copyAnchorOf = (pid, uid) => (((copySpots[pid] || []).find((c) => c.uid === uid) || {}).anchor) || pid;
+  const removableCopy = (nk) => {
+    if (!isCopyKey(nk)) return null;
+    const uid = nk.slice(0, nk.indexOf(":")), pid = pidOf(nk);
+    return copyLinkOf(copyAnchorOf(pid, uid), uid);
+  };
+  function removeCopies(nks) {
+    const lids = [...new Set([...nks].map((nk) => { const l = removableCopy(nk); return l && l.id; }).filter(Boolean))];
+    if (!lids.length) return 0;
+    pushUndo();
+    if (!state.portals) state.portals = {};
+    lids.forEach((id) => { state.portals[id] = false; });
+    save(); render();
+    return lids.length;
   }
   function centerAt(x, y) {
     const r = stage.getBoundingClientRect();
@@ -1575,7 +1609,10 @@
       return { p, spouses, kids, w: Math.max(rowW, kidsW) };
     };
     const root = unitOf(childId); if (!root) return { anchorX: cx, anchorTop: rowY - HALF - 8, width: COLW };
-    const reg = (pp, v) => { copyPlacements.push({ p: pp, uid, x: v.x, y: v.y }); (copySpots[pp.id] = copySpots[pp.id] || []).push({ uid, x: v.x, y: v.y }); copyPos[uid + ":" + pp.id] = { x: v.x, y: v.y }; };
+    // `anchor` is the child whose jump created this cluster: a spouse or
+    // grandchild repeated inside it belongs to that one copy, so removing any
+    // of them means removing the cluster the anchor brought.
+    const reg = (pp, v) => { copyPlacements.push({ p: pp, uid, x: v.x, y: v.y }); (copySpots[pp.id] = copySpots[pp.id] || []).push({ uid, x: v.x, y: v.y, anchor: childId }); copyPos[uid + ":" + pp.id] = { x: v.x, y: v.y }; };
     // place a unit centred on centerX: first spouse to the right, a second to
     // the left; each spouse ties to THIS person (never spouse-to-spouse); kids
     // hang from a mini bus below the couple, each centred over their own branch
@@ -1629,7 +1666,7 @@
       if (!moved && Math.abs(e2.clientY - sy) > 3) moved = true;
       if (!moved) return;
       const dy = (e2.clientY - sy) / view.scale;
-      (state.busOff || (state.busOff = {}))[u.id] = Math.max(lo, Math.min(hi, start + dy));
+      busMap()[u.id] = Math.max(lo, Math.min(hi, start + dy));
       render();
     };
     const up = () => {
@@ -1769,8 +1806,8 @@
     // top) — or wherever you dragged this family's line to.
     const busBase = pb ? (A.y + B.y) / 2 : midY;
     const busAuto = 120 + (busLevels[u.id] || 0) * 15;
-    const busOv = state.busOff && state.busOff[u.id];
-    const busY = busBase + (busOv != null ? busOv : busAuto);
+    const busOv = busMap()[u.id];
+    let busY = busBase + (busOv != null ? busOv : busAuto);
     // PORTALS: a child drawn far off with their own marital family (a
     // married-in spouse) gets NO cross-canvas line — a stub + echo instead.
     // "Far" means separated from the family cluster by a big EMPTY gap, not
@@ -1779,7 +1816,11 @@
     // Copies are three-way per parent-child link: true = always show a copy
     // here, false = never (draw the line however long), unset = automatic.
     const pFlag = (c) => (state.portals || {})[c.lid];
-    const forcedJump = (c) => pFlag(c) === true;
+    // A View is redrawn from scratch as one clean tree, so a jump forced by
+    // hand on the master tree would only repeat someone who is already standing
+    // right there. Views let the empty-gap rule decide for itself; "never
+    // repeat here" still counts, because that is a request for one copy only.
+    const forcedJump = (c) => pFlag(c) === true && !viewPreview;
     const PORTAL_GAP = 2200;
     const nearSet = new Set();
     let nLo = dropX, nHi = dropX, grew = true;
@@ -1793,6 +1834,14 @@
     const nearTops = childTops.filter((c) => !forcedJump(c) && (nearSet.has(c.id) || pFlag(c) === false));
     const nearIds = new Set(nearTops.map((c) => c.id));
     const farTops = childTops.filter((c) => !nearIds.has(c.id));
+    // Keep the connector in the corridor between the couple and the highest
+    // child it feeds. Without this, a height carried over from a layout with
+    // taller rows lands below the children and every drop line runs down past
+    // them and back up.
+    if (nearTops.length) {
+      const loY = busBase + HALF + 24, hiY = Math.min(...nearTops.map((c) => c.top)) - 8;
+      if (hiY > loY) busY = Math.min(Math.max(busY, loY), hiY);
+    }
     if (nearTops.length) {
       gu.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
       const minX = Math.min(dropX, ...nearTops.map((c) => c.x));
@@ -1806,7 +1855,7 @@
         bh.addEventListener("pointerdown", (ev) => startBusDrag(ev, u, busBase, busY, nearTops));
         bh.addEventListener("contextmenu", (ev) => {
           ev.preventDefault(); ev.stopPropagation();
-          if (state.busOff && state.busOff[u.id] != null) { pushUndo(); delete state.busOff[u.id]; save(); render(); toast("Connector back to its automatic height"); }
+          if (busMap()[u.id] != null) { pushUndo(); delete busMap()[u.id]; save(); render(); toast("Connector back to its automatic height"); }
           else toast("This connector is already at its automatic height");
         });
         gu.appendChild(bh);
@@ -2206,7 +2255,7 @@
       if (!childLinksOfUnion(u.id).some((l) => personById(l.child) && inView(l.child))) return;
       const A = posOf(u.a), B = u.b != null && personById(u.b) && inView(u.b) ? posOf(u.b) : null;
       const base = B ? (A.y + B.y) / 2 : A.y;
-      const ov = state.busOff && state.busOff[u.id];
+      const ov = busMap()[u.id];
       buses.push({ id: u.id, base, ov: ov != null, y: base + (ov != null ? ov : 120 + (lv[u.id] || 0) * 15) });
     });
     const TOL = 100;   // "the one next to it" — never a different generation's
@@ -2218,7 +2267,7 @@
       const autos = near.filter((o) => !o.ov);
       const ys = (autos.length ? autos : near).map((o) => o.y).sort((x, y) => x - y);
       const target = ys[Math.floor(ys.length / 2)];
-      if (Math.abs(target - b.y) > 0.5) { (state.busOff || (state.busOff = {}))[b.id] = target - b.base; b.y = target; n++; }
+      if (Math.abs(target - b.y) > 0.5) { busMap()[b.id] = target - b.base; b.y = target; n++; }
     });
     return n;
   }
@@ -2740,6 +2789,7 @@
       // The photo only changes when the user actually changed it — an
       // externalised photo that hadn't finished loading is never wiped.
       if (photoDirty) {
+        delete p.photoSrcRef;   // the kept original belongs to the picture being replaced
         if (pendingPhoto) { p.photo = pendingPhoto; delete p.photoRef; scheduleSweep(); }
         else { delete p.photo; delete p.photoRef; }
       }
@@ -2866,7 +2916,7 @@
       const pts = new Map();
       const toLocal = (e) => { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) * (V / r.width), y: (e.clientY - r.top) * (V / r.height) }; };
       let last = null, pinchDist = 0;
-      stage.addEventListener("pointerdown", (e) => { e.preventDefault(); stage.setPointerCapture(e.pointerId); pts.set(e.pointerId, toLocal(e)); if (pts.size === 1) last = toLocal(e); pinchDist = 0; });
+      stage.addEventListener("pointerdown", (e) => { e.preventDefault(); try { stage.setPointerCapture(e.pointerId); } catch (err) {} pts.set(e.pointerId, toLocal(e)); if (pts.size === 1) last = toLocal(e); pinchDist = 0; });
       stage.addEventListener("pointermove", (e) => {
         if (!pts.has(e.pointerId)) return;
         pts.set(e.pointerId, toLocal(e));
@@ -3070,7 +3120,7 @@
       const r = await fetch("api/store?action=listMedia"); if (!r.ok) return;
       const have = new Set(((await r.json()).ids) || []);
       const wanted = new Set();
-      state.persons.forEach((p) => { if (p.photoRef) wanted.add(p.photoRef); (p.docs || []).forEach((d) => { if (d.ref) wanted.add(d.ref); }); (p.gallery || []).forEach((g) => { if (g.ref) wanted.add(g.ref); }); });
+      state.persons.forEach((p) => { if (p.photoRef) wanted.add(p.photoRef); if (p.photoSrcRef) wanted.add(p.photoSrcRef); (p.docs || []).forEach((d) => { if (d.ref) wanted.add(d.ref); }); (p.gallery || []).forEach((g) => { if (g.ref) wanted.add(g.ref); }); });
       const missing = [...wanted].filter((id) => !have.has(id));
       if (!missing.length) return;
       const items = [];
@@ -3138,6 +3188,7 @@
   async function exportInlinedObject() {
     const obj = JSON.parse(JSON.stringify(exportObject()));
     for (const p of obj.persons) {
+      delete p.photoSrcRef;   // the uncropped original is a convenience, not part of a backup
       if (p.photoRef) { try { const u = await mediaGet(p.photoRef); if (u) { p.photo = u; delete p.photoRef; } } catch (e) {} }
       for (const d of (p.docs || [])) {
         if (d && d.ref) { try { const u = await mediaGet(d.ref); if (u) { d.content = u; delete d.ref; } } catch (e) {} }
@@ -3995,13 +4046,8 @@
     if (!list.length) return 0;
     let added = 0;
     for (let f of list) {
-      try { f = await normalizeImageFile(f); } catch (e) { toast("Couldn’t read " + (f.name || "that photo") + " — try a JPG."); continue; }
-      let full = null;
-      try {
-        const dataUrl = await readFileDataURL(f);
-        full = await new Promise((res) => { const im = new Image(); im.onload = () => { try { res(downscale(im, 1400)); } catch (e2) { res(null); } }; im.onerror = () => res(null); im.src = dataUrl; });
-      } catch (e) {}
-      if (!full) { toast("Couldn’t read that image"); continue; }
+      const full = await fileAsFullImage(f);
+      if (!full) continue;
       if (!Array.isArray(p.gallery)) p.gallery = [];
       try { p.gallery.push({ ref: await mediaUpload(full) }); }
       catch (e) { p.gallery.push({ data: full }); }   // offline: keep it here for now
@@ -4028,17 +4074,15 @@
       cell.appendChild(img);
       if (!readonly && isOwner()) {
         const star = document.createElement("button"); star.type = "button"; star.className = "gal-act gal-star"; star.textContent = "★";
-        star.title = "Use as their tree picture";
+        star.title = "Make this their tree picture";
         star.onclick = async (ev) => {
           ev.stopPropagation();
           const full = galleryPicSrc(g) || (g.ref ? await mediaGet(g.ref).catch(() => null) : null);
           if (!full) return toast("That photo is still loading");
-          const sq = await imageDataToPhoto(full);
-          if (!sq) return toast("Couldn’t use that photo");
-          try { p.photoRef = await mediaUpload(sq); delete p.photo; } catch (e) { p.photo = sq; delete p.photoRef; }
-          p.photoMobile = true;
-          save(); try { cloudSaveTree(false); } catch (e) {}
-          render(); toast("Tree picture updated"); if (onChange) onChange();
+          openPhotoAdjust(full, async (sq) => {
+            await setTreePicture(p, sq, g.ref ? null : full, g.ref || null);
+            toast("Tree picture updated"); if (onChange) onChange();
+          });
         };
         const del = document.createElement("button"); del.type = "button"; del.className = "gal-act gal-del"; del.textContent = "✕";
         del.title = "Remove this photo";
@@ -4081,6 +4125,125 @@
     back.onclick = () => back.remove();
     document.body.appendChild(back);
     show();
+  }
+
+  /* ------------- the tree picture: one place to change it -------------- */
+  // Tapping someone's picture on their profile opens this menu, so it is never
+  // ambiguous which control changes the picture on the tree and which one just
+  // adds to their gallery. Every route through it ends in the same crop/zoom
+  // editor the computer uses, so a phone can position a photo just as well.
+  const hasTreePic = (p) => !!(p.photo || p.photoRef);
+  // Read a picked file into a full-size (downscaled) image, converting HEIC.
+  async function fileAsFullImage(file) {
+    try { file = await normalizeImageFile(file); } catch (e) { toast("Couldn’t convert that iPhone photo — try a JPG."); return null; }
+    let full = null;
+    try {
+      const dataUrl = await readFileDataURL(file);
+      full = await new Promise((res) => { const im = new Image(); im.onload = () => { try { res(downscale(im, 1400)); } catch (e) { res(null); } }; im.onerror = () => res(null); im.src = dataUrl; });
+    } catch (e) {}
+    if (!full) toast("Couldn’t read that image");
+    return full;
+  }
+  // The best image to (re-)crop from: the full-size original kept when the
+  // picture was set, else the square itself — still enough to nudge or zoom in.
+  async function photoSourceFor(p) {
+    if (p.photoSrcRef) { const u = await mediaGet(p.photoSrcRef).catch(() => null); if (u) return u; }
+    if (p.photo) return p.photo;
+    if (p.photoRef) return await mediaGet(p.photoRef).catch(() => null);
+    return null;
+  }
+  // Save a freshly cropped square as the tree picture, keeping a reference to
+  // the full-size original so it can be repositioned again later without the
+  // quality loss of re-cropping a crop.
+  async function setTreePicture(p, square, full, fullRef) {
+    pushUndo();
+    try { p.photoRef = await mediaUpload(square); delete p.photo; }
+    catch (e) { p.photo = square; delete p.photoRef; }   // offline: the sweep externalises it later
+    delete p.photoSrcRef;
+    if (fullRef) p.photoSrcRef = fullRef;
+    else if (full) { try { p.photoSrcRef = await mediaUpload(full); } catch (e) {} }
+    p.photoMobile = true;
+    save(); try { cloudSaveTree(false); } catch (e) {}
+    scheduleSweep(); render();
+  }
+  function openPhotoMenu(p, onChange) {
+    if (readonly || !isOwner()) return;
+    const back = document.createElement("div"); back.className = "modal-backdrop";
+    const m = document.createElement("div"); m.className = "modal photo-menu";
+    const h = document.createElement("h2"); h.textContent = "Profile picture"; m.appendChild(h);
+    const hint = document.createElement("div"); hint.className = "hint";
+    hint.textContent = "This is the picture that shows on the tree.";
+    m.appendChild(hint);
+    const close = () => back.remove();
+    const after = (msg) => { toast(msg); if (onChange) onChange(); };
+    const opt = (label, fn, cls) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "btn wide" + (cls ? " " + cls : "");
+      b.textContent = label; b.onclick = fn; m.appendChild(b); return b;
+    };
+    const has = hasTreePic(p), gal = galleryOf(p);
+    if (has) opt("🔍 Reposition this picture", async () => {
+      close();
+      const src = await photoSourceFor(p);
+      if (!src) return toast("That picture is still loading — try again in a moment");
+      openPhotoAdjust(src, async (sq) => { await setTreePicture(p, sq, null, p.photoSrcRef || null); after("Picture repositioned"); });
+    });
+    if (gal.length) opt("🖼 Choose from their photos", () => { close(); openGalleryPick(p, onChange); });
+    const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*,.heic,.heif"; fileInput.style.display = "none";
+    fileInput.onchange = async () => {
+      const file = fileInput.files[0]; if (!file) return;
+      close();
+      const full = await fileAsFullImage(file); if (!full) return;
+      openPhotoAdjust(full, async (sq) => { await setTreePicture(p, sq, full, null); after("Picture updated"); });
+    };
+    m.appendChild(fileInput);
+    opt(has ? "📷 Upload a new picture" : "📷 Upload a picture", () => fileInput.click());
+    if (has) opt("🗑 Remove this picture", () => {
+      if (!confirm("Remove their tree picture? Any photos in their gallery stay.")) return;
+      close(); pushUndo();
+      delete p.photo; delete p.photoRef; delete p.photoSrcRef; delete p.photoMobile;
+      save(); try { cloudSaveTree(false); } catch (e) {}
+      render(); after("Picture removed");
+    }, "danger");
+    const row = document.createElement("div"); row.className = "btn-row";
+    const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "Cancel";
+    cancel.onclick = close; row.appendChild(cancel); m.appendChild(row);
+    back.appendChild(m); document.body.appendChild(back);
+    back.addEventListener("click", (e) => { if (e.target === back) close(); });
+    return back;
+  }
+  // Pick one of their gallery photos to become the tree picture, then crop it.
+  function openGalleryPick(p, onChange) {
+    const gal = galleryOf(p); if (!gal.length) return null;
+    const back = document.createElement("div"); back.className = "modal-backdrop";
+    const m = document.createElement("div"); m.className = "modal";
+    const h = document.createElement("h2"); h.textContent = "Choose a picture"; m.appendChild(h);
+    const hint = document.createElement("div"); hint.className = "hint"; hint.textContent = "Tap a photo, then position it."; m.appendChild(hint);
+    const grid = document.createElement("div"); grid.className = "pick-grid";
+    gal.forEach((g, i) => {
+      const cell = document.createElement("button"); cell.type = "button"; cell.className = "pick-cell";
+      const img = document.createElement("img"); img.alt = "Photo " + (i + 1);
+      const src = galleryPicSrc(g);
+      if (src) img.src = src;
+      else if (g.ref) mediaGet(g.ref).then((u) => { if (u && img.isConnected) img.src = u; }).catch(() => {});
+      cell.appendChild(img);
+      cell.onclick = async () => {
+        const full = galleryPicSrc(g) || (g.ref ? await mediaGet(g.ref).catch(() => null) : null);
+        if (!full) return toast("That photo is still loading");
+        back.remove();
+        openPhotoAdjust(full, async (sq) => {
+          await setTreePicture(p, sq, g.ref ? null : full, g.ref || null);
+          toast("Picture updated"); if (onChange) onChange();
+        });
+      };
+      grid.appendChild(cell);
+    });
+    m.appendChild(grid);
+    const row = document.createElement("div"); row.className = "btn-row";
+    const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "Cancel";
+    cancel.onclick = () => back.remove(); row.appendChild(cancel); m.appendChild(row);
+    back.appendChild(m); document.body.appendChild(back);
+    back.addEventListener("click", (e) => { if (e.target === back) back.remove(); });
+    return back;
   }
 
   function personDatesLine(p) {
@@ -4169,10 +4332,26 @@
     const head = document.createElement("div"); head.className = "pcard-head";
     const av = document.createElement("div"); av.className = "pcard-photo " + (p.sex === "female" ? "f" : p.sex === "male" ? "m" : "u");
     const ph0 = photoOf(p);
+    const placeholder = () => { const q = document.createElement("span"); q.className = "pcard-ph"; q.textContent = "👤"; av.appendChild(q); return q; };
     if (ph0) { const img = document.createElement("img"); img.src = ph0; av.appendChild(img); }
-    else if (p.photoRef) { av.textContent = "👤"; mediaGet(p.photoRef).then((u) => { if (u && av.isConnected) { av.textContent = ""; const img = document.createElement("img"); img.src = u; av.appendChild(img); } }).catch(() => {}); }
-    else av.textContent = "👤";
+    else if (p.photoRef) {
+      const q = placeholder();
+      mediaGet(p.photoRef).then((u) => { if (u && av.isConnected) { q.remove(); const img = document.createElement("img"); img.src = u; av.insertBefore(img, av.firstChild); } }).catch(() => {});
+    } else placeholder();
     if (isDeceased(p)) av.classList.add("deceased");
+    // Their picture is the control for their picture: tapping it offers
+    // reposition / choose from their photos / upload / remove, so the only
+    // upload button left on the card is the gallery one.
+    if (isOwner() && !readonly) {
+      av.classList.add("tappable");
+      av.setAttribute("role", "button");
+      av.setAttribute("tabindex", "0");
+      av.title = hasTreePic(p) ? "Change or reposition their picture" : "Add their picture";
+      const cam = document.createElement("span"); cam.className = "pcard-photo-cam"; cam.textContent = "📷"; av.appendChild(cam);
+      const openIt = () => openPhotoMenu(p, () => { closeProfileCard(); openProfileCard(id); });
+      av.onclick = openIt;
+      av.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openIt(); } };
+    }
     head.appendChild(av);
     const hbox = document.createElement("div"); hbox.className = "pcard-headtext";
     const h = document.createElement("h2"); h.textContent = p.name || "Unnamed"; hbox.appendChild(h);
@@ -4193,48 +4372,23 @@
       b.onclick = () => enableEditingHere(() => { closeProfileCard(); openProfileCard(id); });
       s0.appendChild(b);
     }
-    // Photo — the owner can add/replace a picture from their phone. Photos that
-    // came from an obituary (or the computer) are protected: they can't be removed
-    // or replaced here, so saved obituary portraits are never lost by accident.
+    // Photos — the gallery, and only the gallery. Their tree picture is changed
+    // by tapping the picture at the top of the card, so there is exactly one
+    // upload button here and no doubt about what it does.
     if (isOwner()) {
-      const s = section("Photo", "pcard-photo-sec");
-      const mobileAdded = !!p.photoMobile;
-      const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*,.heic,.heif"; fileInput.style.display = "none";
-      const setFromFile = async (file) => {
-        if (!file) return;
-        try { file = await normalizeImageFile(file); } catch (e) { toast("Couldn’t convert that HEIC photo — try a JPG."); return; }
-        let photo = null; try { const dataUrl = await readFileDataURL(file); photo = await imageDataToPhoto(dataUrl); } catch (e) {}
-        if (!photo) { toast("Couldn’t read that image"); return; }
-        try { p.photoRef = await mediaUpload(photo); delete p.photo; }
-        catch (e2) { p.photo = photo; delete p.photoRef; }   // offline: keep it embedded; the sweep externalises later
-        p.photoMobile = true;
-        save(); try { cloudSaveTree(false); } catch (e) {}
-        render(); openProfileCard(id); toast("Photo updated");
-      };
-      fileInput.onchange = () => setFromFile(fileInput.files[0]);
-      const addBtn = (label) => { const b = document.createElement("button"); b.className = "btn small"; b.textContent = label; s.appendChild(b); return b; };
-      const hasPic = !!(p.photo || p.photoRef);
-      addBtn(hasPic ? "📷 Change photo" : "📷 Add a photo").onclick = () => fileInput.click();
-      if (hasPic) {
-        const rm = addBtn("Remove photo"); rm.classList.add("danger");
-        rm.onclick = () => {
-          if (!confirm("Remove their tree picture? Any other photos on their profile stay.")) return;
-          pushUndo();
-          delete p.photo; delete p.photoRef; delete p.photoMobile;
-          save(); try { cloudSaveTree(false); } catch (e) {}
-          render(); openProfileCard(id); toast("Photo removed");
-        };
-      }
-      s.appendChild(fileInput);
-      // …and as many extra photos as they like
+      const s = section("Photos", "pcard-photo-sec");
+      const hint = document.createElement("div"); hint.className = "pcard-subhint";
+      hint.textContent = "Tap their picture at the top to reposition, change or remove it.";
+      s.appendChild(hint);
       const galInput = document.createElement("input"); galInput.type = "file"; galInput.accept = "image/*,.heic,.heif"; galInput.multiple = true; galInput.style.display = "none";
       galInput.onchange = async () => {
         const n = await galleryAdd(p, galInput.files); galInput.value = "";
         closeProfileCard(); openProfileCard(id);
         if (n) toast(n === 1 ? "Photo added" : n + " photos added");
       };
-      addBtn("🖼 Add photos").onclick = () => galInput.click();
-      s.appendChild(galInput);
+      const add = document.createElement("button"); add.className = "btn small"; add.textContent = "🖼 Add pictures to gallery";
+      add.onclick = () => galInput.click();
+      s.appendChild(add); s.appendChild(galInput);
       const galHost = document.createElement("div");
       renderGallery(galHost, p, () => { closeProfileCard(); openProfileCard(id); });
       s.appendChild(galHost);
@@ -4305,6 +4459,44 @@
           render(); closeProfileCard(); openProfileCard(id); toast("Details saved");
         };
       };
+    }
+    // Everywhere they're drawn. A duplicate can be taken off from here — which
+    // is the only route on a phone, where there's no right-click.
+    {
+      const spots = copySpots[id] || [];
+      if (spots.length) {
+        const s = section("Appears in");
+        const note = document.createElement("div"); note.className = "pcard-subhint";
+        note.textContent = "They're drawn in " + (spots.length + 1) + " places. Removing a copy leaves them on the tree.";
+        s.appendChild(note);
+        const row = (label, uid) => {
+          const r = document.createElement("div"); r.className = "pcard-rel";
+          const nm = document.createElement("button"); nm.className = "pcard-relname"; nm.textContent = "⤴ " + label;
+          nm.onclick = () => {
+            const q = uid ? ((copySpots[id] || []).find((c) => c.uid === uid) || null) : posOf(id);
+            closeProfileCard(); if (q) centerAt(q.x, q.y);
+          };
+          r.appendChild(nm);
+          if (uid && isOwner() && !readonly && removableCopy(uid + ":" + id)) {
+            const anchor = copyAnchorOf(id, uid);
+            const who = anchor === id ? null : ((personById(anchor) || {}).first || (personById(anchor) || {}).name || "");
+            const rm = document.createElement("button"); rm.className = "btn small danger"; rm.textContent = "Remove copy";
+            rm.onclick = () => {
+              const msg = who
+                ? "This copy is part of " + who + "'s repeat on this branch. Removing it takes that whole repeat off — everyone stays on the tree."
+                : "Remove this copy? " + (p.name || "They") + " stays on the tree — they'll just be drawn in one place.";
+              if (!confirm(msg)) return;
+              const n = removeCopies([uid + ":" + id]);
+              closeProfileCard();
+              toast(n ? "Copy removed — they're drawn in one place now" : "That copy can't be removed here");
+            };
+            r.appendChild(rm);
+          }
+          s.appendChild(r);
+        };
+        row("Their main spot", null);
+        spots.forEach((c) => row(familyNameOfUnion(c.uid) || "another branch", c.uid));
+      }
     }
     // relationships (read-only, tap a name to jump)
     const groups = profileRelationships(id);
@@ -5608,8 +5800,11 @@
     const links = state.links.filter((l) => uids.has(l.union) && set.has(l.child));
     const manual = {}; Object.keys(state.manual || {}).forEach((k) => { if (set.has(k)) manual[k] = state.manual[k]; });
     Object.keys(view.manual || {}).forEach((k) => { if (set.has(k)) manual[k] = view.manual[k]; });   // the view's own arrangement wins
-    const portals = {}; links.forEach((l) => { if (state.portals && state.portals[l.id]) portals[l.id] = true; });
+    // Only the "never repeat here" flags travel into a published view: forced
+    // jumps belong to the master tree's arrangement, and the view draws its own.
+    const portals = {}; links.forEach((l) => { if (state.portals && state.portals[l.id] === false) portals[l.id] = false; });
     const echoPos = {}; Object.keys(state.echoPos || {}).forEach((k) => { const i = k.indexOf(":"); if (uids.has(k.slice(0, i)) && set.has(k.slice(i + 1))) echoPos[k] = state.echoPos[k]; });
+    const busOff = {}; Object.keys(view.busOff || {}).forEach((k) => { if (uids.has(k)) busOff[k] = view.busOff[k]; });
     return { title: view.name || state.title, subtitle: state.subtitle, persons, unions, links, manual, portals, echoPos, busOff, manualHidden: {}, hidden: {}, focus: [], version: state.version || 0, photoMigrated: true, namesSplit: true, viewOf: view.id, mediaKey: state.mediaKey || null };
   }
   // Encrypt every published view under its own password and store them.
