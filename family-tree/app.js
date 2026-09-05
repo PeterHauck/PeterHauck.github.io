@@ -920,6 +920,13 @@
     if (viewPreview) { const v = viewPreview.view; return v.busOff || (v.busOff = {}); }
     return state.busOff || (state.busOff = {});
   };
+  // …and so does where a repeated person was dragged to. A View puts the same
+  // family somewhere else entirely, so one arrangement's coordinates are
+  // meaningless in the other.
+  const echoMap = () => {
+    if (viewPreview) { const v = viewPreview.view; return v.echoPos || (v.echoPos = {}); }
+    return state.echoPos || (state.echoPos = {});
+  };
   // NODE KEYS: every APPEARANCE on the canvas has its own key — a main node is
   // just the person id, a copy across a jump is "unionId:personId". Selection,
   // locks, groups, drags and every layout tool work on appearances, so an
@@ -927,14 +934,14 @@
   const isCopyKey = (nk) => nk.indexOf(":") >= 0;
   const pidOf = (nk) => (isCopyKey(nk) ? nk.slice(nk.indexOf(":") + 1) : nk);
   let copyPos = {};   // where every copy actually drew this pass (nk -> {x,y})
-  const nkPos = (nk) => (isCopyKey(nk) ? ((state.echoPos || {})[nk] || copyPos[nk] || { x: 0, y: 0 }) : posOf(nk));
-  const nkSetPos = (nk, q) => { if (isCopyKey(nk)) (state.echoPos || (state.echoPos = {}))[nk] = q; else posMap()[nk] = q; };
+  const nkPos = (nk) => (isCopyKey(nk) ? (copyPos[nk] || echoMap()[nk] || { x: 0, y: 0 }) : posOf(nk));
+  const nkSetPos = (nk, q) => { if (isCopyKey(nk)) echoMap()[nk] = q; else posMap()[nk] = q; };
   // The appearance of `pid` in the same context as `likeNk`: inside a copy
   // cluster prefer that cluster's copy of pid; otherwise the main node.
   const nkFor = (pid, likeNk) => {
     if (likeNk && isCopyKey(likeNk)) {
       const k = likeNk.slice(0, likeNk.indexOf(":") + 1) + pid;
-      if (copyPos[k] || (state.echoPos || {})[k]) return k;
+      if (copyPos[k] || echoMap()[k]) return k;
     }
     return pid;
   };
@@ -1592,7 +1599,18 @@
   // starts at a tidy default spot but can be dragged anywhere (stored per
   // jump+person in state.echoPos); the connecting lines follow the shapes.
   function renderEchoCluster(gu, uid, childId, cx, rowY) {
-    const spot = (id, dx, dy) => (state.echoPos && state.echoPos[uid + ":" + id]) || { x: dx, y: dy };
+    // Where this copy was last dragged to — kept as-is, however the family has
+    // been rearranged around it, EXCEPT when the spot isn't within reach of
+    // this branch at all. That means it was saved against a different
+    // arrangement (a View puts the same family somewhere else entirely), and
+    // honouring it would fling them across the board; they go back to their
+    // automatic place beside the family instead.
+    const ECHO_FAR = 8000;   // far wider than any cluster — only nonsense trips it
+    const spot = (id, dx, dy) => {
+      const q = echoMap()[uid + ":" + id];
+      if (q && Math.abs(q.x - cx) < ECHO_FAR && Math.abs(q.y - rowY) < ECHO_FAR) return q;
+      return { x: dx, y: dy };
+    };
     const SLOT = COLW + 22, GAPC = 40;
     const seen = new Set();
     // measure the branch: a unit = person + their spouse(s) + kid units below
@@ -2288,7 +2306,7 @@
     });
     Object.keys(copyPos).forEach((nk) => {
       const q = nkPos(nk), ty = grid.lineFor(q.y);
-      if (Math.abs(q.y - ty) > 0.5) { (state.echoPos || (state.echoPos = {}))[nk] = { x: q.x, y: ty }; moved++; worst = Math.max(worst, Math.abs(q.y - ty)); if (isLocked(nk)) movedLocked++; }
+      if (Math.abs(q.y - ty) > 0.5) { echoMap()[nk] = { x: q.x, y: ty }; moved++; worst = Math.max(worst, Math.abs(q.y - ty)); if (isLocked(nk)) movedLocked++; }
     });
     const busFixed = alignBusLines();   // dragged connectors line up with their neighbours
     const busNote = busFixed ? " · " + busFixed + " connector" + (busFixed > 1 ? "s" : "") + " aligned" : "";
@@ -5803,7 +5821,7 @@
     // Only the "never repeat here" flags travel into a published view: forced
     // jumps belong to the master tree's arrangement, and the view draws its own.
     const portals = {}; links.forEach((l) => { if (state.portals && state.portals[l.id] === false) portals[l.id] = false; });
-    const echoPos = {}; Object.keys(state.echoPos || {}).forEach((k) => { const i = k.indexOf(":"); if (uids.has(k.slice(0, i)) && set.has(k.slice(i + 1))) echoPos[k] = state.echoPos[k]; });
+    const echoPos = {}; Object.keys(view.echoPos || {}).forEach((k) => { const i = k.indexOf(":"); if (uids.has(k.slice(0, i)) && set.has(k.slice(i + 1))) echoPos[k] = view.echoPos[k]; });
     const busOff = {}; Object.keys(view.busOff || {}).forEach((k) => { if (uids.has(k)) busOff[k] = view.busOff[k]; });
     return { title: view.name || state.title, subtitle: state.subtitle, persons, unions, links, manual, portals, echoPos, busOff, manualHidden: {}, hidden: {}, focus: [], version: state.version || 0, photoMigrated: true, namesSplit: true, viewOf: view.id, mediaKey: state.mediaKey || null };
   }
