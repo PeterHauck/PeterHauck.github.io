@@ -954,6 +954,7 @@
     updateHiddenChip();
     updateSelBar();
     updateViewSwitcher();
+    { const b = $("#pmEnableEdit"); if (b) b.hidden = readonly || isOwner(); }
   }
 
   // Floating action bar for a group selection (Rearrange mode: drag a box
@@ -3940,6 +3941,23 @@
   // The "owner" is a device holding the import passcode (the secret only used to
   // save the tree). Private notes are shown/edited only for the owner.
   const isOwner = () => { try { return !!(localStorage.getItem("familyTree.importPass") || "").trim(); } catch (e) { return false; } };
+  // Editing anywhere needs the site's import passcode saved in THIS browser —
+  // on the computer it's typed into "Save & back up", but a phone had no way in,
+  // so every profile stayed read-only. This asks for it, checks it against the
+  // server, and remembers it here.
+  async function enableEditingHere(after) {
+    const pass = (prompt("Enter the import passcode to edit on this device (the IMPORT_PASSCODE set on your site):") || "").trim();
+    if (!pass) return false;
+    try {
+      const r = await fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "checkPasscode", passcode: pass }) });
+      if (r.status === 401) { toast("That passcode isn't right — nothing was changed."); return false; }
+      if (!r.ok) { toast("Couldn't reach the site to check that passcode. Try again when you're online."); return false; }
+    } catch (e) { toast("Couldn't reach the site to check that passcode. Try again when you're online."); return false; }
+    try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
+    toast("✎ Editing is on for this device");
+    render(); if (after) after();
+    return true;
+  }
   // HEIC/HEIF (iPhone) photos: browsers can't display them, so they're
   // converted to JPEG in the browser first. The converter (vendored
   // heic2any, ~1.3MB) loads on demand — only the first time a HEIC file is
@@ -4164,6 +4182,17 @@
     card.appendChild(head);
     const body = document.createElement("div"); body.className = "pcard-body"; card.appendChild(body);
     const section = (title, cls) => { const s = document.createElement("div"); s.className = "pcard-section" + (cls ? " " + cls : ""); if (title) { const t = document.createElement("h3"); t.textContent = title; s.appendChild(t); } body.appendChild(s); return s; };
+    // This device hasn't been given the passcode yet: everything below is
+    // read-only, so offer the one action that changes that.
+    if (!isOwner() && !readonly) {
+      const s0 = section("Editing");
+      const note = document.createElement("div"); note.className = "pcard-subhint";
+      note.textContent = "This device can view the tree but not change it yet.";
+      s0.appendChild(note);
+      const b = document.createElement("button"); b.className = "btn small"; b.textContent = "✎ Turn on editing on this device";
+      b.onclick = () => enableEditingHere(() => { closeProfileCard(); openProfileCard(id); });
+      s0.appendChild(b);
+    }
     // Photo — the owner can add/replace a picture from their phone. Photos that
     // came from an obituary (or the computer) are protected: they can't be removed
     // or replaced here, so saved obituary portraits are never lost by accident.
@@ -5151,6 +5180,7 @@
   $("#pmClose").onclick = () => togglePeopleMenu(false);
   $("#pmAdd").onclick = () => { togglePeopleMenu(false); resetPersonForm(); ensurePanel(); const n = $("#pFirst"); if (n) n.focus(); };
   { const b = $("#pmViews"); if (b) b.onclick = () => { $("#peopleMenu").hidden = true; openViewsModal(); }; }
+  { const b = $("#pmEnableEdit"); if (b) b.onclick = () => { $("#peopleMenu").hidden = true; enableEditingHere(); }; }
   { const b = $("#tbViews"); if (b) b.onclick = openViewSheet; }
   $("#pmArrange").onclick = () => {
     pushUndo();

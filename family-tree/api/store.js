@@ -291,6 +291,10 @@ export default async function handler(req, res) {
       const openAction = action === "addComment";
       if (!openAction && passcode && (body.passcode || "") !== passcode) { res.status(401).json({ error: "Wrong import passcode." }); return; }
 
+      // Just says whether the passcode is right — the guard above already did
+      // the checking. Lets a phone turn editing on without changing anything.
+      if (action === "checkPasscode") { res.status(200).json({ ok: true }); return; }
+
       if (action === "addComment") {
         const personId = (body.personId || "").toString();
         const name = (body.name || "").toString().trim().slice(0, 60);
@@ -639,6 +643,10 @@ async function handleGitHub(req, res, passcode, ghToken) {
       const action = body.action || "saveTree";
       const openAction = action === "addComment";
       if (!openAction && passcode && (body.passcode || "") !== passcode) { res.status(401).json({ error: "Wrong import passcode." }); return; }
+
+      // Just says whether the passcode is right — the guard above already did
+      // the checking. Lets a phone turn editing on without changing anything.
+      if (action === "checkPasscode") { res.status(200).json({ ok: true }); return; }
 
       if (action === "addComment") {
         const personId = (body.personId || "").toString();
