@@ -546,10 +546,20 @@ button.btn.tiny.danger { color: var(--divorce); border-color: var(--divorce); }
 .docview-backdrop { z-index: 70; }
 .pcard { background: var(--panel); width: 100%; max-width: 560px; max-height: 88vh; overflow-y: auto; border-radius: 16px 16px 0 0; box-shadow: var(--shadow); padding: 16px 16px calc(20px + env(safe-area-inset-bottom)); }
 .pcard-head { display: flex; align-items: flex-start; gap: 12px; }
-.pcard-photo { width: 60px; height: 60px; flex: none; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 28px; background: var(--paper); border: 2px solid var(--panel-border); border-radius: 12px; }
+.pcard-photo { width: 60px; height: 60px; flex: none; overflow: hidden; position: relative; display: flex; align-items: center; justify-content: center; font-size: 28px; background: var(--paper); border: 2px solid var(--panel-border); border-radius: 12px; }
 .pcard-photo.f { border-radius: 50%; }
 .pcard-photo img { width: 100%; height: 100%; object-fit: cover; }
 .pcard-photo.deceased { opacity: .7; }
+.pcard-photo.tappable { cursor: pointer; }
+.pcard-photo.tappable:hover { border-color: var(--accent-2); }
+.pcard-photo .pcard-ph { line-height: 1; }
+.pcard-photo-cam { position: absolute; right: 0; bottom: 0; font-size: 11px; line-height: 1; padding: 2px 3px; background: var(--paper); border-top-left-radius: 6px; border-top: 1px solid var(--panel-border); border-left: 1px solid var(--panel-border); pointer-events: none; }
+/* choosing a tree picture out of someone's gallery */
+.pick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; margin: 10px 0 4px; max-height: 46vh; overflow: auto; }
+.pick-cell { padding: 0; border: 1px solid var(--panel-border); border-radius: 8px; background: var(--paper); overflow: hidden; cursor: pointer; aspect-ratio: 1 / 1; }
+.pick-cell:hover { border-color: var(--accent-2); }
+.pick-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-menu .btn.wide { margin: 6px 0 0; text-align: left; }
 .pcard-headtext { flex: 1; min-width: 0; padding-top: 2px; }
 .pcard-headtext h2 { margin: 0; font-size: 18px; line-height: 1.2; }
 .pcard-dates { font-size: 13px; color: var(--muted); margin-top: 3px; }
