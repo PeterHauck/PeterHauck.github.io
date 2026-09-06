@@ -68,7 +68,12 @@
     return hiddenScope ? hiddenScope.set.has(id) : !isHidden(id);
   };
   const visiblePersons = () => state.persons.filter((p) => inView(p.id));
-  const unionVisible = (u) => inView(u.a) && (u.b == null || inView(u.b));
+  // A SIBLING GROUP is a union with nobody above it: brothers and sisters whose
+  // parents aren't known. It has no couple, so it is visible through its members.
+  const isSibGroup = (u) => !!u && u.a == null && u.b == null;
+  const unionVisible = (u) => (isSibGroup(u)
+    ? childLinksOfUnion(u.id).some((l) => inView(l.child))
+    : inView(u.a) && (u.b == null || inView(u.b)));
   const visibleUnions = () => state.unions.filter(unionVisible);
   const visibleLinks = () => state.links.filter((l) => { const u = unionById(l.union); return inView(l.child) && u && unionVisible(u); });
 
@@ -1435,6 +1440,7 @@
       if (!isManual(right)) return;
       const rp = posOf(right); placeAt(childId, rp.x + COLW, rp.y);
     } else {
+      if (u.a == null) return;   // a sibling group has nobody to sit under
       if (!isManual(u.a) && !isManual(u.b)) return;
       const A = posOf(u.a), B = u.b != null ? posOf(u.b) : null;
       const x = B ? (A.x + B.x) / 2 : A.x;
@@ -1695,9 +1701,10 @@
   }
 
   function renderUnion(u) {
-    const pa = personById(u.a); if (!pa) return;
+    const sibGroup = isSibGroup(u);
+    const pa = personById(u.a); if (!pa && !sibGroup) return;
     const pb = u.b != null ? personById(u.b) : null;
-    const A = posOf(u.a), B = pb ? posOf(u.b) : null;
+    const A = sibGroup ? null : posOf(u.a), B = pb ? posOf(u.b) : null;
     const kids = childLinksOfUnion(u.id).map((l) => ({ l, p: personById(l.child) })).filter((k) => k.p && inView(k.p.id));
     const gu = el("g", { class: "union", "data-union": u.id });   // group so hover reveals the +
 
@@ -1802,6 +1809,8 @@
         gu.appendChild(couplePlus(u.id, midX, segY));
         if (!hiddenScope) gu.appendChild(hiddenPlus({ union: u.id }, midX, segY - 30));
       }
+    } else if (sibGroup) {
+      midX = midY = dropTop = null;   // no parents: filled in from the siblings themselves
     } else {
       midX = A.x; midY = A.y; dropTop = A.y + HALF; // drop from the single parent's bottom
     }
@@ -1819,11 +1828,16 @@
     const cstyle = famColor ? "stroke:" + famColor + ";stroke-width:2.8" : null;
 
     const childTops = kids.map((k) => ({ id: k.p.id, lid: k.l.id, first: k.p.first || k.p.name || "?", x: childAttachX(k.p.id, u.id, posOf(k.p.id).x), top: posOf(k.p.id).y - HALF - 8, type: k.l.type }));
+    // Siblings with no parents centre their own bar over themselves.
+    if (sibGroup) { const xs = childTops.map((c) => c.x); midX = (Math.min(...xs) + Math.max(...xs)) / 2; }
     const dropX = dropXO != null ? dropXO : midX;
     // The connector's depth hangs from the couple's ROW (not a hopped line's
     // top) — or wherever you dragged this family's line to.
-    const busBase = pb ? (A.y + B.y) / 2 : midY;
     const busAuto = 120 + (busLevels[u.id] || 0) * 15;
+    // A sibling group has no couple to hang from, so its bar sits the same
+    // distance above the siblings that a family bar sits above its children.
+    const busBase = sibGroup ? Math.min(...childTops.map((c) => c.top)) - 76 - busAuto
+      : (pb ? (A.y + B.y) / 2 : midY);
     const busOv = busMap()[u.id];
     let busY = busBase + (busOv != null ? busOv : busAuto);
     // PORTALS: a child drawn far off with their own marital family (a
@@ -1861,7 +1875,7 @@
       if (hiY > loY) busY = Math.min(Math.max(busY, loY), hiY);
     }
     if (nearTops.length) {
-      gu.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
+      if (!sibGroup) gu.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
       const minX = Math.min(dropX, ...nearTops.map((c) => c.x));
       const maxX = Math.max(dropX, ...nearTops.map((c) => c.x));
       if (nearTops.length > 1 || minX !== maxX)
@@ -1908,7 +1922,7 @@
         echoAnchors.push(r);
         ex += r.width + 160;
       });
-      if (!nearTops.length) gu.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
+      if (!nearTops.length && !sibGroup) gu.appendChild(el("line", { class: "link", x1: dropX, y1: dropTop, x2: dropX, y2: busY, style: cstyle }));
       const bmin = Math.min(dropX, ...echoAnchors.map((r) => r.anchorX)), bmax = Math.max(dropX, ...echoAnchors.map((r) => r.anchorX));
       if (bmin !== bmax) gu.appendChild(el("line", { class: "link", x1: bmin, y1: busY, x2: bmax, y2: busY, style: cstyle }));
       echoAnchors.forEach((r) => gu.appendChild(el("line", { class: "link", x1: r.anchorX, y1: busY, x2: r.anchorX, y2: r.anchorTop, style: cstyle })));
@@ -2547,8 +2561,33 @@
   }
   function relAddSibling(personId) {
     const pl = parentLinksOfPerson(personId)[0];
-    if (!pl) return toast("Add a parent first — siblings share a parent");
-    relAddChild(pl.union, personId);
+    if (pl) return relAddChild(pl.union, personId);
+    // Parents unknown: they can still be recorded as brother and sister. They go
+    // in a sibling group and get the same family bar as everyone else — lines up
+    // from each of them, joined above, with nothing over the top.
+    pickPerson("Add a sibling", "Pick an existing person, or create a new one. Their parents aren’t known, so they’ll simply be joined as siblings.", (cid) => {
+      if (cid === personId) return toast("Pick someone else");
+      pushUndo();
+      let g = sibGroupOf(personId);
+      if (!g) { g = addUnion(null, null, "siblings"); addChild(g.id, personId, "bio"); }
+      const sibId = cid || addPerson({ name: "New person", sex: "unknown" }).id;
+      if (cid) pinInPlace(sibId);   // an existing person keeps the spot they're on
+      addChild(g.id, sibId, "bio");
+      if (!cid) { placeNewChild(g, sibId); focusNewPerson(personById(sibId), "Added sibling — type their name and Save"); }
+      else { refreshRel(personId); toast("Sibling linked"); }
+    }, [personId]);
+  }
+  // Take someone back out of a sibling group (the group itself is tidied away
+  // once it has nobody left to join up).
+  function relRemoveSibling(pid, sibId) {
+    const g = sibGroupOf(pid); if (!g) return;
+    if (!state.links.some((l) => l.union === g.id && l.child === sibId)) return;
+    const other = personById(sibId);
+    if (!confirm("Remove " + (other ? other.name : "them") + " as a sibling? Both people stay in the tree.")) return;
+    pushUndo();
+    state.links = state.links.filter((l) => !(l.union === g.id && l.child === sibId));
+    refreshRel(pid);
+    toast("Sibling removed");
   }
   // Detach ONE parent (not the whole couple): if the other parent stays, the child
   // is re-pointed to a single-parent union of that other parent.
@@ -2579,16 +2618,21 @@
   // Everyone who shares at least one parent with p (full or half siblings) — robust
   // even when parents are recorded through different unions.
   function siblingsOf(pid) {
-    const mine = parentsOf(pid);
-    if (!mine.size) return [];
     const set = new Set();
-    state.persons.forEach((q) => {
-      if (q.id === pid) return;
+    // anyone hanging off the same family bar — including a sibling group, where
+    // the bar is all there is because the parents aren't known
+    const mineU = new Set(parentLinksOfPerson(pid).map((l) => l.union));
+    if (mineU.size) state.links.forEach((l) => { if (l.child !== pid && mineU.has(l.union) && personById(l.child)) set.add(l.child); });
+    const mine = parentsOf(pid);
+    if (mine.size) state.persons.forEach((q) => {
+      if (q.id === pid || set.has(q.id)) return;
       const theirs = parentsOf(q.id);
       for (const x of theirs) { if (mine.has(x)) { set.add(q.id); break; } }
     });
     return [...set];
   }
+  // The sibling group pid belongs to, if any (parents unknown).
+  const sibGroupOf = (pid) => state.unions.find((u) => isSibGroup(u) && state.links.some((l) => l.union === u.id && l.child === pid)) || null;
 
   // Clean, scannable list of a person's DIRECT relations: one row per connected
   // person — their name (click to jump to them) and exactly what they are
@@ -2663,11 +2707,15 @@
       });
     }
 
-    // ---- Siblings ---- (derived; read-only)
+    // ---- Siblings ---- (derived from shared parents, so read-only — except
+    // the ones joined by hand in a sibling group, which can be undone here)
     const sibs = siblingsOf(pid);
     if (sibs.length) {
       groupTitle("Siblings");
-      sibs.forEach((sid) => rowFor(sid, kindText(nounSibling(personById(sid).sex)), null));
+      const g = sibGroupOf(pid);
+      const inGroup = new Set(g ? state.links.filter((l) => l.union === g.id).map((l) => l.child) : []);
+      sibs.forEach((sid) => rowFor(sid, kindText(nounSibling(personById(sid).sex)),
+        inGroup.has(sid) ? removeBtn(() => relRemoveSibling(pid, sid)) : null));
     }
 
     // ---- Partners ----
@@ -5204,7 +5252,15 @@
     const childCount = {};
     state.links.forEach((l) => (childCount[l.union] = (childCount[l.union] || 0) + 1));
     const before = state.unions.length;
-    state.unions = state.unions.filter((u) => !(u.b == null && !childCount[u.id]));
+    const dropped = new Set();
+    state.unions = state.unions.filter((u) => {
+      const keep = isSibGroup(u)
+        ? (childCount[u.id] || 0) >= 2          // a sibling group needs siblings to join
+        : !(u.b == null && !childCount[u.id]);
+      if (!keep && isSibGroup(u)) dropped.add(u.id);
+      return keep;
+    });
+    if (dropped.size) state.links = state.links.filter((l) => !dropped.has(l.union));
     if (state.unions.length !== before) changed = true;
 
     return changed;
