@@ -221,6 +221,41 @@ button.btn.danger { color: var(--divorce); }
   border-radius: 12px; padding: 10px; box-shadow: var(--shadow);
   display: flex; flex-direction: column; max-height: calc(100vh - 80px);
 }
+/* Settings: the app-and-tree drawer, opened from the ☰ menu. Same shell as the
+   people menu, wider, because it holds the passwords and backup controls. */
+#settingsMenu {
+  top: 60px; left: 14px; width: 380px; max-width: calc(100vw - 28px);
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: 12px; padding: 10px 12px; box-shadow: var(--shadow);
+  display: flex; flex-direction: column; max-height: calc(100vh - 80px); z-index: 44;
+}
+#settingsMenu .pm-head { display:flex; align-items:center; justify-content:space-between; margin-bottom: 4px; }
+#settingsMenu .pm-head h3 { margin:0; font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
+#settingsMenu .pm-x { border:none; background:transparent; cursor:pointer; color:var(--muted); font-size:14px; padding:2px 6px; line-height:1; }
+#settingsMenu .pm-x:hover { color:var(--ink); }
+#settingsMenu .settings-body { overflow-y:auto; min-height:0; }
+#settingsMenu .section { border:none; padding:0 0 6px; }
+#settingsMenu .section h2 { margin-top: 10px; }
+
+/* the panel's person header: picture, name, dates, age */
+.panel-person-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.panel-person-head h2 { margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pv-row { display:flex; gap:12px; align-items:center; margin:10px 0 12px; }
+.pv-photo { width:76px; height:76px; flex:none; overflow:hidden; position:relative; display:flex; align-items:center; justify-content:center;
+  font-size:34px; background:var(--paper); border:2px solid var(--panel-border); border-radius:12px; }
+.pv-photo.f { border-radius:50%; }
+.pv-photo img { width:100%; height:100%; object-fit:cover; }
+.pv-photo.deceased { opacity:.75; }
+.pv-photo.tappable { cursor:pointer; }
+.pv-photo.tappable:hover { border-color: var(--accent-2); }
+.pv-text { min-width:0; }
+.pv-name { font-size:16px; font-weight:700; line-height:1.2; }
+.pv-dates { font-size:13px; color:var(--muted); margin-top:3px; }
+.pv-age { font-size:13px; margin-top:2px; }
+.pv-sub { font-size:12.5px; color:var(--muted); margin-top:2px; }
+#personView #notesSection { margin-top: 0; }
+#personView #pvPhotos { margin:4px 0 12px; }
+
 #peopleMenu .pm-head { display:flex; align-items:center; justify-content:space-between; margin-bottom: 8px; }
 #peopleMenu .pm-head h3 { margin:0; font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
 #peopleMenu .pm-x { border:none; background:transparent; cursor:pointer; color:var(--muted); font-size:14px; padding:2px 6px; line-height:1; }
@@ -314,7 +349,8 @@ button.btn.danger { color: var(--divorce); }
 }
 .toast.show { opacity: 1; }
 
-.readonly #panel .editor-only { display: none; }
+.readonly #panel .editor-only, .readonly #settingsMenu .editor-only { display: none; }
+.readonly #pmSettings, .readonly #settingsMenu { display: none; }
 
 /* family colour picker */
 .color-row { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 12px; }

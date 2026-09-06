@@ -2403,8 +2403,63 @@
   function selectPerson(id) {
     selectedId = id;
     const p = personById(id);
-    if (p && !readonly) fillPersonForm(p);
+    if (p && !readonly) { fillPersonForm(p); showPersonView(p); }
     render();
+  }
+  // The panel has two faces for the same person: their profile, and the form
+  // that edits it. Everything that isn't a form field — their notes, photos,
+  // relationships and records — sits below both, so it's there either way.
+  let panelEditing = false;
+  function showPersonView(p) {
+    panelEditing = false;
+    const view = $("#personView"), form = $("#personForm"), pencil = $("#personEditBtn");
+    if (!view || !form) return;
+    renderPersonHead(p);
+    view.hidden = false; form.hidden = true;
+    if (pencil) pencil.hidden = false;
+    const t = $("#personTitle"); if (t) t.textContent = p.name || "Unnamed";
+  }
+  function showPersonForm(p) {
+    panelEditing = true;
+    const view = $("#personView"), form = $("#personForm"), pencil = $("#personEditBtn");
+    if (!view || !form) return;
+    const head = $("#pvHead"); if (head) head.hidden = true;   // the form has these fields itself
+    view.hidden = !p;            // with nobody selected there's nothing to show below
+    form.hidden = false;
+    if (pencil) pencil.hidden = true;
+    const t = $("#personTitle"); if (t) t.textContent = p ? ("Editing " + (p.first || p.name || "them")) : "Add a person";
+  }
+  // Their picture, name, dates and age — the things worth seeing first.
+  function renderPersonHead(p) {
+    const host = $("#pvHead"); if (!host) return;
+    host.hidden = false;
+    host.textContent = "";
+    const row = document.createElement("div"); row.className = "pv-row";
+    const av = document.createElement("div"); av.className = "pv-photo " + (p.sex === "female" ? "f" : p.sex === "male" ? "m" : "u");
+    const ph = photoOf(p);
+    const placeholder = () => { const q = document.createElement("span"); q.textContent = "👤"; av.appendChild(q); return q; };
+    if (ph) { const im = document.createElement("img"); im.src = ph; av.appendChild(im); }
+    else if (p.photoRef) { const q = placeholder(); mediaGet(p.photoRef).then((u) => { if (u && av.isConnected) { q.remove(); const im = document.createElement("img"); im.src = u; av.insertBefore(im, av.firstChild); } }).catch(() => {}); }
+    else placeholder();
+    if (isDeceased(p)) av.classList.add("deceased");
+    if (!readonly && isOwner()) {
+      av.classList.add("tappable"); av.title = "Change their picture";
+      const cam = document.createElement("span"); cam.className = "pcard-photo-cam"; cam.textContent = "📷"; av.appendChild(cam);
+      av.onclick = () => openPhotoMenu(p, () => { const cur = personById(p.id); if (cur) { renderPersonHead(cur); renderGalleryPanel(cur); } });
+    }
+    row.appendChild(av);
+    const txt2 = document.createElement("div"); txt2.className = "pv-text";
+    const nm = document.createElement("div"); nm.className = "pv-name"; nm.textContent = p.name || "Unnamed"; txt2.appendChild(nm);
+    const dl = personDatesLine(p);
+    if (dl) { const d = document.createElement("div"); d.className = "pv-dates"; d.textContent = dl; txt2.appendChild(d); }
+    { const a = ageLabel(p); if (a) { const d = document.createElement("div"); d.className = "pv-age"; d.textContent = (isDeceased(p) ? "Age at death " : "Age ") + a; txt2.appendChild(d); } }
+    if (isDeceased(p) && p.causeOfDeath) { const d = document.createElement("div"); d.className = "pv-sub"; d.textContent = p.causeOfDeath; txt2.appendChild(d); }
+    if (servedInMilitary(p)) { const d = document.createElement("div"); d.className = "pv-sub"; d.textContent = "★ " + (militaryLine(p) || "Served in the military"); txt2.appendChild(d); }
+    row.appendChild(txt2);
+    host.appendChild(row);
+  }
+  function renderGalleryPanel(p) {
+    const host = $("#galleryStrip"); if (host) renderGallery(host, p, () => { const cur = personById($("#personId").value); if (cur) { renderGalleryPanel(cur); renderPersonHead(cur); } });
   }
   function fillPersonForm(p) {
     $("#personId").value = p.id;
@@ -2417,7 +2472,7 @@
     $("#pMaiden").value = np.maiden || "";
     $("#pSuffix").value = np.suffix || "";
     renderNotesPanel(p);
-    { const host = $("#galleryStrip"); if (host) renderGallery(host, p, () => { const cur = personById($("#personId").value); if (cur) fillPersonForm(cur); }); }
+    renderGalleryPanel(p);
     { const box = $("#galleryBox"); if (box) box.hidden = readonly; }
     $("#pName").value = p.name || "";
     $("#pBirth").value = p.birth == null ? "" : p.birth;
@@ -2461,6 +2516,7 @@
     $("#causeField").hidden = true;
     $("#militaryFields").hidden = true;
     photoDirty = false; photoReplaced = false;
+    showPersonForm(null);
     syncAgeLine(null);
     setSex("male");
     pendingPhoto = null; updatePhotoPreview();
@@ -2933,7 +2989,9 @@
     } else {
       const p = addPerson(data); selectedId = p.id;
     }
+    const saved = personById(selectedId);
     resetPersonForm();
+    if (saved) { fillPersonForm(saved); showPersonView(saved); }   // back to their profile
     relayoutAndSave();
     toast("Saved");
   });
@@ -2972,7 +3030,11 @@
         if (n) { fillPersonForm(p); toast(n === 1 ? "Photo added" : n + " photos added"); }
       };
     } }
-  $("#personCancel").onclick = resetPersonForm;
+  $("#personCancel").onclick = () => {
+    const p = personById($("#personId").value);
+    resetPersonForm();
+    if (p) { fillPersonForm(p); showPersonView(p); }
+  };
   $("#personDelete").onclick = () => {
     const id = $("#personId").value; if (!id) return;
     if (confirm("Delete this person and their connections?")) {
@@ -5680,6 +5742,14 @@
     const vis = (show === undefined) ? m.hidden : show;
     m.hidden = !vis; $("#tbMenu").classList.toggle("active", vis);
     if (vis) { updatePeopleList(); const f = $("#peopleFilter"); if (f) setTimeout(() => f.focus(), 0); }
+  }
+  { const b = $("#personEditBtn"); if (b) b.onclick = () => { const p = personById($("#personId").value); if (p) showPersonForm(p); }; }
+  { const b = $("#pmSettings"); if (b) b.onclick = () => { togglePeopleMenu(false); toggleSettings(true); }; }
+  { const b = $("#settingsClose"); if (b) b.onclick = () => toggleSettings(false); }
+  function toggleSettings(show) {
+    const m = $("#settingsMenu"); if (!m) return;
+    const vis = (show === undefined) ? m.hidden : show;
+    m.hidden = !vis;
   }
   $("#tbMenu").onclick = () => togglePeopleMenu();
   $("#pmClose").onclick = () => togglePeopleMenu(false);
