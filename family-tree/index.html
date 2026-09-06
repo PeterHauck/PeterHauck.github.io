@@ -180,10 +180,10 @@
                 <svg viewBox="-20 -20 40 40"><polygon points="0,-17 17,0 0,17 -17,0"/></svg>Unknown</button>
             </div>
             <div style="margin:12px 0">
-              <div class="photo-drop" id="photoDrop">Click to upload a photo<br/><span class="hint">(cropped to the person's shape)</span>
+              <div class="photo-drop" id="photoDrop">Click to upload a photo or PDF<br/><span class="hint">(cropped to the person's shape)</span>
                 <img class="photo-preview" id="photoPreview" hidden />
               </div>
-              <input type="file" id="photoInput" accept="image/*,.heic,.heif" hidden />
+              <input type="file" id="photoInput" accept="image/*,.heic,.heif,application/pdf,.pdf" hidden />
               <div style="display:flex;gap:6px;margin-top:6px">
                 <input type="text" id="photoUrl" placeholder="…or paste an image link" style="flex:1;min-width:0" />
                 <button type="button" class="btn" id="photoUrlBtn">Fetch</button>
@@ -195,7 +195,7 @@
               <div id="galleryBox" style="margin-top:10px">
                 <label class="field"><span>More photos</span></label>
                 <div id="galleryStrip"></div>
-                <input type="file" id="galleryInput" accept="image/*,.heic,.heif" multiple hidden />
+                <input type="file" id="galleryInput" accept="image/*,.heic,.heif,application/pdf,.pdf" multiple hidden />
                 <button type="button" class="btn" id="galleryAddBtn">🖼 Add photos</button>
                 <p class="hint" style="margin-top:4px">★ makes one the tree picture · ✕ removes it · tap to enlarge</p>
               </div>
