@@ -4479,6 +4479,22 @@
       b.textContent = label; b.onclick = fn; m.appendChild(b); return b;
     };
     const has = hasTreePic(p), gal = galleryOf(p);
+    // Paste a link and go — this is how most pictures arrive, so it's the first
+    // thing here rather than something behind another button.
+    const linkRow = document.createElement("div"); linkRow.className = "pm-linkrow";
+    const linkIn = document.createElement("input"); linkIn.type = "text"; linkIn.id = "pmPhotoUrl";
+    linkIn.placeholder = "Paste a photo link…"; linkIn.autocomplete = "off"; linkIn.spellcheck = false;
+    const linkGo = document.createElement("button"); linkGo.type = "button"; linkGo.className = "btn primary"; linkGo.textContent = "Fetch";
+    const runLink = () => {
+      const url = (linkIn.value || "").trim();
+      if (!url) { toast("Paste a link first"); linkIn.focus(); return; }
+      close();
+      fetchPhotoFromLink(p, url, onChange);
+    };
+    linkGo.onclick = runLink;
+    linkIn.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); runLink(); } });
+    linkRow.appendChild(linkIn); linkRow.appendChild(linkGo);
+    m.appendChild(linkRow);
     if (has) opt("🔍 Reposition this picture", async () => {
       close();
       const src = await photoSourceFor(p);
@@ -4486,7 +4502,6 @@
       openPhotoAdjust(src, async (sq) => { await setTreePicture(p, sq, null, p.photoSrcRef || null, false); after("Picture repositioned"); });
     });
     if (gal.length) opt("🖼 Choose from their photos", () => { close(); openGalleryPick(p, onChange); });
-    opt("🔗 Use a photo from a link", () => { close(); openPhotoLink(p, onChange); });
     const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*,.heic,.heif,application/pdf,.pdf"; fileInput.style.display = "none";
     fileInput.onchange = async () => {
       const file = fileInput.files[0]; if (!file) return;
@@ -4508,34 +4523,27 @@
     cancel.onclick = close; row.appendChild(cancel); m.appendChild(row);
     back.appendChild(m); document.body.appendChild(back);
     back.addEventListener("click", (e) => { if (e.target === back) close(); });
+    if (!has) setTimeout(() => { try { linkIn.focus(); } catch (e) {} }, 0);
     return back;
   }
   // A photo from a link — the fetch runs on the site, so it works on pictures
   // the browser itself couldn't read. Ends in the same crop editor as every
   // other route, and the picture it replaces is kept in their gallery.
-  function openPhotoLink(p, onChange) {
-    return openModal("Photo from a link", "Paste a link to a photo — or to a page with a portrait on it.",
-      `<label class="field"><span>Link</span><input type="text" id="plUrl" placeholder="https://…" autocomplete="off" spellcheck="false" /></label>`,
-      (m) => {
-        const url = (m.querySelector("#plUrl").value || "").trim();
-        if (!url) { toast("Paste a link first"); return false; }
-        (async () => {
-          let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
-          if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
-          if (!pass) return;
-          try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
-          toast("Fetching the photo…");
-          try {
-            const data = await callArchive({ passcode: pass, url });
-            if (!data || !data.image) return toast("No image found at that link");
-            openPhotoAdjust(data.image, async (sq) => {
-              const kept = await setTreePicture(p, sq, data.image, null, true);
-              toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated");
-              if (onChange) onChange();
-            });
-          } catch (e) { toast(e.message || "Couldn’t fetch that image"); }
-        })();
-      }, "Fetch");
+  async function fetchPhotoFromLink(p, url, onChange) {
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
+    if (!pass) return;
+    try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
+    toast("Fetching the photo…");
+    try {
+      const data = await callArchive({ passcode: pass, url });
+      if (!data || !data.image) return toast("No picture found at that link — try the link to the image itself");
+      openPhotoAdjust(data.image, async (sq) => {
+        const kept = await setTreePicture(p, sq, data.image, null, true);
+        toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated");
+        if (onChange) onChange();
+      });
+    } catch (e) { toast(e.message || "Couldn’t fetch that picture"); }
   }
   // Pick one of their gallery photos to become the tree picture, then crop it.
   function openGalleryPick(p, onChange) {
@@ -5052,6 +5060,12 @@
     } catch (e) {}
     setCloudStatus("saving");
     try {
+      // What this save is built on. The server refuses it if the stored copy has
+      // moved on since, so nothing can be quietly replaced.
+      // Only ever set when this device actually took the cloud's copy (or its own
+      // save was accepted) — never from merely asking what version is up there,
+      // which is how a device could claim to be current while holding old data.
+      let base = null; try { base = +(localStorage.getItem("familyTree.baseVersion") || 0) || null; } catch (e) {}
       const payload = await encryptState(fam);
       // Vercel caps a request body at ~4.5MB. Small trees go in one POST; larger
       // ones (lots of photos) are streamed up in parts and stitched server-side,
@@ -5059,6 +5073,12 @@
       const CHUNK = 3_500_000;
       const post = async (b) => {
         const res = await fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ passcode: pass }, b)) });
+        if (res.status === 409) {
+          // The site's copy moved on since this device last took one. Not a
+          // failure — the two get merged and the save goes again.
+          let cur = 0; try { cur = +(await res.json()).savedAt || 0; } catch (e) {}
+          const err = new Error("moved on"); err.conflict = true; err.savedAt = cur; throw err;
+        }
         if (!res.ok) { let msg = "failed (" + res.status + ")"; try { msg = (await res.json()).error || msg; } catch (e) {} if (res.status === 404) msg = "needs the Vercel site + a Blob store"; throw new Error(msg); }
         return res;
       };
@@ -5067,7 +5087,7 @@
       let check = ""; try { check = await encryptText(fam, "familytree-pass-ok"); } catch (e) {}
       let done;
       if (payload.length <= CHUNK) {
-        done = await post({ action: "saveTree", payload, check });
+        done = await post({ action: "saveTree", payload, check, base });
       } else {
         // Each upload gets a unique id: its chunks live in their own write-once
         // folder on the server, so chunks from different saves can never mix.
@@ -5080,7 +5100,7 @@
           try { const pj = await pr.json(); if (pj && pj.sha) shas[i] = pj.sha; } catch (e) {}
           setCloudStatus("saving");
         }
-        done = await post({ action: "commitTree", uploadId, total, shas, length: payload.length, check });
+        done = await post({ action: "commitTree", uploadId, total, shas, length: payload.length, check, base });
       }
       // Every save is length-verified: the server echoes exactly how many bytes
       // it stored — a mismatch is treated as a failed save, never trusted.
@@ -5089,6 +5109,7 @@
       // Record the cloud's write time so this device knows it's in sync and won't
       // pull its own save back on the next load.
       try { if (j && j.savedAt) localStorage.setItem("familyTree.cloudSavedAt", String(j.savedAt)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
+      if (j && j.savedAt) setBaseVersion(j.savedAt);
       cloudRetries = 0;
       try { await publishViews(); } catch (e) {}   // published views track the master on every save
       // Keep the shared viewer password working: wrap the family password under it
@@ -5110,6 +5131,26 @@
       setCloudStatus("saved");
       if (manual) toast("Saved & verified ✓ — other devices can open this copy");
     } catch (e) {
+      // The site's copy moved on while this device was working. Rather than one
+      // side losing, the two are merged — nothing either of them has is dropped
+      // — and the save goes again from the version we just read.
+      if (e && e.conflict && !cloudMerging) {
+        cloudMerging = true;
+        try {
+          const cp = await fetchCloudPayload();
+          const r = cp && cp.payload ? await decryptWithKnown(cp.payload) : null;
+          if (r) {
+            const sum = mergeTreeFrom(r.obj);
+            try { localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || e.savedAt || 0)); } catch (e2) {}
+            setBaseVersion(cp.savedAt || e.savedAt || 0);
+            save(); autoLayout(); render();
+            if (sum && sum.total) toast("Merged with a newer copy from another device — kept " + mergeSummary(sum));
+            await cloudSaveTree(manual);
+            return;
+          }
+        } catch (e2) {} finally { cloudMerging = false; }
+      }
+      if (e && e.conflict) { setCloudStatus("error", "another device saved at the same moment — trying again"); if (!manual) setTimeout(() => cloudSaveTree(false), 4000); return; }
       setCloudStatus("error", e.message);
       // Surface the failure even for automatic saves — a silent push failure is
       // exactly what leaves other devices (your phone) stuck on an old copy.
@@ -5119,7 +5160,12 @@
       if (!manual && cloudRetries < 5) { cloudRetries++; setTimeout(() => cloudSaveTree(false), 15000); }
     }
   }
-  let lastCloudErrToast = 0, cloudRetries = 0;
+  let lastCloudErrToast = 0, cloudRetries = 0, cloudMerging = false;
+  // The version whose CONTENT this device is holding. Set only where the cloud's
+  // copy was actually adopted, or where our own save was accepted — never from
+  // simply asking what version is up there. That's what makes it safe to say
+  // "this save is built on X" and have the server hold us to it.
+  const setBaseVersion = (v) => { try { if (v) localStorage.setItem("familyTree.baseVersion", String(v)); } catch (e) {} };
   // Owner: pull the latest encrypted tree from the cloud and load it into the editor.
   async function cloudLoadTree() {
     let res; try { res = await fetch("api/store?action=getTree"); } catch (e) { toast("Couldn’t reach your site"); return false; }
@@ -5139,6 +5185,7 @@
     try {
       const obj = await decryptState(fam, payload);
       try { localStorage.setItem("familyTree.familyPass", fam); localStorage.setItem("familyTree.cloudOn", "1"); if (savedAt) localStorage.setItem("familyTree.cloudSavedAt", String(savedAt)); } catch (e) {}
+      setBaseVersion(savedAt);
       loadObject(obj); relayoutAndSave(); fitView();
       toast("Loaded your latest tree from your site");
       return true;
@@ -5237,6 +5284,7 @@
     }
     loadObject(r.obj);
     try { localStorage.setItem("familyTree.familyPass", r.pw); localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || 0)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
+    setBaseVersion(cp.savedAt || 0);
     // Persist what we pulled — without this, ⟳ showed fresh data but the next
     // visit regressed to the old local copy.
     try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}
@@ -5274,6 +5322,7 @@
       if (!r) return false;                            // stored password doesn't open it → fall back to local
       loadObject(r.obj);
       try { localStorage.setItem("familyTree.cloudSavedAt", String(savedAt)); } catch (e) {}
+      setBaseVersion(savedAt);
       try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}   // refresh the local cache (no re-upload)
       return true;
     }
@@ -5301,6 +5350,7 @@
       if (!r) return;
       loadObject(r.obj);
       try { localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || info.savedAt)); } catch (e) {}
+      setBaseVersion(cp.savedAt || info.savedAt);
       try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}   // persist so it survives the next visit
       autoLayout(); render();
       toast("Updated to the latest");
@@ -5437,6 +5487,66 @@
     });
     return n;
   }
+  // Fold another copy of the tree into this one, keeping everything either side
+  // has. Used when a save is refused because the copy on the site moved on: the
+  // two are merged and the save is tried again, so no device can wipe another's
+  // work by holding an older copy.
+  //
+  // The rule throughout is ADD, never remove. People, families and links are
+  // unioned; a person present in both keeps our values but is filled in from
+  // theirs wherever we have a blank; anything hidden, locked or repeated on
+  // either side stays that way; arrangements are ours, with theirs filling gaps.
+  // The cost is that a deletion made here can come back if another device still
+  // has that person — recoverable in a click, unlike losing them.
+  function mergeTreeFrom(other) {
+    if (!other || !Array.isArray(other.persons)) return null;
+    const sum = { people: 0, unions: 0, links: 0, hidden: 0, fields: 0, views: 0, keepsakes: 0 };
+    const mine = {}; state.persons.forEach((p) => (mine[p.id] = p));
+    // people: everyone they have that we don't
+    other.persons.forEach((o) => {
+      if (!o || !o.id) return;
+      const p = mine[o.id];
+      if (!p) { state.persons.push(JSON.parse(JSON.stringify(o))); mine[o.id] = o; sum.people++; return; }
+      // shared person: fill in anything we're missing, never overwrite
+      const blank = (v) => v === undefined || v === null || v === "";
+      Object.keys(o).forEach((k) => {
+        if (k === "id" || k === "gallery" || k === "docs") return;
+        if (blank(p[k]) && !blank(o[k])) { p[k] = o[k]; sum.fields++; }
+      });
+    });
+    // …and their keepsakes (pictures, extra photos, records) as before
+    sum.keepsakes = mergeKeepsakes(other) || 0;
+    // families and the links between them
+    const haveU = new Set(state.unions.map((u) => u.id));
+    (other.unions || []).forEach((u) => { if (u && u.id && !haveU.has(u.id)) { state.unions.push(u); haveU.add(u.id); sum.unions++; } });
+    const lkey = (l) => l.union + ">" + l.child;
+    const haveL = new Set(state.links.map(lkey));
+    (other.links || []).forEach((l) => { if (l && l.union && !haveL.has(lkey(l))) { state.links.push(l); haveL.add(lkey(l)); sum.links++; } });
+    // things switched ON stay on, whichever copy switched them
+    const flags = (name) => {
+      const ours = state[name] || (state[name] = {}), theirs = other[name] || {};
+      Object.keys(theirs).forEach((k) => { if (theirs[k] && !(k in ours)) { ours[k] = theirs[k]; if (name === "hidden") sum.hidden++; } });
+    };
+    ["hidden", "locked", "portals", "manualHidden"].forEach(flags);
+    // where people sit: ours wins, theirs fills the gaps
+    ["manual", "echoPos", "busOff"].forEach((name) => {
+      const ours = state[name] || (state[name] = {}), theirs = other[name] || {};
+      Object.keys(theirs).forEach((k) => { if (!(k in ours)) ours[k] = theirs[k]; });
+    });
+    // any view only they have
+    const haveV = new Set((state.views || []).map((v) => v.id));
+    (other.views || []).forEach((v) => { if (v && v.id && !haveV.has(v.id)) { (state.views || (state.views = [])).push(v); haveV.add(v.id); sum.views++; } });
+    if (!state.groups || !state.groups.length) state.groups = other.groups || state.groups;
+    sum.total = sum.people + sum.unions + sum.links + sum.hidden + sum.fields + sum.views + sum.keepsakes;
+    return sum;
+  }
+  const mergeSummary = (sum) => [
+    sum.people && sum.people + (sum.people === 1 ? " person" : " people"),
+    sum.fields && sum.fields + " details",
+    sum.hidden && sum.hidden + " hidden",
+    sum.keepsakes && sum.keepsakes + " photos/records",
+    sum.views && sum.views + (sum.views === 1 ? " view" : " views"),
+  ].filter(Boolean).join(", ");
   function hasLocalData() { return !!(localData && localData.persons && localData.persons.length); }
   function loadLocal() { if (localData) loadObject(localData); }
   // When a newer starter replaces the saved copy, keep everything the user made
@@ -6608,6 +6718,7 @@
           if (r) {
             loadObject(r.obj);
             try { localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || info.savedAt)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
+            setBaseVersion(cp.savedAt || info.savedAt);
             try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}
             autoLayout(); render();
             toast("Synced to the latest from your site");
