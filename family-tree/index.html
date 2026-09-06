@@ -154,6 +154,18 @@
               <span style="margin:0">Deceased (if the year is unknown)</span>
             </label>
             <label class="field" id="causeField" hidden><span>Cause of death (optional)</span><input type="text" id="pCause" placeholder="e.g. heart failure" /></label>
+            <div class="age-line" id="ageLine" hidden></div>
+            <label class="field" style="display:flex;align-items:center;gap:8px;margin:-2px 0 10px">
+              <input type="checkbox" id="pMilitary" style="width:auto" />
+              <span style="margin:0">Served in the military</span>
+            </label>
+            <div id="militaryFields" hidden>
+              <div class="row2">
+                <label class="field"><span>Branch</span><input type="text" id="pMilBranch" placeholder="e.g. U.S. Army" /></label>
+                <label class="field"><span>Rank</span><input type="text" id="pMilRank" placeholder="e.g. Sergeant" /></label>
+              </div>
+              <label class="field"><span>Service notes (optional)</span><textarea id="pMilNotes" rows="2" placeholder="Where and when they served, units, medals…"></textarea></label>
+            </div>
             <label class="field"><span>Family colour</span></label>
             <div class="color-row" id="colorRow">
               <button type="button" class="swatch none" data-color="" title="No colour">✕</button>

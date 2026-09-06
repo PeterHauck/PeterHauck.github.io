@@ -1196,6 +1196,16 @@
       g.appendChild(badge);
     }
 
+    // served: a small star, bottom-right of their shape (records sit top-right,
+    // the lock top-left, the jump badge bottom-left)
+    if (servedInMilitary(p)) {
+      const mb = el("g", { class: "mil-badge", transform: `translate(${HALF - 5},${HALF - 5})` });
+      mb.appendChild(el("circle", { class: "mil-badge-bg", r: 9, cx: 0, cy: 0 }));
+      mb.appendChild(el("path", { class: "mil-badge-mark", d: "M0 -5.6 L1.6 -1.8 L5.6 -1.8 L2.4 0.7 L3.6 4.6 L0 2.2 L-3.6 4.6 L-2.4 0.7 L-5.6 -1.8 L-1.6 -1.8 Z" }));
+      const who = militaryLine(p);
+      mb.appendChild(el("title", null, txt(who ? "Served — " + who : "Served in the military")));
+      g.appendChild(mb);
+    }
     if (isLocked(nk)) {
       const lk = el("text", { class: "lock-badge", x: -HALF + 2, y: -HALF + 12 }, txt("🔒"));
       lk.appendChild(el("title", null, txt("Locked in place")));
@@ -1351,8 +1361,35 @@
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     return months[+m[2] - 1] + " " + (+m[3]) + ", " + m[1];
   }
+  // How old they are — at death for someone who has passed, today for everyone
+  // else. Exact dates give an exact answer; years alone give the difference in
+  // years, which is right to within a birthday. Null when it can't be known
+  // (no birth, or gone with no date to stop the clock at).
+  function ageOf(p) {
+    if (!p) return null;
+    const at = (exact, year) => {
+      if (exact && /^\d{4}-\d{2}-\d{2}$/.test(exact)) return { y: +exact.slice(0, 4), m: +exact.slice(5, 7), d: +exact.slice(8, 10) };
+      if (year != null && Number.isFinite(+year)) return { y: +year, m: null, d: null };
+      return null;
+    };
+    const b = at(p.birthDate, p.birth); if (!b) return null;
+    let e;
+    if (isDeceased(p)) { e = at(p.deathDate, p.death); if (!e) return null; }
+    else { const n = new Date(); e = { y: n.getFullYear(), m: n.getMonth() + 1, d: n.getDate() }; }
+    let a = e.y - b.y;
+    if (b.m != null && e.m != null && (e.m < b.m || (e.m === b.m && e.d < b.d))) a--;   // birthday not yet reached
+    return a < 0 || a > 130 ? null : a;
+  }
+  // Military service lives in p.military: its presence IS the "they served" flag,
+  // and it carries the branch, rank and notes.
+  const servedInMilitary = (p) => !!(p && p.military);
+  const militaryLine = (p) => {
+    const m = (p && p.military) || null; if (!m) return "";
+    return [m.branch, m.rank].filter(Boolean).join(" · ");
+  };
   function dateStr(p) {
-    if (p.birth != null && p.death != null) return p.birth + "–" + p.death;
+    // Both ends known: the tree carries how old they were when they died.
+    if (p.birth != null && p.death != null) { const a = ageOf(p); return p.birth + "–" + p.death + (a != null ? " (" + a + ")" : ""); }
     if (p.birth != null) return "b. " + p.birth + (isDeceased(p) ? " · d." : "");
     if (p.death != null) return "d. " + p.death;
     if (p.deceased) return "deceased";
@@ -2374,6 +2411,13 @@
     // imported day/month dates are visible without hunting for the toggle.
     const exd = document.querySelector(".exact-dates"); if (exd) exd.open = !!(p.birthDate || p.deathDate);
     $("#pDeceased").checked = isDeceased(p);
+    { const m = p.military || null;
+      $("#pMilitary").checked = !!m;
+      $("#pMilBranch").value = (m && m.branch) || "";
+      $("#pMilRank").value = (m && m.rank) || "";
+      $("#pMilNotes").value = (m && m.notes) || "";
+      $("#militaryFields").hidden = !m; }
+    syncAgeLine(p);
     setSex(p.sex);
     setColor(p.color || "");
     photoDirty = false;
@@ -2396,6 +2440,8 @@
     $("#personId").value = "";
     $("#personForm").reset();
     $("#causeField").hidden = true;
+    $("#militaryFields").hidden = true;
+    syncAgeLine(null);
     setSex("male");
     pendingPhoto = null; updatePhotoPreview();
     setColor("");
@@ -2852,6 +2898,9 @@
       Object.assign(p, { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate, deathDate: data.deathDate, deceased: data.deceased, sex: data.sex, color: data.color || null });
       const cause = $("#pCause").value.trim();
       if (cause) p.causeOfDeath = cause; else delete p.causeOfDeath;
+      if ($("#pMilitary").checked) {
+        p.military = { branch: $("#pMilBranch").value.trim(), rank: $("#pMilRank").value.trim(), notes: $("#pMilNotes").value.trim() };
+      } else delete p.military;
       // The photo only changes when the user actually changed it — an
       // externalised photo that hadn't finished loading is never wiped.
       if (photoDirty) {
@@ -2871,6 +2920,25 @@
   $("#pDeathDate").addEventListener("change", () => { const v = $("#pDeathDate").value; if (v) { $("#pDeath").value = v.slice(0, 4); $("#pDeceased").checked = true; } syncCauseVis(); });
   // The cause-of-death box shows only once the form says they've passed away.
   function syncCauseVis() { $("#causeField").hidden = !($("#pDeceased").checked || $("#pDeath").value || $("#pDeathDate").value); }
+  // Their age, from whatever the boxes say right now — at death once they've
+  // passed away, today's age while they're living.
+  function syncAgeLine(p) {
+    const el2 = $("#ageLine"); if (!el2) return;
+    const src = p || {
+      birth: $("#pBirth").value ? parseInt($("#pBirth").value, 10) : null,
+      death: $("#pDeath").value ? parseInt($("#pDeath").value, 10) : null,
+      birthDate: $("#pBirthDate").value || null,
+      deathDate: $("#pDeathDate").value || null,
+      deceased: $("#pDeceased").checked,
+    };
+    const a = ageOf(src);
+    el2.hidden = a == null;
+    el2.textContent = a == null ? "" : (isDeceased(src) ? "Age at death: " + a : "Age: " + a);
+  }
+  ["#pBirth", "#pDeath", "#pBirthDate", "#pDeathDate", "#pDeceased"].forEach((sel) => {
+    const n = $(sel); if (n) { n.addEventListener("input", () => syncAgeLine(null)); n.addEventListener("change", () => syncAgeLine(null)); }
+  });
+  { const c = $("#pMilitary"); if (c) c.addEventListener("change", () => { $("#militaryFields").hidden = !c.checked; }); }
   $("#pDeceased").addEventListener("change", syncCauseVis);
   $("#pDeath").addEventListener("input", syncCauseVis);
   { const b = $("#galleryAddBtn"), inp = $("#galleryInput");
@@ -4422,6 +4490,11 @@
     const hbox = document.createElement("div"); hbox.className = "pcard-headtext";
     const h = document.createElement("h2"); h.textContent = p.name || "Unnamed"; hbox.appendChild(h);
     const dline = personDatesLine(p); if (dline) { const d = document.createElement("div"); d.className = "pcard-dates"; d.textContent = dline; hbox.appendChild(d); }
+    if (servedInMilitary(p)) {
+      const m = document.createElement("div"); m.className = "pcard-dates mil-line";
+      m.textContent = "★ " + (militaryLine(p) || "Served in the military");
+      hbox.appendChild(m);
+    }
     head.appendChild(hbox);
     const x = document.createElement("button"); x.className = "pcard-x"; x.setAttribute("aria-label", "Close"); x.textContent = "✕"; x.onclick = closeProfileCard; head.appendChild(x);
     card.appendChild(head);
@@ -4469,7 +4542,13 @@
       const fmt = (exact, year) => exact ? new Date(exact + "T12:00:00").toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : (year != null ? String(year) : "—");
       line("Born", fmt(p.birthDate, p.birth));
       line(isDeceased(p) ? "Died" : "Status", isDeceased(p) ? fmt(p.deathDate, p.death) : "Living");
+      { const a = ageOf(p); if (a != null) line(isDeceased(p) ? "Age at death" : "Age", String(a)); }
       if (isDeceased(p) && p.causeOfDeath) line("Cause of death", p.causeOfDeath);
+      if (servedInMilitary(p)) {
+        const m = p.military;
+        line("Military service", militaryLine(p) || "Served");
+        if (m.notes) line("Service notes", m.notes);
+      }
       s.appendChild(view);
       const bar = document.createElement("div"); bar.className = "pcard-notes-bar";
       const editBtn = document.createElement("button"); editBtn.className = "btn small"; editBtn.textContent = "✏️ Edit name & details";
@@ -4503,6 +4582,18 @@
         causeW.appendChild(causeT); causeW.appendChild(causeI); f.appendChild(causeW);
         const syncCause = () => { causeW.hidden = !(dec.checked || dYear.value || dDate.value); };
         dec.addEventListener("change", syncCause); dYear.addEventListener("input", syncCause); dDate.addEventListener("change", syncCause);
+        // military service — the tick reveals branch, rank and notes
+        const mil = document.createElement("input"); mil.type = "checkbox"; mil.checked = servedInMilitary(p);
+        const milWrap = document.createElement("label"); milWrap.className = "pcard-check"; milWrap.appendChild(mil); milWrap.appendChild(document.createTextNode(" Served in the military"));
+        f.appendChild(milWrap);
+        const milBox = document.createElement("div"); milBox.hidden = !mil.checked;
+        const milField = (label, node) => { const w = document.createElement("label"); w.className = "pcard-field"; const t = document.createElement("span"); t.textContent = label; w.appendChild(t); w.appendChild(node); milBox.appendChild(w); return node; };
+        const mBranch = milField("Branch", txt2((p.military || {}).branch));
+        const mRank = milField("Rank", txt2((p.military || {}).rank));
+        const mNotesI = document.createElement("textarea"); mNotesI.rows = 2; mNotesI.value = (p.military || {}).notes || "";
+        const mNotes = milField("Service notes (optional)", mNotesI);
+        f.appendChild(milBox);
+        mil.addEventListener("change", () => { milBox.hidden = !mil.checked; });
         const btns = document.createElement("div"); btns.className = "pcard-notes-bar";
         const cancel = document.createElement("button"); cancel.className = "btn small"; cancel.textContent = "Cancel";
         const saveB = document.createElement("button"); saveB.className = "btn primary small"; saveB.textContent = "Save details";
@@ -4518,6 +4609,8 @@
           p.death = isNaN(dy) ? null : dy; p.deathDate = deathDate;
           p.deceased = !!(dec.checked || dy || deathDate);
           if (causeI.value.trim() && isDeceased(p)) p.causeOfDeath = causeI.value.trim(); else delete p.causeOfDeath;
+          if (mil.checked) p.military = { branch: mBranch.value.trim(), rank: mRank.value.trim(), notes: mNotes.value.trim() };
+          else delete p.military;
           const np = nameParts({ first: fFirst.value.trim(), middle: fMiddle.value.trim(), last: fLast.value.trim(),
             nickname: fNick.value.trim(), maiden: p.sex === "female" ? fMaiden.value.trim() : "", suffix: fSuffix.value.trim() });
           if (np.first || np.last) Object.assign(p, { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix });
