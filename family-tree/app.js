@@ -5127,7 +5127,7 @@
       // Only ever set when this device actually took the cloud's copy (or its own
       // save was accepted) — never from merely asking what version is up there,
       // which is how a device could claim to be current while holding old data.
-      let base = null; try { base = +(localStorage.getItem("familyTree.baseVersion") || 0) || null; } catch (e) {}
+      let base = 0; try { base = +(localStorage.getItem("familyTree.baseVersion") || 0) || 0; } catch (e) {}
       const payload = await encryptState(fam);
       // Vercel caps a request body at ~4.5MB. Small trees go in one POST; larger
       // ones (lots of photos) are streamed up in parts and stitched server-side,
@@ -5197,6 +5197,9 @@
       // side losing, the two are merged — nothing either of them has is dropped
       // — and the save goes again from the version we just read.
       if (e && e.conflict && !cloudMerging) {
+        // Covers both refusals — "your copy is older" and "your page never said
+        // what it was built on" — because the answer to each is the same: take
+        // what's up there, fold this copy into it, and save from that.
         cloudMerging = true;
         try {
           const cp = await fetchCloudPayload();

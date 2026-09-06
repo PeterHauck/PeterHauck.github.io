@@ -333,9 +333,14 @@ export default async function handler(req, res) {
         // save as before.
         {
           const base = body.base != null ? +body.base : null;
-          if (base != null) {
-            const cur = await currentSavedAt();
-            if (cur && cur !== base) { res.status(409).json({ error: "The copy on your site has changed since this one was loaded.", savedAt: cur }); return; }
+          const cur = await currentSavedAt();
+          if (cur) {
+            // A save must say which version it was built on. One that doesn't is
+            // running code from before that was required — and that is exactly
+            // how an old copy comes to wipe a newer one. Refused: the app merges
+            // and retries, and a stale tab only needs reloading.
+            if (base == null) { res.status(409).json({ error: "This page is out of date — reload it, then save again.", savedAt: cur, needBase: true }); return; }
+            if (cur !== base) { res.status(409).json({ error: "The copy on your site has changed since this one was loaded.", savedAt: cur }); return; }
           }
         }
         const written = await writeTree(payload, body.check);
@@ -366,9 +371,14 @@ export default async function handler(req, res) {
         // a newer copy either.
         {
           const base = body.base != null ? +body.base : null;
-          if (base != null) {
-            const cur = await currentSavedAt();
-            if (cur && cur !== base) { res.status(409).json({ error: "The copy on your site has changed since this one was loaded.", savedAt: cur }); return; }
+          const cur = await currentSavedAt();
+          if (cur) {
+            // A save must say which version it was built on. One that doesn't is
+            // running code from before that was required — and that is exactly
+            // how an old copy comes to wipe a newer one. Refused: the app merges
+            // and retries, and a stale tab only needs reloading.
+            if (base == null) { res.status(409).json({ error: "This page is out of date — reload it, then save again.", savedAt: cur, needBase: true }); return; }
+            if (cur !== base) { res.status(409).json({ error: "The copy on your site has changed since this one was loaded.", savedAt: cur }); return; }
           }
         }
         const up = (body.uploadId || "").toString();
@@ -712,9 +722,14 @@ async function handleGitHub(req, res, passcode, ghToken) {
         // save as before.
         {
           const base = body.base != null ? +body.base : null;
-          if (base != null) {
-            const cur = await currentSavedAt();
-            if (cur && cur !== base) { res.status(409).json({ error: "The copy on your site has changed since this one was loaded.", savedAt: cur }); return; }
+          const cur = await currentSavedAt();
+          if (cur) {
+            // A save must say which version it was built on. One that doesn't is
+            // running code from before that was required — and that is exactly
+            // how an old copy comes to wipe a newer one. Refused: the app merges
+            // and retries, and a stale tab only needs reloading.
+            if (base == null) { res.status(409).json({ error: "This page is out of date — reload it, then save again.", savedAt: cur, needBase: true }); return; }
+            if (cur !== base) { res.status(409).json({ error: "The copy on your site has changed since this one was loaded.", savedAt: cur }); return; }
           }
         }
         const meta = await commitTreePayload(payload, body.check);
@@ -739,9 +754,14 @@ async function handleGitHub(req, res, passcode, ghToken) {
         // a newer copy either.
         {
           const base = body.base != null ? +body.base : null;
-          if (base != null) {
-            const cur = await currentSavedAt();
-            if (cur && cur !== base) { res.status(409).json({ error: "The copy on your site has changed since this one was loaded.", savedAt: cur }); return; }
+          const cur = await currentSavedAt();
+          if (cur) {
+            // A save must say which version it was built on. One that doesn't is
+            // running code from before that was required — and that is exactly
+            // how an old copy comes to wipe a newer one. Refused: the app merges
+            // and retries, and a stale tab only needs reloading.
+            if (base == null) { res.status(409).json({ error: "This page is out of date — reload it, then save again.", savedAt: cur, needBase: true }); return; }
+            if (cur !== base) { res.status(409).json({ error: "The copy on your site has changed since this one was loaded.", savedAt: cur }); return; }
           }
         }
         const shas = Array.isArray(body.shas) ? body.shas.filter((s) => /^[0-9a-f]{40,64}$/.test(String(s))) : [];
