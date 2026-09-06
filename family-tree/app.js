@@ -980,7 +980,9 @@
   // around people, or shift-click them). Lets the whole group be hidden at once.
   function updateSelBar() {
     let bar = document.getElementById("selBar");
-    const show = rearrange && !readonly && !hiddenScope && selection.size > 0;
+    // Inside a hidden branch too: it's the same canvas and the same arranging
+    // tools, and its layout is stored alongside the main tree's.
+    const show = rearrange && !readonly && selection.size > 0;
     if (!show) { if (bar) bar.remove(); return; }
     if (!bar) { bar = document.createElement("div"); bar.id = "selBar"; document.body.appendChild(bar); }
     bar.textContent = "";
@@ -1027,7 +1029,8 @@
       save(); render();
       toast(pids.length + " hidden from this view only — the master tree keeps them");
     });
-    if (!viewPreview) btn("Hide selected", () => {
+    // (nothing to hide INSIDE a hidden branch — everyone here is already hidden)
+    if (!viewPreview && !hiddenScope) btn("Hide selected", () => {
       pushUndo();
       if (!state.hidden) state.hidden = {};
       const n = selection.size;
