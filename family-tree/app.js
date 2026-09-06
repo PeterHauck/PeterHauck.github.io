@@ -1793,7 +1793,7 @@
   // The widest run of empty space between two partners on their own row — the
   // natural place to hang their children from when the marriage line has had to
   // hop over whoever is standing between them. Null when there's no room.
-  function clearLaneBetween(u, left, right, nearX) {
+  function laneGapsBetween(u, left, right) {
     const from = left.x + HALF + 10, to = right.x - HALF - 10;
     if (to - from < 40) return null;                       // no room to speak of
     const blocked = [];
@@ -1807,13 +1807,27 @@
     blocked.sort((a, b) => a[0] - b[0]);
     const gaps = [];
     let cur = from;
-    blocked.forEach(([a, b]) => { if (a - cur >= 40) gaps.push({ w: a - cur, mid: (cur + a) / 2 }); cur = Math.max(cur, b); });
-    if (to - cur >= 40) gaps.push({ w: to - cur, mid: (cur + to) / 2 });
+    blocked.forEach(([a, b]) => { if (a - cur >= 40) gaps.push({ w: a - cur, mid: (cur + a) / 2, end: a }); cur = Math.max(cur, b); });
+    if (to - cur >= 40) gaps.push({ w: to - cur, mid: (cur + to) / 2, end: to });
     if (!gaps.length) return null;
+    return { from, to, gaps };
+  }
+  function clearLaneBetween(u, left, right, nearX) {
+    const g = laneGapsBetween(u, left, right);
+    if (!g) return null;
     // Of the gaps big enough, take the one nearest the children — the connector
     // should come down beside them, not trail across the whole couple.
-    const aim = nearX == null ? (from + to) / 2 : nearX;
-    return gaps.reduce((best, g) => (Math.abs(g.mid - aim) < Math.abs(best.mid - aim) ? g : best)).mid;
+    const aim = nearX == null ? (g.from + g.to) / 2 : nearX;
+    return g.gaps.reduce((best, x) => (Math.abs(x.mid - aim) < Math.abs(best.mid - aim) ? x : best)).mid;
+  }
+  // The lane that runs clear all the way up to the far spouse's own edge. A
+  // marriage line that has had to hop comes down here and steps straight into
+  // their near side, instead of going around them and back in from the far one.
+  function laneIntoPartner(u, left, right) {
+    const g = laneGapsBetween(u, left, right);
+    if (!g) return null;
+    const last = g.gaps[g.gaps.length - 1];
+    return last && last.end >= g.to - 0.5 ? last.mid : null;
   }
   function renderUnion(u) {
     const sibGroup = isSibGroup(u);
@@ -1895,8 +1909,12 @@
           const q = posOf(oid);
           return q.x > right.x && Math.abs(q.y - right.y) < HALF * 1.5;   // a spouse already uses that side
         });
-        const xEnd = laneClear ? right.x + HALF - 6 : x2;      // which edge the line enters
-        const xLeg = laneClear ? outLane : x2 - stub;          // where it comes down
+        // Best of all is clear air between the two of them that reaches the far
+        // spouse's edge: the line comes down there and steps in from the near
+        // side, with nothing wrapped around anybody.
+        const inLane = laneIntoPartner(u, left, right);
+        const xEnd = laneClear && inLane == null ? right.x + HALF - 6 : x2;   // which edge the line enters
+        const xLeg = inLane != null ? inLane : (laneClear ? outLane : x2 - stub);   // where it comes down
         const d = `M ${x1} ${yL} L ${x1 + stub} ${yL} L ${x1 + stub} ${top} L ${xLeg} ${top} L ${xLeg} ${yR} L ${xEnd} ${yR}`;
         gu.appendChild(el("path", { class: "link", d, fill: "none", "stroke-dasharray": dash }));
         segX1 = x1 + stub; segX2 = xLeg; segY = top;
@@ -4365,13 +4383,42 @@
     return heicLibP;
   }
   const isHeicFile = (file) => !!file && (/heic|heif/i.test(file.type || "") || /\.(heic|heif)$/i.test(file.name || ""));
+  const jpgNameFor = (file) => (file && file.name || "photo").replace(/\.(heic|heif)$/i, "") + ".jpg";
+  const asJpegFile = (blob, file) => new File([blob], jpgNameFor(file), { type: "image/jpeg" });
+  // Safari — on a Mac or an iPhone — reads HEIC itself. When it does, that's
+  // the picture: quicker than the converter, and it can't fail the way the
+  // converter does on photos from a newer phone.
+  async function heicViaBrowser(file) {
+    if (typeof createImageBitmap !== "function") return null;
+    let bmp = null;
+    try { bmp = await createImageBitmap(file); } catch (e) { return null; }
+    try {
+      if (!bmp.width || !bmp.height) return null;
+      const c = document.createElement("canvas");
+      c.width = bmp.width; c.height = bmp.height;
+      c.getContext("2d").drawImage(bmp, 0, 0);
+      const blob = await new Promise((res) => { try { c.toBlob(res, "image/jpeg", 0.9); } catch (e) { res(null); } });
+      return blob ? asJpegFile(blob, file) : null;
+    } catch (e) { return null; }
+    finally { try { bmp.close(); } catch (e) {} }
+  }
   async function normalizeImageFile(file) {
     if (!isHeicFile(file)) return file;
+    const native = await heicViaBrowser(file);
+    if (native) return native;
     toast("Converting iPhone photo (HEIC)…");
     await loadHeicLib();
-    const out = await window.heic2any({ blob: file, toType: "image/jpeg", quality: 0.9 });
+    let out;
+    try { out = await window.heic2any({ blob: file, toType: "image/jpeg", quality: 0.9 }); }
+    catch (e) {
+      // The converter is fussy about how the file announces itself: a HEIC
+      // handed over with no type (or the wrong one) usually goes through on a
+      // second try with it spelled out.
+      const buf = await file.arrayBuffer();
+      out = await window.heic2any({ blob: new Blob([buf], { type: "image/heic" }), toType: "image/jpeg", quality: 0.9 });
+    }
     const blob = Array.isArray(out) ? out[0] : out;
-    return new File([blob], (file.name || "photo").replace(/\.(heic|heif)$/i, "") + ".jpg", { type: "image/jpeg" });
+    return asJpegFile(blob, file);
   }
   function readFileDataURL(file) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(file); }); }
 
