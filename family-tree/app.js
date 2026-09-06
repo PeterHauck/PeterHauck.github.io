@@ -4584,7 +4584,7 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, viewModesV2: !!state.viewModesV2, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [], locked: state.locked || {}, portals: state.portals || {}, echoPos: state.echoPos || {}, busOff: state.busOff || {} };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, viewModesV2: !!state.viewModesV2, picRelink1: !!state.picRelink1, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [], locked: state.locked || {}, portals: state.portals || {}, echoPos: state.echoPos || {}, busOff: state.busOff || {} };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
@@ -4594,6 +4594,7 @@
       photoMigrated: !!obj.photoMigrated,
       namesSplit: !!obj.namesSplit,
       viewModesV2: !!obj.viewModesV2,
+      picRelink1: !!obj.picRelink1,
       views: Array.isArray(obj.views) ? obj.views : [],
       mediaKey: obj.mediaKey || null,
       groups: Array.isArray(obj.groups) ? obj.groups : [],
@@ -4698,6 +4699,23 @@
     let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
     if (!pass) { if (!manual) { surface("this browser doesn't have the import passcode"); return; } pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || ""; if (!pass) return; try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {} missingPassWarned = false; }
     try { localStorage.setItem("familyTree.cloudOn", "1"); } catch (e) {}
+    // Whatever this copy is about to go over the top of, its keepsakes come
+    // along: a picture or record added on another device is never lost just
+    // because this device's copy is the one being pushed. Only costs a lookup,
+    // and only reads the cloud copy when it has actually moved ahead of us.
+    try {
+      let synced = 0; try { synced = +(localStorage.getItem("familyTree.cloudSavedAt") || 0) || 0; } catch (e) {}
+      const ahead = await cloudTreeInfo();
+      if (ahead && ahead.exists && ahead.savedAt > synced) {
+        const cp = await fetchCloudPayload();
+        const r = cp && cp.payload ? await decryptWithKnown(cp.payload) : null;
+        if (r && mergeKeepsakes(r.obj)) {
+          localData = exportObject();
+          idbSet(IDB.key, localData).catch(() => {});
+          render();
+        }
+      }
+    } catch (e) {}
     setCloudStatus("saving");
     try {
       const payload = await encryptState(fam);
@@ -5053,6 +5071,37 @@
       setBackupStatus("error", e.message);
       if (manual) toast(e.message || "Backup failed");
     }
+  }
+  // Pictures, extra photos and attached records are keepsakes: when two copies
+  // of the tree disagree about one, HAVING it is always the right answer. So
+  // before this device's copy goes over another, anything the other copy has
+  // and this one doesn't comes along — a photo added on a phone can never be
+  // lost to an older copy syncing on top of it.
+  function mergeKeepsakes(other) {
+    if (!other || !Array.isArray(other.persons)) return 0;
+    const by = {}; other.persons.forEach((p) => { if (p && p.id) by[p.id] = p; });
+    let n = 0;
+    state.persons.forEach((p) => {
+      const o = by[p.id]; if (!o) return;
+      if (!p.photo && !p.photoRef && (o.photo || o.photoRef)) {
+        if (o.photoRef) p.photoRef = o.photoRef; else p.photo = o.photo;
+        if (o.photoSrcRef) p.photoSrcRef = o.photoSrcRef;
+        if (o.photoMobile) p.photoMobile = true;
+        n++;
+      }
+      if (Array.isArray(o.gallery) && o.gallery.length) {
+        const key = (g) => (g && (g.ref || (g.data || "").slice(0, 64))) || "";
+        const have = new Set((p.gallery || []).map(key));
+        const extra = o.gallery.filter((g) => g && !have.has(key(g)));
+        if (extra.length) { p.gallery = (p.gallery || []).concat(extra); n += extra.length; }
+      }
+      if (Array.isArray(o.docs) && o.docs.length) {
+        const have = new Set((p.docs || []).map((d) => d && d.id));
+        const extra = o.docs.filter((d) => d && !have.has(d.id));
+        if (extra.length) { p.docs = (p.docs || []).concat(extra); n += extra.length; }
+      }
+    });
+    return n;
   }
   function hasLocalData() { return !!(localData && localData.persons && localData.persons.length); }
   function loadLocal() { if (localData) loadObject(localData); }
@@ -5612,6 +5661,21 @@
     if (!readonly && !state.namesSplit) { splitNames(); state.namesSplit = true; save(); }   // one-time: split names into parts
     // One-time: "ancestors" used to mean the strict pedigree and now means the
     // whole family line, so views written before the split keep their meaning.
+    // One-time repair: four pictures added from a phone lost their link when an
+    // older copy of the tree synced on top of the newer one. The pictures
+    // themselves were never deleted — only the link — so it is simply put back,
+    // and only for someone who still has no picture, so a newer one is never
+    // overwritten.
+    if (!readonly && !state.picRelink1) {
+      const lost = { april: "mocafpy6lu9", henry: "m8l4lxhjook", penny: "mdnrrkh3ldf", nmrvifuup3pmy: "mum1tdgjf5m" };
+      let back = 0;
+      Object.keys(lost).forEach((pid) => {
+        const p = personById(pid); if (!p || p.photo || p.photoRef) return;
+        p.photoRef = lost[pid]; p.photoMobile = true; back++;
+      });
+      state.picRelink1 = true; save();
+      if (back) { try { cloudSaveTree(false); } catch (e) {} toast(back === 1 ? "Put a lost picture back" : "Put " + back + " lost pictures back"); }
+    }
     if (!readonly && !state.viewModesV2) {
       (state.views || []).forEach((v) => (v.rules || []).forEach((r) => { if (r.mode === "ancestors") r.mode = "direct"; }));
       state.viewModesV2 = true; save();
