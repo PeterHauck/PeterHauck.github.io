@@ -138,6 +138,11 @@ export default async function handler(req, res) {
 
   // The newest complete tree copy: versioned first, legacy single file as a
   // fallback for data saved by older versions of the app.
+  // The version a client must have started from for its save to be accepted.
+  async function currentSavedAt() {
+    const b = await newestTree();
+    return b ? (Date.parse(b.uploadedAt) || 0) : 0;
+  }
   async function newestTree() {
     try {
       const { blobs } = await list({ prefix: TREEDIR, token });
@@ -321,6 +326,18 @@ export default async function handler(req, res) {
       if (action === "saveTree") {
         const payload = (body.payload || "").toString();
         if (!payload || payload.length > 30 * 1024 * 1024) { res.status(400).json({ error: "Nothing to save (or too large)." }); return; }
+        // COMPARE-AND-SWAP: a client tells us which version it started from.
+        // If the stored copy has moved on since, the save is refused rather than
+        // silently replacing someone else's newer work — the client merges the
+        // two and tries again. Clients that send no base (older builds) still
+        // save as before.
+        {
+          const base = body.base != null ? +body.base : null;
+          if (base != null) {
+            const cur = await currentSavedAt();
+            if (cur && cur !== base) { res.status(409).json({ error: "The copy on your site has changed since this one was loaded.", savedAt: cur }); return; }
+          }
+        }
         const written = await writeTree(payload, body.check);
         res.status(200).json({ ok: true, savedAt: Date.parse(written.uploadedAt) || Date.now(), size: payload.length });
         return;
@@ -345,6 +362,15 @@ export default async function handler(req, res) {
       if (action === "commitTree") {
         const total = parseInt(body.total, 10);
         if (!(total > 0 && total <= 10000)) { res.status(400).json({ error: "Bad part count." }); return; }
+        // Same compare-and-swap as saveTree: a big tree can't quietly replace
+        // a newer copy either.
+        {
+          const base = body.base != null ? +body.base : null;
+          if (base != null) {
+            const cur = await currentSavedAt();
+            if (cur && cur !== base) { res.status(409).json({ error: "The copy on your site has changed since this one was loaded.", savedAt: cur }); return; }
+          }
+        }
         const up = (body.uploadId || "").toString();
         const dir = /^[a-z0-9-]{4,40}$/.test(up) ? PARTSDIR + up + "/" : PARTSDIR;
         const expected = parseInt(body.length, 10);
@@ -483,6 +509,11 @@ async function handleGitHub(req, res, passcode, ghToken) {
     if (head) await gh("PATCH", repo + "/git/refs/heads/" + GH_BRANCH, { sha: commit.sha, force: true });
     else await gh("POST", repo + "/git/refs", { ref: "refs/heads/" + GH_BRANCH, sha: commit.sha });
     return commit.sha;
+  }
+  // The version a client must have started from for its save to be accepted.
+  async function currentSavedAt() {
+    const m = await readMeta();
+    return m ? (+m.savedAt || 0) : 0;
   }
   async function readMeta() {
     const b = await ghFile("meta.json");
@@ -674,6 +705,18 @@ async function handleGitHub(req, res, passcode, ghToken) {
       if (action === "saveTree") {
         const payload = (body.payload || "").toString();
         if (!payload || payload.length > 30 * 1024 * 1024) { res.status(400).json({ error: "Nothing to save (or too large)." }); return; }
+        // COMPARE-AND-SWAP: a client tells us which version it started from.
+        // If the stored copy has moved on since, the save is refused rather than
+        // silently replacing someone else's newer work — the client merges the
+        // two and tries again. Clients that send no base (older builds) still
+        // save as before.
+        {
+          const base = body.base != null ? +body.base : null;
+          if (base != null) {
+            const cur = await currentSavedAt();
+            if (cur && cur !== base) { res.status(409).json({ error: "The copy on your site has changed since this one was loaded.", savedAt: cur }); return; }
+          }
+        }
         const meta = await commitTreePayload(payload, body.check);
         res.status(200).json({ ok: true, savedAt: meta.savedAt, size: payload.length });
         return;
@@ -692,6 +735,15 @@ async function handleGitHub(req, res, passcode, ghToken) {
       if (action === "commitTree") {
         const total = parseInt(body.total, 10);
         if (!(total > 0 && total <= 10000)) { res.status(400).json({ error: "Bad part count." }); return; }
+        // Same compare-and-swap as saveTree: a big tree can't quietly replace
+        // a newer copy either.
+        {
+          const base = body.base != null ? +body.base : null;
+          if (base != null) {
+            const cur = await currentSavedAt();
+            if (cur && cur !== base) { res.status(409).json({ error: "The copy on your site has changed since this one was loaded.", savedAt: cur }); return; }
+          }
+        }
         const shas = Array.isArray(body.shas) ? body.shas.filter((s) => /^[0-9a-f]{40,64}$/.test(String(s))) : [];
         if (shas.length !== total) { res.status(409).json({ error: "Your app just updated — reload the page, then save again." }); return; }
         const expected = parseInt(body.length, 10);

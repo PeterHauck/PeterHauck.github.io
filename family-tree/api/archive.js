@@ -42,9 +42,29 @@ function extractImageUrl(html, pageUrl) {
 
 // Fetch the portrait server-side (browsers can't, cross-origin) and hand it
 // back as a data URL the app can store as the person's picture.
-async function fetchImageDataUrl(imgUrl) {
+// Ask the way a browser would. A bare or odd user-agent is enough for plenty of
+// photo hosts to refuse, and one that hotlink-checks wants a Referer from the
+// page the picture sits on. The deadline stops a dead host hanging the save.
+const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+async function fetchLikeABrowser(target, referer) {
+  const headers = {
+    "user-agent": BROWSER_UA,
+    "accept": "text/html,application/xhtml+xml,image/avif,image/webp,image/*;q=0.8,*/*;q=0.5",
+    "accept-language": "en-US,en;q=0.9",
+  };
+  try { headers["referer"] = referer || new URL(target).origin + "/"; } catch (e) {}
+  const go = (h) => fetch(target, { headers: h, redirect: "follow", signal: AbortSignal.timeout(15000) });
+  let r = await go(headers);
+  if (r.status === 403 || r.status === 401) {
+    // some hosts dislike a Referer they didn't expect — try again without one
+    const bare = Object.assign({}, headers); delete bare.referer;
+    try { const r2 = await go(bare); if (r2.ok) return r2; } catch (e) {}
+  }
+  return r;
+}
+async function fetchImageDataUrl(imgUrl, pageUrl) {
   try {
-    const r = await fetch(imgUrl, { headers: { "user-agent": "Mozilla/5.0 (FamilyTree archiver)" } });
+    const r = await fetchLikeABrowser(imgUrl, pageUrl);
     if (!r.ok) return "";
     const type = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
     if (!/^image\//.test(type) || /svg/.test(type)) return "";
@@ -90,10 +110,27 @@ export default async function handler(req, res) {
 
   const url = (body.url || "").toString();
   if (!/^https?:\/\//i.test(url)) { res.status(400).json({ error: "Enter a valid http(s) link." }); return; }
+  // Plain English for the things that actually go wrong out there, instead of
+  // the runtime's bare "fetch failed".
+  const reachError = (err, what) => {
+    const m = String((err && (err.cause && err.cause.message)) || (err && err.message) || "");
+    if (/abort|timeout/i.test(m)) return "That site took too long to answer.";
+    if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(m)) return "Couldn’t find that address — check the link.";
+    if (/certificate|TLS|SSL/i.test(m)) return "That site’s security certificate couldn’t be verified.";
+    if (/ECONNREFUSED|ECONNRESET|socket/i.test(m)) return "That site refused the connection.";
+    return "Couldn’t reach " + what + (m ? " (" + m + ")" : "") + ".";
+  };
 
   try {
-    const r = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (FamilyTree archiver)" } });
-    if (!r.ok) { res.status(502).json({ error: "Couldn't fetch that page (status " + r.status + ")." }); return; }
+    let r;
+    try { r = await fetchLikeABrowser(url); }
+    catch (e) { res.status(502).json({ error: reachError(e, "that link") }); return; }
+    if (!r.ok) {
+      const why = r.status === 403 ? "that site won’t hand the file to anyone but its own pages — try saving the picture and uploading it"
+        : r.status === 404 ? "there’s nothing at that link any more"
+        : "the site answered with status " + r.status;
+      res.status(502).json({ error: "Couldn’t fetch that link — " + why + "." }); return;
+    }
     // If the link IS an image (e.g. a portrait URL pasted directly), return it as-is.
     const ctype = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
     if (/^image\//.test(ctype) && !/svg/.test(ctype)) {
@@ -109,7 +146,7 @@ export default async function handler(req, res) {
     // Also try to pull the portrait so the app can set it as the person's picture.
     let image = "";
     const imgUrl = extractImageUrl(html, url);
-    if (imgUrl) image = await fetchImageDataUrl(imgUrl);
+    if (imgUrl) image = await fetchImageDataUrl(imgUrl, url);
     if (!text && !image) { res.status(422).json({ error: "That page had no readable text or photo." }); return; }
     res.status(200).json({ title: extractTitle(html) || "Saved page", text: text.slice(0, 40000), image });
   } catch (err) {

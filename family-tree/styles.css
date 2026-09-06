@@ -612,6 +612,10 @@ button.btn.tiny.danger { color: var(--divorce); border-color: var(--divorce); }
 .pick-cell:hover { border-color: var(--accent-2); }
 .pick-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .photo-menu .btn.wide { margin: 6px 0 0; text-align: left; }
+/* paste-a-link row, first thing in the picture menu */
+.pm-linkrow { display: flex; gap: 6px; margin: 10px 0 2px; }
+.pm-linkrow input { flex: 1; min-width: 0; padding: 8px 9px; border-radius: 8px; border: 1px solid var(--panel-border); background: var(--paper); color: var(--ink); font-size: 14px; }
+.pm-linkrow .btn { flex: none; }
 .pcard-headtext { flex: 1; min-width: 0; padding-top: 2px; }
 .pcard-headtext h2 { margin: 0; font-size: 18px; line-height: 1.2; }
 .pcard-dates { font-size: 13px; color: var(--muted); margin-top: 3px; }
