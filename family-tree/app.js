@@ -2420,7 +2420,7 @@
     syncAgeLine(p);
     setSex(p.sex);
     setColor(p.color || "");
-    photoDirty = false;
+    photoDirty = false; photoReplaced = false;
     pendingPhoto = photoOf(p);
     // An externalised photo may still be loading — fill the preview when it lands.
     if (!pendingPhoto && p.photoRef) mediaGet(p.photoRef).then((u) => {
@@ -2441,6 +2441,7 @@
     $("#personForm").reset();
     $("#causeField").hidden = true;
     $("#militaryFields").hidden = true;
+    photoDirty = false; photoReplaced = false;
     syncAgeLine(null);
     setSex("male");
     pendingPhoto = null; updatePhotoPreview();
@@ -2904,6 +2905,8 @@
       // The photo only changes when the user actually changed it — an
       // externalised photo that hadn't finished loading is never wiped.
       if (photoDirty) {
+        // a different picture taking over: the old one joins their gallery
+        if (pendingPhoto && photoReplaced) archiveTreePicture(p);
         delete p.photoSrcRef;   // the kept original belongs to the picture being replaced
         if (pendingPhoto) { p.photo = pendingPhoto; delete p.photoRef; scheduleSweep(); }
         else { delete p.photo; delete p.photoRef; }
@@ -2968,8 +2971,11 @@
     try { src = await fileAsPictureDataUrl(file); }
     catch (err) { toast(isPdfFile(file) ? "Couldn’t read that PDF — try saving the page as a JPG." : "Couldn’t convert that HEIC photo — try exporting it as JPG."); return; }
     if (!src) return toast("Couldn’t read that file.");
-    openPhotoAdjust(src, (photo) => { pendingPhoto = photo; photoDirty = true; updatePhotoPreview(); });
+    openPhotoAdjust(src, (photo) => { pendingPhoto = photo; photoDirty = true; photoReplaced = true; updatePhotoPreview(); });
   });
+  // Set when the staged photo is a DIFFERENT picture (a file, a drop, a link) —
+  // not when it's the current one being re-framed with Adjust.
+  let photoReplaced = false;
   $("#photoAdjustBtn").onclick = () => { if (pendingPhoto) openPhotoAdjust(pendingPhoto, (photo) => { pendingPhoto = photo; photoDirty = true; updatePhotoPreview(); }); };
   // Load a photo from a pasted image link (or any page with a portrait) into the
   // form's staged photo. The fetch runs server-side (Vercel), so it works on
@@ -2986,7 +2992,7 @@
     try {
       const data = await callArchive({ passcode: pass, url });
       if (data && data.image) {
-        openPhotoAdjust(data.image, (photo) => { pendingPhoto = photo; photoDirty = true; updatePhotoPreview(); toast("Photo loaded — click Save to keep it"); });
+        openPhotoAdjust(data.image, (photo) => { pendingPhoto = photo; photoDirty = true; photoReplaced = true; updatePhotoPreview(); toast("Photo loaded — click Save to keep it"); });
         return;
       }
       toast("No image found at that link");
@@ -3838,7 +3844,7 @@
     const imgDoc = docs.find((d) => d && (d.kind === "image" || d.kind === "pdf") && (docSrc(d) || d.ref));
     if (imgDoc) {
       const photo = await imageDataToPhoto(await docSrcAsync(imgDoc));
-      if (photo) { p.photo = photo; scheduleSweep(); save(); render(); if (selectedId === p.id) fillPersonForm(p); toast("Set their picture from the obituary"); return; }
+      if (photo) { archiveTreePicture(p); p.photo = photo; delete p.photoRef; delete p.photoSrcRef; scheduleSweep(); save(); render(); if (selectedId === p.id) fillPersonForm(p); toast("Set their picture from the obituary"); return; }
     }
     const urlDoc = docs.find((d) => d && d.url);
     if (!urlDoc) { toast("No photo found in the obituary"); return; }
@@ -3852,7 +3858,7 @@
       const data = await callArchive({ passcode: pass, url: urlDoc.url });
       if (data && data.image) {
         const photo = await imageDataToPhoto(data.image);
-        if (photo) { p.photo = photo; save(); render(); if (selectedId === p.id) fillPersonForm(p); toast("Set their picture from the obituary"); return; }
+        if (photo) { archiveTreePicture(p); p.photo = photo; delete p.photoRef; delete p.photoSrcRef; save(); render(); if (selectedId === p.id) fillPersonForm(p); toast("Set their picture from the obituary"); return; }
       }
       toast("Couldn’t find a photo in that obituary");
     } catch (e) {
@@ -4261,8 +4267,8 @@
           const full = galleryPicSrc(g) || (g.ref ? await mediaGet(g.ref).catch(() => null) : null);
           if (!full) return toast("That photo is still loading");
           openPhotoAdjust(full, async (sq) => {
-            await setTreePicture(p, sq, g.ref ? null : full, g.ref || null);
-            toast("Tree picture updated"); if (onChange) onChange();
+            const kept = await setTreePicture(p, sq, g.ref ? null : full, g.ref || null, true);
+            toast(kept ? "Tree picture updated — the old one is in their gallery" : "Tree picture updated"); if (onChange) onChange();
           });
         };
         const del = document.createElement("button"); del.type = "button"; del.className = "gal-act gal-del"; del.textContent = "✕";
@@ -4337,8 +4343,31 @@
   // Save a freshly cropped square as the tree picture, keeping a reference to
   // the full-size original so it can be repositioned again later without the
   // quality loss of re-cropping a crop.
-  async function setTreePicture(p, square, full, fullRef) {
+  // The picture being replaced isn't thrown away — it joins their gallery, so a
+  // face that was once on the tree is always still there to go back to. The
+  // full-size original is kept in preference to the square crop, and a photo the
+  // gallery already holds isn't added twice.
+  function archiveTreePicture(p) {
+    const ref = p.photoSrcRef || p.photoRef || null;
+    const data = ref ? null : (p.photo || null);
+    if (!ref && !data) return false;
+    const gal = galleryOf(p);
+    if (ref && gal.some((g) => g && g.ref === ref)) return false;
+    if (data && gal.some((g) => g && g.data === data)) return false;
+    // …and the same picture filed under a different id doesn't count as new
+    // either, when both are already in hand (no fetching just to compare).
+    const mine = ref ? mediaMem.get(ref) : data;
+    if (mine && gal.some((g) => g && (g.data || (g.ref && mediaMem.get(g.ref))) === mine)) return false;
+    if (!Array.isArray(p.gallery)) p.gallery = [];
+    p.gallery.push(ref ? { ref } : { data });
+    return true;
+  }
+  // keepPrevious: true when this is a DIFFERENT picture taking over, false when
+  // it's the same one being re-framed (which would only fill the gallery with
+  // near-identical crops).
+  async function setTreePicture(p, square, full, fullRef, keepPrevious) {
     pushUndo();
+    const kept = keepPrevious ? archiveTreePicture(p) : false;
     try { p.photoRef = await mediaUpload(square); delete p.photo; }
     catch (e) { p.photo = square; delete p.photoRef; }   // offline: the sweep externalises it later
     delete p.photoSrcRef;
@@ -4347,6 +4376,7 @@
     p.photoMobile = true;
     save(); try { cloudSaveTree(false); } catch (e) {}
     scheduleSweep(); render();
+    return kept;
   }
   function openPhotoMenu(p, onChange) {
     if (readonly || !isOwner()) return;
@@ -4367,7 +4397,7 @@
       close();
       const src = await photoSourceFor(p);
       if (!src) return toast("That picture is still loading — try again in a moment");
-      openPhotoAdjust(src, async (sq) => { await setTreePicture(p, sq, null, p.photoSrcRef || null); after("Picture repositioned"); });
+      openPhotoAdjust(src, async (sq) => { await setTreePicture(p, sq, null, p.photoSrcRef || null, false); after("Picture repositioned"); });
     });
     if (gal.length) opt("🖼 Choose from their photos", () => { close(); openGalleryPick(p, onChange); });
     const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*,.heic,.heif,application/pdf,.pdf"; fileInput.style.display = "none";
@@ -4375,7 +4405,7 @@
       const file = fileInput.files[0]; if (!file) return;
       close();
       const full = await fileAsFullImage(file); if (!full) return;
-      openPhotoAdjust(full, async (sq) => { await setTreePicture(p, sq, full, null); after("Picture updated"); });
+      openPhotoAdjust(full, async (sq) => { const kept = await setTreePicture(p, sq, full, null, true); after(kept ? "Picture updated — the old one is in their gallery" : "Picture updated"); });
     };
     m.appendChild(fileInput);
     opt(has ? "📷 Upload a new picture" : "📷 Upload a picture", () => fileInput.click());
@@ -4413,8 +4443,8 @@
         if (!full) return toast("That photo is still loading");
         back.remove();
         openPhotoAdjust(full, async (sq) => {
-          await setTreePicture(p, sq, g.ref ? null : full, g.ref || null);
-          toast("Picture updated"); if (onChange) onChange();
+          const kept = await setTreePicture(p, sq, g.ref ? null : full, g.ref || null, true);
+          toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated"); if (onChange) onChange();
         });
       };
       grid.appendChild(cell);
