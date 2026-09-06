@@ -1365,10 +1365,11 @@
     return months[+m[2] - 1] + " " + (+m[3]) + ", " + m[1];
   }
   // How old they are — at death for someone who has passed, today for everyone
-  // else. Exact dates give an exact answer; years alone give the difference in
-  // years, which is right to within a birthday. Null when it can't be known
-  // (no birth, or gone with no date to stop the clock at).
-  function ageOf(p) {
+  // else. Null when it can't be known (no birth, or gone with no date to stop
+  // the clock at). Months come back too when both ends are dated precisely
+  // enough to count them, and null when all we have is years — which can't tell
+  // a newborn from an eleven-month-old.
+  function ageInfo(p) {
     if (!p) return null;
     const at = (exact, year) => {
       if (exact && /^\d{4}-\d{2}-\d{2}$/.test(exact)) return { y: +exact.slice(0, 4), m: +exact.slice(5, 7), d: +exact.slice(8, 10) };
@@ -1379,9 +1380,23 @@
     let e;
     if (isDeceased(p)) { e = at(p.deathDate, p.death); if (!e) return null; }
     else { const n = new Date(); e = { y: n.getFullYear(), m: n.getMonth() + 1, d: n.getDate() }; }
-    let a = e.y - b.y;
-    if (b.m != null && e.m != null && (e.m < b.m || (e.m === b.m && e.d < b.d))) a--;   // birthday not yet reached
-    return a < 0 || a > 130 ? null : a;
+    if (b.m != null && e.m != null) {
+      let mo = (e.y - b.y) * 12 + (e.m - b.m);
+      if (e.d < b.d) mo--;                                   // the day of the month hasn't come round yet
+      if (mo < 0 || mo > 130 * 12) return null;
+      return { years: Math.floor(mo / 12), months: mo };
+    }
+    const a = e.y - b.y;
+    return a < 0 || a > 130 ? null : { years: a, months: null };
+  }
+  // How old they are, in words: years once they've had a first birthday, months
+  // before that — and an honest "<1 yr" when only the years are on record, which
+  // can't say how many months.
+  function ageLabel(p) {
+    const a = ageInfo(p); if (!a) return "";
+    if (a.years >= 1) return String(a.years);
+    if (a.months == null) return "<1 yr";
+    return a.months >= 1 ? a.months + " mo" : "<1 mo";
   }
   // Military service lives in p.military: its presence IS the "they served" flag,
   // and it carries the branch, rank and notes.
@@ -1392,8 +1407,9 @@
   };
   function dateStr(p) {
     // Both ends known: the tree carries how old they were when they died.
-    if (p.birth != null && p.death != null) { const a = ageOf(p); return p.birth + "–" + p.death + (a != null ? " (" + a + ")" : ""); }
-    if (p.birth != null) return "b. " + p.birth + (isDeceased(p) ? " · d." : "");
+    const age = ageLabel(p), tag = age ? " (" + age + ")" : "";
+    if (p.birth != null && p.death != null) return p.birth + "–" + p.death + tag;
+    if (p.birth != null) return "b. " + p.birth + (isDeceased(p) ? " · d." : "") + tag;
     if (p.death != null) return "d. " + p.death;
     if (p.deceased) return "deceased";
     return "";
@@ -2937,9 +2953,9 @@
       deathDate: $("#pDeathDate").value || null,
       deceased: $("#pDeceased").checked,
     };
-    const a = ageOf(src);
-    el2.hidden = a == null;
-    el2.textContent = a == null ? "" : (isDeceased(src) ? "Age at death: " + a : "Age: " + a);
+    const a = ageLabel(src);
+    el2.hidden = !a;
+    el2.textContent = !a ? "" : (isDeceased(src) ? "Age at death: " + a : "Age: " + a);
   }
   ["#pBirth", "#pDeath", "#pBirthDate", "#pDeathDate", "#pDeceased"].forEach((sel) => {
     const n = $(sel); if (n) { n.addEventListener("input", () => syncAgeLine(null)); n.addEventListener("change", () => syncAgeLine(null)); }
@@ -4623,7 +4639,7 @@
       const fmt = (exact, year) => exact ? new Date(exact + "T12:00:00").toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : (year != null ? String(year) : "—");
       line("Born", fmt(p.birthDate, p.birth));
       line(isDeceased(p) ? "Died" : "Status", isDeceased(p) ? fmt(p.deathDate, p.death) : "Living");
-      { const a = ageOf(p); if (a != null) line(isDeceased(p) ? "Age at death" : "Age", String(a)); }
+      { const a = ageLabel(p); if (a) line(isDeceased(p) ? "Age at death" : "Age", a); }
       if (isDeceased(p) && p.causeOfDeath) line("Cause of death", p.causeOfDeath);
       if (servedInMilitary(p)) {
         const m = p.military;
