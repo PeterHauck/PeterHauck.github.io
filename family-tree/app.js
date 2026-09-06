@@ -1790,6 +1790,31 @@
     window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
   }
 
+  // The widest run of empty space between two partners on their own row — the
+  // natural place to hang their children from when the marriage line has had to
+  // hop over whoever is standing between them. Null when there's no room.
+  function clearLaneBetween(u, left, right, nearX) {
+    const from = left.x + HALF + 10, to = right.x - HALF - 10;
+    if (to - from < 40) return null;                       // no room to speak of
+    const blocked = [];
+    state.persons.forEach((pp) => {
+      if (pp.id === u.a || pp.id === u.b || !inView(pp.id)) return;
+      const q = posOf(pp.id);
+      if (Math.abs(q.y - left.y) > HALF * 1.5) return;      // not on this row
+      if (q.x + HALF + 10 < from || q.x - HALF - 10 > to) return;
+      blocked.push([q.x - HALF - 10, q.x + HALF + 10]);
+    });
+    blocked.sort((a, b) => a[0] - b[0]);
+    const gaps = [];
+    let cur = from;
+    blocked.forEach(([a, b]) => { if (a - cur >= 40) gaps.push({ w: a - cur, mid: (cur + a) / 2 }); cur = Math.max(cur, b); });
+    if (to - cur >= 40) gaps.push({ w: to - cur, mid: (cur + to) / 2 });
+    if (!gaps.length) return null;
+    // Of the gaps big enough, take the one nearest the children — the connector
+    // should come down beside them, not trail across the whole couple.
+    const aim = nearX == null ? (from + to) / 2 : nearX;
+    return gaps.reduce((best, g) => (Math.abs(g.mid - aim) < Math.abs(best.mid - aim) ? g : best)).mid;
+  }
   function renderUnion(u) {
     const sibGroup = isSibGroup(u);
     const pa = personById(u.a); if (!pa && !sibGroup) return;
@@ -1879,6 +1904,12 @@
         // Children of a hopped marriage drop from that descending leg — through
         // clear air, never through anyone's shape.
         dropXO = xLeg; dropTop = yR;
+        // …unless there is clear air BETWEEN the two of them, which there
+        // usually is when the hop was needed because somebody else stands in
+        // the middle. A child's line belongs under their parents, not out to
+        // one side of them, so it drops down the widest gap in between.
+        const lane = clearLaneBetween(u, left, right, kidXs.length ? kidXs.reduce((a, b) => a + b, 0) / kidXs.length : null);
+        if (lane != null) { dropXO = lane; dropTop = top; }
       }
       if (u.status === "divorced") {
         [-7, 5].forEach((dx) => gu.appendChild(el("line", { class: "divorce-tick", x1: midX + dx + 5, y1: segY - 11, x2: midX + dx - 5, y2: segY + 11 })));
