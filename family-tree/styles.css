@@ -460,9 +460,16 @@ button.btn.small { padding: 5px 9px; font-size: 12px; }
 .mini-label { font-size: 11px; text-anchor: middle; fill: var(--ink); font-weight: 600; dominant-baseline: hanging; }
 .mini-node.anchor .mini-label { fill: var(--accent); }
 
-/* four directional "+" handles around a person, revealed on hover */
-.person .add-plus { opacity: 0; pointer-events: none; transition: opacity .1s; cursor: pointer; }
-.person:hover .add-plus { opacity: 1; pointer-events: auto; }
+/* four directional "+" handles around a person, revealed on hover.
+   They linger for half a second after the pointer leaves, so reaching across
+   the gap towards one never makes it vanish mid-reach. visibility does the
+   hiding rather than pointer-events, because visibility can be delayed too —
+   which keeps the handle CLICKABLE for the whole grace period, not just
+   visible. */
+.person .add-plus { opacity: 0; visibility: hidden; cursor: pointer;
+  transition: opacity .14s linear .42s, visibility 0s linear .56s; }
+.person:hover .add-plus { opacity: 1; visibility: visible;
+  transition: opacity .1s linear 0s, visibility 0s linear 0s; }
 /* big invisible target: bridges the gap from the node so the + doesn't vanish as
    you reach for it, and makes it comfortable to click. transparent (not none) so
    it still receives pointer events. */
@@ -473,9 +480,11 @@ button.btn.small { padding: 5px 9px; font-size: 12px; }
 .readonly .add-plus { display: none; }
 
 /* the + and +hidden handles that appear when you hover a couple's marriage line */
-.union .couple-plus, .union .hidden-plus { opacity: 0; pointer-events: none; transition: opacity .1s; cursor: pointer; }
+.union .couple-plus, .union .hidden-plus { opacity: 0; visibility: hidden; cursor: pointer;
+  transition: opacity .14s linear .42s, visibility 0s linear .56s; }
 .union:hover .couple-plus, .union:hover .hidden-plus,
-.person:hover .hidden-plus { opacity: 1; pointer-events: auto; }
+.person:hover .hidden-plus { opacity: 1; visibility: visible;
+  transition: opacity .1s linear 0s, visibility 0s linear 0s; }
 .couple-hit { stroke: transparent; stroke-width: 26; fill: none; }
 /* +hidden handle: the eye-with-a-slash marker plus a small + badge */
 .hidden-plus-bg { fill: var(--panel); stroke: var(--panel-border); stroke-width: 1; }

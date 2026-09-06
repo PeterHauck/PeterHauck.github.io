@@ -1595,7 +1595,7 @@
     if (seed.person) attrs["data-hidperson"] = seed.person;
     if (seed.union) attrs["data-hidunion"] = seed.union;
     const g = el("g", attrs);
-    g.appendChild(el("circle", { class: "add-plus-hit", r: 20, cx: 0, cy: 0 }));
+    g.appendChild(el("circle", { class: "add-plus-hit", r: 26, cx: 0, cy: 0 }));   // as generous a target as the + handles
     g.appendChild(el("circle", { class: "add-plus-bg hidden-plus-bg", r: 11, cx: 0, cy: 0 }));
     g.appendChild(el("path", { class: "hidden-plus-mark", d: "M-6.5 0 Q0 -5 6.5 0 Q0 5 -6.5 0 Z", fill: "none" }));
     g.appendChild(el("circle", { class: "hidden-plus-pupil", cx: 0, cy: 0, r: 1.7 }));
