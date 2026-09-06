@@ -433,6 +433,11 @@ button.btn.small { padding: 5px 9px; font-size: 12px; }
 .person .doc-badge-mark { stroke: var(--muted); stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
 .person .doc-badge:hover .doc-badge-bg { fill: var(--accent); stroke: var(--accent); }
 .person .doc-badge:hover .doc-badge-mark { stroke: #fff; }
+/* served in the military: a small star, bottom-right of their shape */
+.person .mil-badge-bg { fill: var(--paper); stroke: var(--panel-border); stroke-width: 1; }
+.person .mil-badge-mark { fill: var(--muted); stroke: none; }
+.person .mil-badge:hover .mil-badge-bg { fill: var(--accent); stroke: var(--accent); }
+.person .mil-badge:hover .mil-badge-mark { fill: #fff; }
 
 /* hidden-branch marker: an eye with a slash, sitting next to the anchor person */
 .hidden-badge { cursor: pointer; }
@@ -546,6 +551,8 @@ button.btn.tiny.danger { color: var(--divorce); border-color: var(--divorce); }
 .docview-backdrop { z-index: 70; }
 .pcard { background: var(--panel); width: 100%; max-width: 560px; max-height: 88vh; overflow-y: auto; border-radius: 16px 16px 0 0; box-shadow: var(--shadow); padding: 16px 16px calc(20px + env(safe-area-inset-bottom)); }
 .pcard-head { display: flex; align-items: flex-start; gap: 12px; }
+.age-line { font-size: 12px; color: var(--muted); margin: -6px 0 10px; }
+.mil-line { font-size: 13px; margin: 2px 0; }
 .pcard-photo { width: 60px; height: 60px; flex: none; overflow: hidden; position: relative; display: flex; align-items: center; justify-content: center; font-size: 28px; background: var(--paper); border: 2px solid var(--panel-border); border-radius: 12px; }
 .pcard-photo.f { border-radius: 50%; }
 .pcard-photo img { width: 100%; height: 100%; object-fit: cover; }
