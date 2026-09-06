@@ -2496,7 +2496,7 @@
     // Offer to pull a picture out of an obituary when there's one to pull from
     // (an uploaded photo, or a linked page we can fetch the portrait off).
     if (photoBtn) {
-      const canPhoto = docs.some((d) => isObitDoc(d) && ((d.kind === "image" && (d.content || d.ref)) || d.url));
+      const canPhoto = docs.some((d) => isObitDoc(d) && (((d.kind === "image" || d.kind === "pdf") && (d.content || d.ref)) || d.url));
       photoBtn.hidden = !canPhoto;
       photoBtn.textContent = (p.photo || p.photoRef) ? "📷 Replace picture from obituary" : "📷 Use photo from obituary";
     }
@@ -2963,13 +2963,12 @@
   $("#photoClear").onclick = () => { pendingPhoto = null; photoDirty = true; updatePhotoPreview(); };
   $("#photoUrlBtn").onclick = () => setPhotoFromUrl($("#photoUrl").value);
   $("#photoInput").addEventListener("change", async (e) => {
-    let file = e.target.files[0]; if (!file) return;
-    try { file = await normalizeImageFile(file); } catch (err) { toast("Couldn’t convert that HEIC photo — try exporting it as JPG."); return; }
-    const reader = new FileReader();
-    reader.onload = () => openPhotoAdjust(reader.result, (photo) => { pendingPhoto = photo; photoDirty = true; updatePhotoPreview(); });
-    reader.onerror = () => toast("Couldn’t read that file.");
-    reader.readAsDataURL(file);
-    e.target.value = "";
+    const file = e.target.files[0]; e.target.value = ""; if (!file) return;
+    let src = null;
+    try { src = await fileAsPictureDataUrl(file); }
+    catch (err) { toast(isPdfFile(file) ? "Couldn’t read that PDF — try saving the page as a JPG." : "Couldn’t convert that HEIC photo — try exporting it as JPG."); return; }
+    if (!src) return toast("Couldn’t read that file.");
+    openPhotoAdjust(src, (photo) => { pendingPhoto = photo; photoDirty = true; updatePhotoPreview(); });
   });
   $("#photoAdjustBtn").onclick = () => { if (pendingPhoto) openPhotoAdjust(pendingPhoto, (photo) => { pendingPhoto = photo; photoDirty = true; updatePhotoPreview(); }); };
   // Load a photo from a pasted image link (or any page with a portrait) into the
@@ -3728,7 +3727,7 @@
       // Obituaries only — a scan of an article/award shouldn't become someone's face.
       let setPic = false;
       if (docType === "obituary" && !person.photo) {
-        const picSrc = kind === "image" ? content : fetchedImage;
+        const picSrc = (kind === "image" || kind === "pdf") ? content : fetchedImage;
         if (picSrc) { const photo = await imageDataToPhoto(picSrc); if (photo) { person.photo = photo; setPic = true; scheduleSweep(); } }
       }
 
@@ -3787,6 +3786,7 @@
 
   // Load an image data-URL and return a downscaled JPEG suitable for a node picture.
   function imageDataToPhoto(dataUrl) {
+    if (isPdfData(dataUrl)) return pdfFirstPageImage(dataUrl).then((u) => (u ? imageDataToPhoto(u) : null)).catch(() => null);
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => { try { resolve(downscale(img, 400)); } catch (e) { resolve(null); } };
@@ -3800,7 +3800,7 @@
     let changed = false;
     for (const p of state.persons) {
       if (p.photo || p.photoRef || !Array.isArray(p.docs)) continue;
-      const imgDoc = p.docs.find((d) => isObitDoc(d) && d.kind === "image" && (docSrc(d) || d.ref));
+      const imgDoc = p.docs.find((d) => isObitDoc(d) && (d.kind === "image" || d.kind === "pdf") && (docSrc(d) || d.ref));
       if (!imgDoc) continue;
       const photo = await imageDataToPhoto(await docSrcAsync(imgDoc));
       if (photo) { p.photo = photo; changed = true; }
@@ -3835,7 +3835,7 @@
   async function usePhotoFromObit(p) {
     if (!p) return;
     const docs = (p.docs || []).filter(isObitDoc);   // obituaries only — never a record scan
-    const imgDoc = docs.find((d) => d && d.kind === "image" && (docSrc(d) || d.ref));
+    const imgDoc = docs.find((d) => d && (d.kind === "image" || d.kind === "pdf") && (docSrc(d) || d.ref));
     if (imgDoc) {
       const photo = await imageDataToPhoto(await docSrcAsync(imgDoc));
       if (photo) { p.photo = photo; scheduleSweep(); save(); render(); if (selectedId === p.id) fillPersonForm(p); toast("Set their picture from the obituary"); return; }
@@ -4148,6 +4148,53 @@
   // heic2any, ~1.3MB) loads on demand — only the first time a HEIC file is
   // actually picked — and never on normal page loads.
   let heicLibP = null;
+  // Page one of a PDF, rendered as an image — so a scanned portrait or a
+  // photo someone saved as a PDF can be used exactly like a JPG. The reader is
+  // fetched only when a PDF actually turns up.
+  let pdfLibP = null;
+  function loadPdfLib() {
+    if (window.pdfjsLib) return Promise.resolve();
+    if (!pdfLibP) pdfLibP = new Promise((resolve, reject) => {
+      const sc = document.createElement("script");
+      sc.src = "pdf.min.js?v=" + (window.FAMILY_DATA_VERSION || Date.now());
+      sc.onload = resolve;
+      sc.onerror = () => { pdfLibP = null; reject(new Error("PDF reader failed to load")); };
+      document.head.appendChild(sc);
+    });
+    return pdfLibP;
+  }
+  const isPdfFile = (f) => !!f && (f.type === "application/pdf" || /\.pdf$/i.test(f.name || ""));
+  const isPdfData = (u) => typeof u === "string" && /^data:application\/pdf[;,]/i.test(u);
+  // Render the first page big enough to crop from (long edge ~1400px).
+  async function pdfFirstPageImage(src) {
+    await loadPdfLib();
+    const lib = window.pdfjsLib;
+    try { lib.GlobalWorkerOptions.workerSrc = "pdf.worker.min.js?v=" + (window.FAMILY_DATA_VERSION || ""); } catch (e) {}
+    const data = typeof src === "string" ? unb64(String(src).split(",")[1] || "") : new Uint8Array(src);
+    const doc = await lib.getDocument({ data }).promise;
+    const page = await doc.getPage(1);
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(4, Math.max(1, 1400 / Math.max(base.width, base.height)));
+    const vp = page.getViewport({ scale });
+    const cv = document.createElement("canvas");
+    cv.width = Math.max(1, Math.round(vp.width)); cv.height = Math.max(1, Math.round(vp.height));
+    const ctx = cv.getContext("2d");
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height);   // PDFs are transparent; paper is white
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    try { doc.destroy(); } catch (e) {}
+    return cv.toDataURL("image/jpeg", 0.85);
+  }
+  // Any picked file as a picture: a PDF becomes its first page, an iPhone HEIC
+  // is converted, everything else is read as-is.
+  async function fileAsPictureDataUrl(file) {
+    if (isPdfFile(file)) {
+      toast("Reading that PDF…");
+      const buf = await file.arrayBuffer();
+      return await pdfFirstPageImage(buf);
+    }
+    const f = await normalizeImageFile(file);
+    return await readFileDataURL(f);
+  }
   function loadHeicLib() {
     if (window.heic2any) return Promise.resolve();
     if (!heicLibP) heicLibP = new Promise((resolve, reject) => {
@@ -4269,10 +4316,11 @@
   const hasTreePic = (p) => !!(p.photo || p.photoRef);
   // Read a picked file into a full-size (downscaled) image, converting HEIC.
   async function fileAsFullImage(file) {
-    try { file = await normalizeImageFile(file); } catch (e) { toast("Couldn’t convert that iPhone photo — try a JPG."); return null; }
+    let dataUrl = null;
+    try { dataUrl = await fileAsPictureDataUrl(file); }
+    catch (e) { toast(isPdfFile(file) ? "Couldn’t read that PDF — try saving the page as a JPG." : "Couldn’t convert that iPhone photo — try a JPG."); return null; }
     let full = null;
     try {
-      const dataUrl = await readFileDataURL(file);
       full = await new Promise((res) => { const im = new Image(); im.onload = () => { try { res(downscale(im, 1400)); } catch (e) { res(null); } }; im.onerror = () => res(null); im.src = dataUrl; });
     } catch (e) {}
     if (!full) toast("Couldn’t read that image");
@@ -4322,7 +4370,7 @@
       openPhotoAdjust(src, async (sq) => { await setTreePicture(p, sq, null, p.photoSrcRef || null); after("Picture repositioned"); });
     });
     if (gal.length) opt("🖼 Choose from their photos", () => { close(); openGalleryPick(p, onChange); });
-    const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*,.heic,.heif"; fileInput.style.display = "none";
+    const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*,.heic,.heif,application/pdf,.pdf"; fileInput.style.display = "none";
     fileInput.onchange = async () => {
       const file = fileInput.files[0]; if (!file) return;
       close();
@@ -4519,7 +4567,7 @@
       const hint = document.createElement("div"); hint.className = "pcard-subhint";
       hint.textContent = "Tap their picture at the top to reposition, change or remove it.";
       s.appendChild(hint);
-      const galInput = document.createElement("input"); galInput.type = "file"; galInput.accept = "image/*,.heic,.heif"; galInput.multiple = true; galInput.style.display = "none";
+      const galInput = document.createElement("input"); galInput.type = "file"; galInput.accept = "image/*,.heic,.heif,application/pdf,.pdf"; galInput.multiple = true; galInput.style.display = "none";
       galInput.onchange = async () => {
         const n = await galleryAdd(p, galInput.files); galInput.value = "";
         closeProfileCard(); openProfileCard(id);
