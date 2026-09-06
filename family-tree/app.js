@@ -3813,8 +3813,13 @@
       // need the pixels here; the stored record is downscaled separately).
       // Obituaries only — a scan of an article/award shouldn't become someone's face.
       let setPic = false;
-      if (docType === "obituary" && !person.photo) {
-        const picSrc = (kind === "image" || kind === "pdf") ? content : fetchedImage;
+      // Only for someone with NO picture at all — an externalised picture is
+      // still a picture (p.photoRef), and missing that is how obituaries came to
+      // overwrite faces. And only from an actual photo: page one of a PDF
+      // obituary is a page of text, not a portrait. The "Use photo from
+      // obituary" button is still there for when it genuinely is one.
+      if (docType === "obituary" && !person.photo && !person.photoRef) {
+        const picSrc = kind === "image" ? content : fetchedImage;
         if (picSrc) { const photo = await imageDataToPhoto(picSrc); if (photo) { person.photo = photo; setPic = true; scheduleSweep(); } }
       }
 
@@ -3887,7 +3892,7 @@
     let changed = false;
     for (const p of state.persons) {
       if (p.photo || p.photoRef || !Array.isArray(p.docs)) continue;
-      const imgDoc = p.docs.find((d) => isObitDoc(d) && (d.kind === "image" || d.kind === "pdf") && (docSrc(d) || d.ref));
+      const imgDoc = p.docs.find((d) => isObitDoc(d) && d.kind === "image" && (docSrc(d) || d.ref));   // a photo, never a PDF page
       if (!imgDoc) continue;
       const photo = await imageDataToPhoto(await docSrcAsync(imgDoc));
       if (photo) { p.photo = photo; changed = true; }
@@ -4481,6 +4486,7 @@
       openPhotoAdjust(src, async (sq) => { await setTreePicture(p, sq, null, p.photoSrcRef || null, false); after("Picture repositioned"); });
     });
     if (gal.length) opt("🖼 Choose from their photos", () => { close(); openGalleryPick(p, onChange); });
+    opt("🔗 Use a photo from a link", () => { close(); openPhotoLink(p, onChange); });
     const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*,.heic,.heif,application/pdf,.pdf"; fileInput.style.display = "none";
     fileInput.onchange = async () => {
       const file = fileInput.files[0]; if (!file) return;
@@ -4503,6 +4509,33 @@
     back.appendChild(m); document.body.appendChild(back);
     back.addEventListener("click", (e) => { if (e.target === back) close(); });
     return back;
+  }
+  // A photo from a link — the fetch runs on the site, so it works on pictures
+  // the browser itself couldn't read. Ends in the same crop editor as every
+  // other route, and the picture it replaces is kept in their gallery.
+  function openPhotoLink(p, onChange) {
+    return openModal("Photo from a link", "Paste a link to a photo — or to a page with a portrait on it.",
+      `<label class="field"><span>Link</span><input type="text" id="plUrl" placeholder="https://…" autocomplete="off" spellcheck="false" /></label>`,
+      (m) => {
+        const url = (m.querySelector("#plUrl").value || "").trim();
+        if (!url) { toast("Paste a link first"); return false; }
+        (async () => {
+          let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+          if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
+          if (!pass) return;
+          try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
+          toast("Fetching the photo…");
+          try {
+            const data = await callArchive({ passcode: pass, url });
+            if (!data || !data.image) return toast("No image found at that link");
+            openPhotoAdjust(data.image, async (sq) => {
+              const kept = await setTreePicture(p, sq, data.image, null, true);
+              toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated");
+              if (onChange) onChange();
+            });
+          } catch (e) { toast(e.message || "Couldn’t fetch that image"); }
+        })();
+      }, "Fetch");
   }
   // Pick one of their gallery photos to become the tree picture, then crop it.
   function openGalleryPick(p, onChange) {
@@ -4884,7 +4917,7 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, viewModesV2: !!state.viewModesV2, picRelink1: !!state.picRelink1, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [], locked: state.locked || {}, portals: state.portals || {}, echoPos: state.echoPos || {}, busOff: state.busOff || {} };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, viewModesV2: !!state.viewModesV2, picRelink1: !!state.picRelink1, obitPicFix1: !!state.obitPicFix1, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [], locked: state.locked || {}, portals: state.portals || {}, echoPos: state.echoPos || {}, busOff: state.busOff || {} };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
@@ -4895,6 +4928,7 @@
       namesSplit: !!obj.namesSplit,
       viewModesV2: !!obj.viewModesV2,
       picRelink1: !!obj.picRelink1,
+      obitPicFix1: !!obj.obitPicFix1,
       views: Array.isArray(obj.views) ? obj.views : [],
       mediaKey: obj.mediaKey || null,
       groups: Array.isArray(obj.groups) ? obj.groups : [],
@@ -5991,6 +6025,19 @@
       });
       state.picRelink1 = true; save();
       if (back) { try { cloudSaveTree(false); } catch (e) {} toast(back === 1 ? "Put a lost picture back" : "Put " + back + " lost pictures back"); }
+    }
+    // One-time repair: attaching a PDF obituary used to overwrite the person's
+    // picture with page one of it. Lloyd's portrait is still in the photo store,
+    // so the link goes back — and only if his picture is still the one the
+    // obituary put there, so a newer picture is never disturbed.
+    if (!readonly && !state.obitPicFix1) {
+      const p = personById("nmrwb8cfchrfg");
+      if (p && p.photoRef === "ms72wq7sm3b") {
+        p.photoRef = "m5cu8shzzvr"; delete p.photo; delete p.photoSrcRef;
+        state.obitPicFix1 = true; save();
+        try { cloudSaveTree(false); } catch (e) {}
+        render(); toast("Put Lloyd's picture back");
+      } else { state.obitPicFix1 = true; save(); }
     }
     if (!readonly && !state.viewModesV2) {
       (state.views || []).forEach((v) => (v.rules || []).forEach((r) => { if (r.mode === "ancestors") r.mode = "direct"; }));
