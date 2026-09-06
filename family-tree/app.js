@@ -751,10 +751,19 @@
   // over their children.
   function centerCoupleOnChildren(u, aNk, bNk) {
     aNk = aNk || u.a; bNk = bNk || u.b;
-    // work in the couple's own context: copies center on the CLUSTER's children
-    const kids = childLinksOfUnion(u.id).map((l) => l.child).filter((id) => personById(id) && inView(id)).map((id) => nkFor(id, aNk));
+    // Work on the children this couple is actually joined to on screen: inside a
+    // repeat, that cluster's copies; on the main tree, whichever appearance hangs
+    // off this family's connector — which for a repeated child is their copy
+    // here, not their main spot somewhere else entirely.
+    const inCluster = isCopyKey(aNk);
+    const kids = childLinksOfUnion(u.id).map((l) => l.child).filter((id) => personById(id) && inView(id))
+      .map((id) => (inCluster ? nkFor(id, aNk) : nkInUnion(id, u.id)));
     if (!kids.length) { toast("This couple has no children to center on"); return; }
     pushUndo();
+    // A repeat that hasn't been dragged sits wherever the family's branch puts
+    // it — which shifts when the couple moves. Pin those where they are first,
+    // so centring lands exactly and pressing it twice changes nothing.
+    kids.forEach((nk) => { if (isCopyKey(nk) && !((state.echoPos || {})[nk])) { const q = nkPos(nk); if (q) (state.echoPos || (state.echoPos = {}))[nk] = { x: q.x, y: q.y }; } });
     const xs = kids.map((nk) => nkPos(nk).x);
     const target = (Math.min(...xs) + Math.max(...xs)) / 2;
     const A = nkPos(aNk), B = nkPos(bNk);
@@ -943,6 +952,14 @@
   const nkSetPos = (nk, q) => { if (isCopyKey(nk)) echoMap()[nk] = q; else posMap()[nk] = q; };
   // The appearance of `pid` in the same context as `likeNk`: inside a copy
   // cluster prefer that cluster's copy of pid; otherwise the main node.
+  // The appearance of `pid` that union `uid` actually DRAWS: its repeat on that
+  // family's branch when there is one, otherwise the main node. The lines on
+  // screen connect these, so this is what the centring tools have to measure —
+  // a child repeated under their parents is metres from their main spot.
+  const nkInUnion = (pid, uid) => {
+    const k = uid + ":" + pid;
+    return (copyPos[k] || (state.echoPos || {})[k]) ? k : pid;
+  };
   const nkFor = (pid, likeNk) => {
     if (likeNk && isCopyKey(likeNk)) {
       const k = likeNk.slice(0, likeNk.indexOf(":") + 1) + pid;
@@ -4483,7 +4500,7 @@
     // thing here rather than something behind another button.
     const linkRow = document.createElement("div"); linkRow.className = "pm-linkrow";
     const linkIn = document.createElement("input"); linkIn.type = "text"; linkIn.id = "pmPhotoUrl";
-    linkIn.placeholder = "Paste a photo link…"; linkIn.autocomplete = "off"; linkIn.spellcheck = false;
+    linkIn.placeholder = "Paste a photo link — or the picture itself"; linkIn.autocomplete = "off"; linkIn.spellcheck = false;
     const linkGo = document.createElement("button"); linkGo.type = "button"; linkGo.className = "btn primary"; linkGo.textContent = "Fetch";
     const runLink = () => {
       const url = (linkIn.value || "").trim();
@@ -4568,11 +4585,13 @@
   // doesn't exist anywhere else and no amount of fetching will find it.
   const linkIsLocalOnly = (url) => /(^|\.)fbcdn\.net|scontent[.-]/i.test(String(url));
   async function fetchPhotoFromLink(p, url, onChange) {
-    if (linkIsLocalOnly(url)) {
-      toast("That Facebook link only works on the device it was copied from. Right-click the photo → Copy image, then paste it here (⌘V / Ctrl-V).");
+    // Whatever goes wrong with a link, the answer is the same and the box is
+    // reopened ready for it: copy the picture itself and paste it in.
+    const askForPaste = (why) => {
+      toast(why + " — right-click the photo → Copy image, then paste it here (⌘V / Ctrl-V).");
       openPhotoMenu(p, onChange);
-      return;
-    }
+    };
+    if (linkIsLocalOnly(url)) { askForPaste("That Facebook link only works on the device it was copied from"); return; }
     let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
     if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
     if (!pass) return;
@@ -4580,13 +4599,13 @@
     toast("Fetching the photo…");
     try {
       const data = await callArchive({ passcode: pass, url });
-      if (!data || !data.image) return toast("No picture found at that link — try the link to the image itself");
+      if (!data || !data.image) return askForPaste("No picture at that link");
       openPhotoAdjust(data.image, async (sq) => {
         const kept = await setTreePicture(p, sq, data.image, null, true);
         toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated");
         if (onChange) onChange();
       });
-    } catch (e) { toast(e.message || "Couldn’t fetch that picture"); }
+    } catch (e) { askForPaste(e.message || "Couldn’t fetch that link"); }
   }
   // Pick one of their gallery photos to become the tree picture, then crop it.
   function openGalleryPick(p, onChange) {
