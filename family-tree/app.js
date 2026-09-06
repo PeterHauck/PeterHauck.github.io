@@ -4470,9 +4470,9 @@
     const m = document.createElement("div"); m.className = "modal photo-menu";
     const h = document.createElement("h2"); h.textContent = "Profile picture"; m.appendChild(h);
     const hint = document.createElement("div"); hint.className = "hint";
-    hint.textContent = "This is the picture that shows on the tree.";
+    hint.textContent = "This is the picture that shows on the tree. You can also paste a picture (⌘V) or drop one here.";
     m.appendChild(hint);
-    const close = () => back.remove();
+    let close = () => back.remove();
     const after = (msg) => { toast(msg); if (onChange) onChange(); };
     const opt = (label, fn, cls) => {
       const b = document.createElement("button"); b.type = "button"; b.className = "btn wide" + (cls ? " " + cls : "");
@@ -4521,6 +4521,40 @@
     const row = document.createElement("div"); row.className = "btn-row";
     const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "Cancel";
     cancel.onclick = close; row.appendChild(cancel); m.appendChild(row);
+    // Paste or drop the picture itself. This is the way in for photos whose
+    // link the site can't follow — a Facebook one, say, whose address only
+    // exists on the network it was copied from. The browser already has the
+    // pixels; nothing has to be fetched.
+    const useFile = async (file) => {
+      if (!file) return;
+      close();
+      const full = await fileAsFullImage(file); if (!full) return;
+      openPhotoAdjust(full, async (sq) => {
+        const kept = await setTreePicture(p, sq, full, null, true);
+        toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated");
+        if (onChange) onChange();
+      });
+    };
+    const onPaste = (e) => {
+      const items = (e.clipboardData && e.clipboardData.items) || [];
+      for (const it of items) {
+        if (it.type && it.type.indexOf("image/") === 0) { e.preventDefault(); useFile(it.getAsFile()); return; }
+      }
+    };
+    document.addEventListener("paste", onPaste);
+    const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+    m.addEventListener("dragover", (e) => { stop(e); m.classList.add("dropping"); });
+    m.addEventListener("dragleave", () => m.classList.remove("dropping"));
+    m.addEventListener("drop", (e) => {
+      stop(e); m.classList.remove("dropping");
+      const dt = e.dataTransfer;
+      const f = dt && dt.files && dt.files[0];
+      if (f) return useFile(f);
+      const u = dt && (dt.getData("text/uri-list") || dt.getData("text/plain"));
+      if (u) { close(); fetchPhotoFromLink(p, u.trim(), onChange); }
+    });
+    const closeAll = close;
+    close = () => { document.removeEventListener("paste", onPaste); closeAll(); };
     back.appendChild(m); document.body.appendChild(back);
     back.addEventListener("click", (e) => { if (e.target === back) close(); });
     if (!has) setTimeout(() => { try { linkIn.focus(); } catch (e) {} }, 0);
@@ -4529,7 +4563,16 @@
   // A photo from a link — the fetch runs on the site, so it works on pictures
   // the browser itself couldn't read. Ends in the same crop editor as every
   // other route, and the picture it replaces is kept in their gallery.
+  // Some picture links only work from the network they were copied on —
+  // Facebook's are served by a cache box inside your own ISP, so its address
+  // doesn't exist anywhere else and no amount of fetching will find it.
+  const linkIsLocalOnly = (url) => /(^|\.)fbcdn\.net|scontent[.-]/i.test(String(url));
   async function fetchPhotoFromLink(p, url, onChange) {
+    if (linkIsLocalOnly(url)) {
+      toast("That Facebook link only works on the device it was copied from. Right-click the photo → Copy image, then paste it here (⌘V / Ctrl-V).");
+      openPhotoMenu(p, onChange);
+      return;
+    }
     let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
     if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
     if (!pass) return;

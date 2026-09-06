@@ -616,6 +616,7 @@ button.btn.tiny.danger { color: var(--divorce); border-color: var(--divorce); }
 .pm-linkrow { display: flex; gap: 6px; margin: 10px 0 2px; }
 .pm-linkrow input { flex: 1; min-width: 0; padding: 8px 9px; border-radius: 8px; border: 1px solid var(--panel-border); background: var(--paper); color: var(--ink); font-size: 14px; }
 .pm-linkrow .btn { flex: none; }
+.photo-menu.dropping { outline: 2px dashed var(--accent); outline-offset: 4px; }
 .pcard-headtext { flex: 1; min-width: 0; padding-top: 2px; }
 .pcard-headtext h2 { margin: 0; font-size: 18px; line-height: 1.2; }
 .pcard-dates { font-size: 13px; color: var(--muted); margin-top: 3px; }
