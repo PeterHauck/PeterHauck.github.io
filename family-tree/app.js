@@ -183,10 +183,21 @@
   const isDeceased = (p) => p.death != null || !!p.deceased;
   function num(v) { const n = parseInt(v, 10); return Number.isFinite(n) ? n : null; }
 
+  // A merge folds in whatever the other copy has, so "I don't have them" and
+  // "I got rid of them" have to be told apart — otherwise a deletion is undone
+  // by the next sync. Every deliberate removal leaves a mark with the time, and
+  // a merge honours marks from either side.
+  const tombs = () => state.removed || (state.removed = {});
+  const tombKey = { person: (id) => "p:" + id, union: (id) => "u:" + id, link: (u, c) => "l:" + u + ">" + c };
+  const isRemoved = (key, map) => !!(map || state.removed || {})[key];
+  function markRemoved(key) { tombs()[key] = Date.now(); }
   function deletePerson(pid) {
+    markRemoved(tombKey.person(pid));
     state.persons = state.persons.filter((p) => p.id !== pid);
     // drop unions & links referencing this person
     const goneUnions = state.unions.filter((u) => u.a === pid || u.b === pid).map((u) => u.id);
+    goneUnions.forEach((id) => markRemoved(tombKey.union(id)));
+    state.links.forEach((l) => { if (l.child === pid || goneUnions.includes(l.union)) markRemoved(tombKey.link(l.union, l.child)); });
     state.unions = state.unions.filter((u) => !goneUnions.includes(u.id));
     state.links = state.links.filter((l) => l.child !== pid && !goneUnions.includes(l.union));
     delete state.manual[pid];
@@ -200,6 +211,8 @@
     return u;
   }
   function deleteUnion(uid_) {
+    markRemoved(tombKey.union(uid_));
+    state.links.forEach((l) => { if (l.union === uid_) markRemoved(tombKey.link(l.union, l.child)); });
     state.unions = state.unions.filter((u) => u.id !== uid_);
     state.links = state.links.filter((l) => l.union !== uid_);
   }
@@ -208,7 +221,11 @@
     if (state.links.some((l) => l.union === unionId && l.child === childId)) return;
     state.links.push({ id: uid(), union: unionId, child: childId, type: type || "bio" });
   }
-  function deleteLink(id) { state.links = state.links.filter((l) => l.id !== id); }
+  function deleteLink(id) {
+    const l = state.links.find((x) => x.id === id);
+    if (l) markRemoved(tombKey.link(l.union, l.child));
+    state.links = state.links.filter((x) => x.id !== id);
+  }
 
   /* ============================================================= LAYOUT */
   /* generation number for every person (0 = oldest at the top) */
@@ -2724,6 +2741,7 @@
     const other = personById(sibId);
     if (!confirm("Remove " + (other ? other.name : "them") + " as a sibling? Both people stay in the tree.")) return;
     pushUndo();
+    markRemoved(tombKey.link(g.id, sibId));
     state.links = state.links.filter((l) => !(l.union === g.id && l.child === sibId));
     refreshRel(pid);
     toast("Sibling removed");
@@ -4987,7 +5005,7 @@
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
   function exportObject() {
-    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, viewModesV2: !!state.viewModesV2, picRelink1: !!state.picRelink1, obitPicFix1: !!state.obitPicFix1, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [], locked: state.locked || {}, portals: state.portals || {}, echoPos: state.echoPos || {}, busOff: state.busOff || {} };
+    return { title: state.title, subtitle: state.subtitle, persons: state.persons, unions: state.unions, links: state.links, manual: state.manual, manualHidden: state.manualHidden || {}, hidden: state.hidden, focus: state.focus, version: state.version || 0, photoMigrated: !!state.photoMigrated, namesSplit: !!state.namesSplit, viewModesV2: !!state.viewModesV2, picRelink1: !!state.picRelink1, obitPicFix1: !!state.obitPicFix1, views: state.views || [], mediaKey: state.mediaKey || null, groups: state.groups || [], locked: state.locked || {}, portals: state.portals || {}, echoPos: state.echoPos || {}, busOff: state.busOff || {}, removed: state.removed || {} };
   }
   function loadObject(obj) {
     state = Object.assign(blankState(), {
@@ -5006,6 +5024,11 @@
       portals: obj.portals && typeof obj.portals === "object" ? obj.portals : {},
       echoPos: obj.echoPos && typeof obj.echoPos === "object" ? obj.echoPos : {},
       busOff: obj.busOff && typeof obj.busOff === "object" ? obj.busOff : {},
+      // deletions are remembered for a season, then forgotten — long enough for
+      // every device to have heard about them
+      removed: (() => { const r = {}, cut = Date.now() - 180 * 864e5;
+        Object.entries((obj.removed && typeof obj.removed === "object") ? obj.removed : {}).forEach(([k, t]) => { if (+t > cut) r[k] = +t; });
+        return r; })(),
     });
   }
   /* -------- local storage: IndexedDB (roomy — holds photos/PDFs), with a
@@ -5611,11 +5634,24 @@
   // has that person — recoverable in a click, unlike losing them.
   function mergeTreeFrom(other) {
     if (!other || !Array.isArray(other.persons)) return null;
-    const sum = { people: 0, unions: 0, links: 0, hidden: 0, fields: 0, views: 0, keepsakes: 0 };
+    const sum = { people: 0, unions: 0, links: 0, hidden: 0, fields: 0, views: 0, keepsakes: 0, removed: 0 };
+    // Both sides' deletions first: anything either copy deliberately removed
+    // stays removed, and a removal the other side made is applied here too.
+    const gone = Object.assign({}, other.removed || {}, state.removed || {});
+    state.removed = gone;
+    Object.keys(other.removed || {}).forEach((k) => {
+      if ((state.removed || {})[k] && !(other.removed || {})[k]) return;
+      if (k.startsWith("p:")) { const id = k.slice(2); if (state.persons.some((p) => p.id === id)) { deletePerson(id); sum.removed++; } }
+      else if (k.startsWith("u:")) { const id = k.slice(2); if (state.unions.some((u) => u.id === id)) { deleteUnion(id); sum.removed++; } }
+      else if (k.startsWith("l:")) { const i = k.indexOf(">"); const uu = k.slice(2, i), cc = k.slice(i + 1);
+        const before = state.links.length; state.links = state.links.filter((l) => !(l.union === uu && l.child === cc));
+        if (state.links.length !== before) sum.removed++; }
+    });
     const mine = {}; state.persons.forEach((p) => (mine[p.id] = p));
     // people: everyone they have that we don't
     other.persons.forEach((o) => {
       if (!o || !o.id) return;
+      if (gone[tombKey.person(o.id)]) return;            // deliberately removed — don't bring them back
       const p = mine[o.id];
       if (!p) { state.persons.push(JSON.parse(JSON.stringify(o))); mine[o.id] = o; sum.people++; return; }
       // shared person: fill in anything we're missing, never overwrite
@@ -5629,10 +5665,10 @@
     sum.keepsakes = mergeKeepsakes(other) || 0;
     // families and the links between them
     const haveU = new Set(state.unions.map((u) => u.id));
-    (other.unions || []).forEach((u) => { if (u && u.id && !haveU.has(u.id)) { state.unions.push(u); haveU.add(u.id); sum.unions++; } });
+    (other.unions || []).forEach((u) => { if (u && u.id && !haveU.has(u.id) && !gone[tombKey.union(u.id)]) { state.unions.push(u); haveU.add(u.id); sum.unions++; } });
     const lkey = (l) => l.union + ">" + l.child;
     const haveL = new Set(state.links.map(lkey));
-    (other.links || []).forEach((l) => { if (l && l.union && !haveL.has(lkey(l))) { state.links.push(l); haveL.add(lkey(l)); sum.links++; } });
+    (other.links || []).forEach((l) => { if (l && l.union && !haveL.has(lkey(l)) && !gone[tombKey.link(l.union, l.child)] && !gone[tombKey.union(l.union)] && !gone[tombKey.person(l.child)]) { state.links.push(l); haveL.add(lkey(l)); sum.links++; } });
     // things switched ON stay on, whichever copy switched them
     const flags = (name) => {
       const ours = state[name] || (state[name] = {}), theirs = other[name] || {};
@@ -5648,7 +5684,7 @@
     const haveV = new Set((state.views || []).map((v) => v.id));
     (other.views || []).forEach((v) => { if (v && v.id && !haveV.has(v.id)) { (state.views || (state.views = [])).push(v); haveV.add(v.id); sum.views++; } });
     if (!state.groups || !state.groups.length) state.groups = other.groups || state.groups;
-    sum.total = sum.people + sum.unions + sum.links + sum.hidden + sum.fields + sum.views + sum.keepsakes;
+    sum.total = sum.people + sum.unions + sum.links + sum.hidden + sum.fields + sum.views + sum.keepsakes + sum.removed;
     return sum;
   }
   const mergeSummary = (sum) => [
