@@ -5374,6 +5374,50 @@
     if (!ownerCanCloud()) return newer;
     return newer && dirtyFlag !== "1" && (synced > 0 || dirtyFlag === "0");
   }
+  // Bring this device and the site into step, in one move and without either
+  // side winning: take the site's copy, fold in anything this device has that
+  // it lacks, and push the result back only if there WAS something to fold in.
+  // Both devices end up showing the same tree, which is the whole point — and
+  // because the merge only ever adds, it doesn't matter which one ran last.
+  let reconciling = false;
+  async function reconcileWithCloud(manual) {
+    if (reconciling) return false;
+    if (readonly && !ownerCanCloud()) return await syncFromCloudIfNewer(!manual);   // a viewer just reads
+    if (!CLOUD_ON() && !ownerCanCloud()) return false;
+    reconciling = true;
+    try {
+      const info = await cloudTreeInfo();
+      if (!info || !info.exists) return false;
+      let base = 0, dirty = "";
+      try { base = +(localStorage.getItem("familyTree.baseVersion") || 0) || 0; dirty = localStorage.getItem("familyTree.cloudDirty") || ""; } catch (e) {}
+      if (info.savedAt === base && dirty !== "1") return false;         // already in step
+      const cp = await fetchCloudPayload();
+      if (!cp || !cp.payload) return false;
+      const r = await decryptWithKnown(cp.payload);
+      if (!r) return false;                                             // can't open it: leave well alone
+      const mine = hasLocalData() || state.persons.length ? exportObject() : null;
+      loadObject(r.obj);
+      // A tree's name and subtitle are single values — there's no unioning them,
+      // so this device's own wording stands and travels up with the save.
+      if (mine && mine.title && mine.title !== state.title) state.title = mine.title;
+      if (mine && mine.subtitle && mine.subtitle !== state.subtitle) state.subtitle = mine.subtitle;
+      setBaseVersion(cp.savedAt || info.savedAt);
+      try { localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || info.savedAt)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
+      const sum = mine ? mergeTreeFrom(mine) : null;
+      try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}
+      try { localStorage.setItem(STORE_KEY, JSON.stringify(localData)); } catch (e) {}
+      autoLayout(); render();
+      if (sum && sum.total) {
+        // this device had something the site didn't — send the reconciled copy up
+        save();
+        if (manual) toast("Brought together with your site — kept " + mergeSummary(sum));
+        else toast("Synced — kept " + mergeSummary(sum) + " from this device");
+      } else if (manual) toast("Up to date with your site");
+      else toast("Updated to the latest from your site");
+      return true;
+    } catch (e) { return false; }
+    finally { reconciling = false; }
+  }
   async function syncFromCloudIfNewer(background) {
     const info = await cloudTreeInfo();
     if (!info || !info.exists) return false;
@@ -5404,6 +5448,8 @@
   let refreshingBg = false;
   async function backgroundRefresh() {
     if (refreshingBg || document.hidden) return;
+    // An owner reconciles (theirs + ours); a viewer just takes what's there.
+    if (ownerCanCloud()) { refreshingBg = true; try { await reconcileWithCloud(false); } finally { refreshingBg = false; } return; }
     refreshingBg = true;
     try {
       const info = await cloudTreeInfo();
@@ -5929,7 +5975,11 @@
 
   /* wire toolbar + buttons */
   $("#tbFit").onclick = fitView;
-  { const sb = $("#tbSync"); if (sb) sb.onclick = forcePullFromCloud; }
+  { const sb = $("#tbSync"); if (sb) sb.onclick = () => {
+      if (!ownerCanCloud()) return forcePullFromCloud();          // viewers: straight pull
+      toast("Checking your site…");
+      reconcileWithCloud(true).then((did) => { if (!did) toast("Up to date with your site"); }).catch(() => forcePullFromCloud());
+    }; }
   // Re-pull the latest when you return to the tab or a phone restores a frozen
   // page — keeps the view current without a manual refresh.
   document.addEventListener("visibilitychange", () => {
@@ -6720,12 +6770,7 @@
     // copy shows instantly, and if the cloud turns out to have something newer
     // it's swapped in (and re-drawn) seconds later.
     if (hasLocalData()) {
-      setTimeout(async () => {
-        try {
-          const r = await syncFromCloudIfNewer(true);
-          if (r === true) { autoLayout(); render(); toast("Updated to the latest from your site"); }
-        } catch (e) {}
-      }, 250);
+      setTimeout(() => { reconcileWithCloud(false).catch(() => {}); }, 250);
     }
     // The published tree can come from a committed family-data.js OR the cloud
     // copy (Vercel Blob) — so the family view and cross-device editing work with
@@ -6768,30 +6813,10 @@
     // moved past what this device last synced, don't blind-push over it — ask.
     if (ownerCanCloud()) {
       let dirty = ""; try { dirty = localStorage.getItem("familyTree.cloudDirty") || ""; } catch (e) {}
-      if (dirty === "1") setTimeout(async () => {
-        let synced = 0, dirtyAt = 0;
-        try { synced = +(localStorage.getItem("familyTree.cloudSavedAt") || 0); dirtyAt = +(localStorage.getItem("familyTree.dirtyAt") || 0); } catch (e) {}
-        const info = await cloudTreeInfo();
-        // Conflict (both this device and the cloud moved since our last sync):
-        // resolve AUTOMATICALLY — the most recently edited side wins, and the
-        // losing copy is always retained (the cloud keeps its last versions;
-        // this device stashes a local backup) so nothing can be destroyed.
-        if (info && info.exists && info.savedAt > synced && info.savedAt > dirtyAt) {
-          try { await idbSet("tree.v1.conflictBackup", exportObject()); } catch (e) {}
-          const cp = await fetchCloudPayload();
-          const r = cp && cp.payload ? await decryptWithKnown(cp.payload) : null;
-          if (r) {
-            loadObject(r.obj);
-            try { localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || info.savedAt)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
-            setBaseVersion(cp.savedAt || info.savedAt);
-            try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}
-            autoLayout(); render();
-            toast("Synced to the latest from your site");
-            return;
-          }
-        }
-        cloudSaveTree(false);   // our edits are newest (or the cloud copy is unreadable) — push
-      }, 1200);
+      // Unsynced edits from a previous visit: bring the two copies together
+      // rather than picking a winner — the merge keeps whatever either side has,
+      // and the save that follows is version-checked.
+      if (dirty === "1") setTimeout(() => { reconcileWithCloud(false).catch(() => {}); }, 1200);
     }
   }
 
