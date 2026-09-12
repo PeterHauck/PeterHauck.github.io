@@ -186,54 +186,32 @@
             <button type="button" class="btn small" id="personEditBtn" title="Edit their details" hidden>✏️ Edit</button>
           </div>
           <!-- Their profile, at a glance. The pencil above swaps in the form. -->
-          <div id="personView" hidden>
-            <div id="pvHead"></div>
-          <div id="notesSection" style="margin:4px 0 12px" hidden>
-            <label class="field"><span>Private notes</span></label>
-            <div id="notesView" class="notes-view"></div>
-            <button type="button" class="btn" id="notesEditBtn">✏️ Edit notes</button>
-            <div id="notesEditBox" hidden>
-              <textarea id="notesText" rows="5" placeholder="Notes only you can see — things you hear about them, leads to chase down…"></textarea>
-              <div class="btn-row" style="margin-top:6px">
-                <button type="button" class="btn" id="notesCancelBtn">Cancel</button>
-                <button type="button" class="btn primary" id="notesSaveBtn">Save notes</button>
-              </div>
-            </div>
-            <p class="hint" style="margin-top:4px">Private — never shown to family viewers.</p>
-          </div>
-            <div id="pvPhotos">
-              <label class="field"><span>Photos</span></label>
-            <div id="galleryBox" style="margin-top:10px">
-              <label class="field"><span>More photos</span></label>
-              <div id="galleryStrip"></div>
-              <input type="file" id="galleryInput" accept="image/*,.heic,.heif,application/pdf,.pdf" multiple hidden />
-              <button type="button" class="btn" id="galleryAddBtn">🖼 Add photos</button>
-              <p class="hint" style="margin-top:4px">★ makes one the tree picture · ✕ removes it · tap to enlarge</p>
-            </div>
-            </div>
-          <div id="relSection" style="margin:4px 0 12px" hidden>
-            <label class="field"><span>Relationships</span></label>
-            <ul class="rel-list" id="relList"></ul>
-            <p class="hint" style="margin-top:4px">Everyone this person is directly connected to. Click a name to jump to them; change the relationship word to edit it.</p>
-          </div>
-          <div id="docsSection" style="margin:4px 0 12px">
-            <label class="field"><span>Obituaries &amp; records</span></label>
-            <ul class="docs-list" id="docsList"></ul>
-            <button type="button" class="btn" id="addDocBtn">📄 Attach obituary / record</button>
-            <button type="button" class="btn" id="obitPhotoBtn" hidden style="margin-top:6px">📷 Use photo from obituary</button>
-            <button type="button" class="btn" id="obitDatesBtn" hidden style="margin-top:6px">📅 Read birth &amp; death dates from obituary</button>
-            <p class="hint" id="docsHint" style="margin-top:6px"></p>
-          </div>
-          </div>
+          <div id="pvHead"></div>
           <form id="personForm" hidden>
             <input type="hidden" id="personId" />
             <input type="hidden" id="pName" />
-            <div class="row2">
-              <label class="field"><span>First name</span><input type="text" id="pFirst" placeholder="Mary" required /></label>
-              <label class="field"><span>Middle name</span><input type="text" id="pMiddle" placeholder="Ann" /></label>
+            <div class="form-top">
+              <div class="form-photo">
+                <div class="photo-drop" id="photoDrop"><span class="pd-label" id="photoDropLabel">＋<br/>Photo<br/>or PDF</span>
+                  <img class="photo-preview" id="photoPreview" hidden />
+                </div>
+                <input type="file" id="photoInput" accept="image/*,.heic,.heif,application/pdf,.pdf" hidden />
+              </div>
+              <div class="form-names">
+                <label class="field"><span>First name</span><input type="text" id="pFirst" placeholder="Mary" required /></label>
+                <label class="field"><span>Last name</span><input type="text" id="pLast" placeholder="Hauck" /></label>
+              </div>
+            </div>
+            <div class="btn-row photo-acts">
+              <button type="button" class="btn" id="photoAdjustBtn" hidden>✥ Adjust photo</button>
+              <button type="button" class="btn danger" id="photoClear" hidden>Remove photo</button>
+            </div>
+            <div class="photo-link">
+              <input type="text" id="photoUrl" placeholder="…or paste an image link" />
+              <button type="button" class="btn" id="photoUrlBtn">Fetch</button>
             </div>
             <div class="row2">
-              <label class="field"><span>Last name</span><input type="text" id="pLast" placeholder="Hauck" /></label>
+              <label class="field"><span>Middle name</span><input type="text" id="pMiddle" placeholder="Ann" /></label>
               <label class="field"><span>Suffix</span><input type="text" id="pSuffix" placeholder="Jr., III, …" /></label>
             </div>
             <div class="row2">
@@ -282,20 +260,6 @@
               <button type="button" data-sex="unknown">
                 <svg viewBox="-20 -20 40 40"><polygon points="0,-17 17,0 0,17 -17,0"/></svg>Unknown</button>
             </div>
-            <div style="margin:12px 0">
-              <div class="photo-drop" id="photoDrop">Click to upload a photo or PDF<br/><span class="hint">(cropped to the person's shape)</span>
-                <img class="photo-preview" id="photoPreview" hidden />
-              </div>
-              <input type="file" id="photoInput" accept="image/*,.heic,.heif,application/pdf,.pdf" hidden />
-              <div style="display:flex;gap:6px;margin-top:6px">
-                <input type="text" id="photoUrl" placeholder="…or paste an image link" style="flex:1;min-width:0" />
-                <button type="button" class="btn" id="photoUrlBtn">Fetch</button>
-              </div>
-              <div class="btn-row" style="margin-top:6px">
-                <button type="button" class="btn" id="photoAdjustBtn" hidden>✥ Adjust photo</button>
-                <button type="button" class="btn danger" id="photoClear" hidden>Remove photo</button>
-              </div>
-            </div>
             <div id="siblingRow" style="margin:2px 0 12px">
               <label class="field"><span>Order among siblings</span></label>
               <div class="btn-row">
@@ -318,6 +282,45 @@
               <button type="button" class="btn danger" id="personDelete" hidden>Delete</button>
             </div>
           </form>
+          <!-- Notes, photos, relationships and records: the same below either face. -->
+          <div id="personView" hidden>
+          <div id="notesSection" style="margin:4px 0 12px" hidden>
+            <label class="field"><span>Private notes</span></label>
+            <div id="notesView" class="notes-view"></div>
+            <button type="button" class="btn" id="notesEditBtn">✏️ Edit notes</button>
+            <div id="notesEditBox" hidden>
+              <textarea id="notesText" rows="5" placeholder="Notes only you can see — things you hear about them, leads to chase down…"></textarea>
+              <div class="btn-row" style="margin-top:6px">
+                <button type="button" class="btn" id="notesCancelBtn">Cancel</button>
+                <button type="button" class="btn primary" id="notesSaveBtn">Save notes</button>
+              </div>
+            </div>
+            <p class="hint" style="margin-top:4px">Private — never shown to family viewers.</p>
+          </div>
+            <div id="pvPhotos">
+              <label class="field"><span>Photos</span></label>
+            <div id="galleryBox" style="margin-top:10px">
+              <label class="field"><span>More photos</span></label>
+              <div id="galleryStrip"></div>
+              <input type="file" id="galleryInput" accept="image/*,.heic,.heif,application/pdf,.pdf" multiple hidden />
+              <button type="button" class="btn" id="galleryAddBtn">🖼 Add photos</button>
+              <p class="hint" style="margin-top:4px">★ makes one the tree picture · ✕ removes it · tap to enlarge</p>
+            </div>
+            </div>
+          <div id="relSection" style="margin:4px 0 12px" hidden>
+            <label class="field"><span>Relationships</span></label>
+            <ul class="rel-list" id="relList"></ul>
+            <p class="hint" style="margin-top:4px">Everyone this person is directly connected to. Click a name to jump to them; change the relationship word to edit it.</p>
+          </div>
+          <div id="docsSection" style="margin:4px 0 12px">
+            <label class="field"><span>Obituaries &amp; records</span></label>
+            <ul class="docs-list" id="docsList"></ul>
+            <button type="button" class="btn" id="addDocBtn">📄 Attach obituary / record</button>
+            <button type="button" class="btn" id="obitPhotoBtn" hidden style="margin-top:6px">📷 Use photo from obituary</button>
+            <button type="button" class="btn" id="obitDatesBtn" hidden style="margin-top:6px">📅 Read birth &amp; death dates from obituary</button>
+            <p class="hint" id="docsHint" style="margin-top:6px"></p>
+          </div>
+          </div>
         </div>
 
         <div class="section editor-only">

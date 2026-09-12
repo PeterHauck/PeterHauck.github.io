@@ -192,6 +192,21 @@ button.btn.danger { color: var(--divorce); }
 .photo-drop:hover { border-color: var(--accent); }
 .photo-preview { width: 64px; height: 64px; border-radius: 8px; object-fit: cover; margin: 8px auto 0; display: block; }
 
+/* The form leads with the same things the profile does: picture, name, dates. */
+.form-top { display: flex; gap: 12px; align-items: flex-start; margin: 10px 0; }
+.form-photo { width: 94px; flex: none; }
+.form-photo .photo-drop {
+  position: relative; height: 94px; padding: 6px; line-height: 1.3; overflow: hidden;
+  font-size: 11.5px; display: flex; align-items: center; justify-content: center;
+}
+.form-photo .photo-preview { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; border-radius: 8px; }
+.form-names { flex: 1; min-width: 0; }
+.form-names label.field { margin-bottom: 8px; }
+.form-names label.field:last-child { margin-bottom: 0; }
+.photo-acts { margin: 0 0 8px; }
+.photo-link { display: flex; gap: 6px; margin: 0 0 14px; }
+.photo-link input { flex: 1; min-width: 0; }
+
 .hint { font-size: 12px; color: var(--muted); line-height: 1.5; }
 .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:var(--paper); border:1px solid var(--panel-border); font-size:11px; }
 
