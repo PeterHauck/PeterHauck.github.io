@@ -115,10 +115,16 @@
   /* ================================================================ MODEL */
   // Name parts <-> the display string on the tree.
   // Display order: First [Middle] ["Nickname"] [(Maiden)] Last [Suffix].
+  // A middle name that is only an initial is written with a period after it,
+  // wherever the name is shown. The period is never kept in the field itself,
+  // so it can't end up doubled.
+  const middleInitial = (m) => /^[A-Za-z]\.?$/.test(String(m || "").trim());
+  const middleForDisplay = (m) => (middleInitial(m) ? String(m).trim().charAt(0).toUpperCase() + "." : m);
+  const middleAsTyped = (m) => (middleInitial(m) ? String(m).trim().charAt(0).toUpperCase() : String(m || "").trim());
   function composeName(p) {
     const bits = [];
     if (p.first) bits.push(p.first);
-    if (p.middle) bits.push(p.middle);
+    if (p.middle) bits.push(middleForDisplay(p.middle));
     if (p.nickname) bits.push('"' + p.nickname + '"');
     if (p.maiden) bits.push("(" + p.maiden + ")");
     if (p.last) bits.push(p.last);
@@ -155,8 +161,9 @@
   function nameParts(d) {
     const has = d.first || d.middle || d.last || d.nickname || d.maiden || d.suffix;
     const parts = has
-      ? { first: d.first || "", middle: d.middle || "", last: d.last || "", nickname: d.nickname || "", maiden: d.maiden || "", suffix: d.suffix || "" }
+      ? { first: d.first || "", middle: middleAsTyped(d.middle), last: d.last || "", nickname: d.nickname || "", maiden: d.maiden || "", suffix: d.suffix || "" }
       : parseName(d.name || "");
+    parts.middle = middleAsTyped(parts.middle);
     parts.name = composeName(parts) || String(d.name || "").trim() || "Unnamed";
     return parts;
   }
@@ -881,6 +888,74 @@
   }
   // Evenly distribute the selected people: leftmost and rightmost stay put,
   // everyone between them gets equal spacing (each keeps their own row).
+  // When they were born, for sorting: the exact date when there is one, else
+  // the year. Nobody with neither can be placed, so they keep their own order.
+  const birthKey = (p) => {
+    if (!p) return null;
+    if (p.birthDate) { const t = Date.parse(p.birthDate + "T12:00:00"); if (!isNaN(t)) return t; }
+    return p.birth != null ? Date.UTC(p.birth, 0, 1) : null;
+  };
+  // Put a row of brothers and sisters in the order they were born — oldest on
+  // the left — without moving the family along the row or changing how much
+  // room it takes up. Anyone married travels with their spouse: the two of them
+  // are one block that keeps its own spacing, so a husband and wife are never
+  // split up by the sort. People with no birth year keep their order, at the end.
+  function arrangeBirthOrder() {
+    const ids = [...selection].filter((nk) => personById(pidOf(nk)));
+    if (ids.length < 2) { toast("Select the brothers and sisters you want put in birth order"); return; }
+    const u = commonParentUnion(ids);
+    const sibs = new Set(u ? childLinksOfUnion(u.id).map((l) => l.child) : []);
+    const taken = new Set();
+    const blocks = [];
+    ids.slice().sort((a, b) => nkPos(a).x - nkPos(b).x).forEach((nk) => {
+      if (taken.has(nk)) return;
+      const pid = pidOf(nk);
+      if (sibs.size && !sibs.has(pid)) return;    // married in: sorted by their partner's birthday, not their own
+      taken.add(nk);
+      const me = nkPos(nk);
+      const members = [{ nk, p: me }];
+      unionsOfPerson(pid).forEach((uu) => {
+        const oid = uu.a === pid ? uu.b : uu.a;
+        if (oid == null || !personById(oid) || !inView(oid) || sibs.has(oid)) return;
+        const onk = nkFor(oid, nk);
+        if (!onk || taken.has(onk)) return;
+        const q = nkPos(onk);
+        if (!q || Math.abs(q.y - me.y) > ROWH * 0.55) return;    // a spouse standing elsewhere isn't part of this block
+        taken.add(onk);
+        members.push({ nk: onk, p: q });
+      });
+      blocks.push({ pid, members,
+        left: Math.min(...members.map((m) => m.p.x)),
+        right: Math.max(...members.map((m) => m.p.x)),
+        key: birthKey(personById(pid)) });
+    });
+    if (blocks.length < 2) { toast("Select two or more brothers and sisters from the same family"); return; }
+    // Keep the row's own rhythm: the gaps between neighbours are reused in
+    // place, so only WHO stands where changes.
+    const inX = blocks.slice().sort((a, b) => a.left - b.left);
+    const gaps = [];
+    for (let i = 1; i < inX.length; i++) gaps.push(inX[i].left - inX[i - 1].right);
+    const order = blocks.slice().sort((a, b) => {
+      if (a.key == null && b.key == null) return a.left - b.left;
+      if (a.key == null) return 1;
+      if (b.key == null) return -1;
+      return a.key - b.key || a.left - b.left;
+    });
+    const moves = [];
+    let x = inX[0].left;
+    order.forEach((blk, i) => {
+      const dx = x - blk.left;
+      blk.members.forEach((m) => moves.push({ id: m.nk, x: m.p.x + dx, y: m.p.y, dx }));
+      x += (blk.right - blk.left) + (gaps[i] != null ? gaps[i] : COLW);
+    });
+    if (!moves.some((m) => Math.abs(m.dx) > 0.5)) { toast("They're already in birth order"); return; }
+    pushUndo();
+    applyToolMoves(moves, moves.map((m) => m.id));
+    save(); render();
+    const unknown = blocks.filter((b) => b.key == null).length;
+    toast("Put " + blocks.length + " in birth order, oldest on the left"
+      + (unknown ? " — " + unknown + " with no birth year kept at the end" : "") + " (Cmd+Z to undo)");
+  }
   function distributeSelection() {
     const ids = [...selection].filter((nk) => personById(pidOf(nk)));
     if (ids.length < 3) { toast("Select at least three people to space evenly"); return; }
@@ -1031,7 +1106,9 @@
       { const b = btn("⇔ Snap wide", () => snapChainSpacing("couple")); b.title = "Hotkey: W"; }
     }
     if (cu && childLinksOfUnion(cu.id).length) { const b = btn("⌖ Center on children", () => centerCoupleOnChildren(cu, ids.find((k) => pidOf(k) === cu.a), ids.find((k) => pidOf(k) === cu.b))); b.title = "Hotkey: K"; }
-    if (commonParentUnion(ids)) { const b = btn("⌖ Center on parents", centerSelectionOnParents); b.title = "Hotkey: P"; }
+    const cpu = commonParentUnion(ids);
+    if (cpu) { const b = btn("⌖ Center on parents", centerSelectionOnParents); b.title = "Hotkey: P"; }
+    if (cpu && ids.length >= 2) { const b = btn("🎂 Birth order", arrangeBirthOrder); b.title = "Oldest to youngest, left to right — a husband and wife stay side by side. Hotkey: B"; }
     if (ids.length >= 3) btn("↔ Space evenly", distributeSelection);
     if (ids.some((id) => !isLocked(id))) btn("🔒 Lock", () => {
       if (!state.locked) state.locked = {};
@@ -1502,36 +1579,88 @@
   // 🔒 Locked people shift too: a lock protects someone's PLACE IN THE LAYOUT
   // from arranging tools — when the whole tree slides over to make room for a
   // new person, locked people must ride along or the layout tears around them.
-  function makeRoomAt(x, width, exceptIds) {
-    visiblePersons().forEach((p) => {
-      if (exceptIds && exceptIds.has(p.id)) return;
-      const q = posOf(p.id);
-      if (q.x >= x) posMap()[p.id] = { x: q.x + width, y: q.y };
-    });
+  const MINGAP = COLW * 0.85;   // the closest two people are ever placed
+  // Everyone standing on one row, nearest first, walking outward from x.
+  function rowOutward(x, y, id, dir) {
+    return visiblePersons()
+      .filter((p) => p.id !== id && Math.abs(posOf(p.id).y - y) < ROWH * 0.55)
+      .map((p) => ({ id: p.id, x: posOf(p.id).x }))
+      .filter((m) => (dir > 0 ? m.x > x : m.x < x))
+      .sort((a, b) => (dir > 0 ? a.x - b.x : b.x - a.x));
+  }
+  // Make room for somebody at x — by moving as little as possible. Only people
+  // on THAT ROW move (the rows below keep their own arrangement), only in the
+  // direction the newcomer came from, and only until the shift is swallowed by
+  // the first gap wide enough to take it. So the spacing people already have is
+  // kept: nobody is pushed who didn't have to be, and nobody is left overlapping.
+  function openRowSlot(x, y, id, dir) {
+    const row = rowOutward(x, y, id, dir);
+    if (!row.length) return;
+    let push = MINGAP - Math.abs(row[0].x - x);
+    if (push <= 0.5) return;                       // there was room here after all
+    for (let i = 0; i < row.length && push > 0.5; i++) {
+      const q = posOf(row[i].id);
+      posMap()[row[i].id] = { x: row[i].x + dir * push, y: q.y };
+      const next = row[i + 1];
+      if (!next) break;
+      const slack = Math.abs(next.x - row[i].x) - MINGAP;   // what the next gap can absorb
+      push = Math.max(0, push - Math.max(0, slack));
+    }
+  }
+  // The couple whose marriage line runs across a spot. Standing there cuts their
+  // line in two and reads as if the newcomer were part of the couple.
+  function coupleAcross(x, y, id, exceptIds) {
+    return state.unions.find((u) => {
+      if (u.a == null || u.b == null) return false;
+      if (u.a === id || u.b === id) return false;
+      if (exceptIds && (exceptIds.has(u.a) || exceptIds.has(u.b))) return false;
+      if (!personById(u.a) || !personById(u.b) || !inView(u.a) || !inView(u.b)) return false;
+      const A = posOf(u.a), B = posOf(u.b);
+      if (Math.abs(A.y - y) > ROWH * 0.55 || Math.abs(B.y - y) > ROWH * 0.55) return false;
+      return x > Math.min(A.x, B.x) && x < Math.max(A.x, B.x);
+    }) || null;
+  }
+  // Step a spot clear of any marriage line it lands inside, carrying on in the
+  // direction the newcomer was headed.
+  function clearOfCouples(x, y, id, dir) {
+    for (let i = 0; i < 8; i++) {
+      const u = coupleAcross(x, y, id, null);
+      if (!u) break;
+      const A = posOf(u.a), B = posOf(u.b);
+      x = dir < 0 ? Math.min(A.x, B.x) - COLW : Math.max(A.x, B.x) + COLW;
+    }
+    return x;
   }
   const spotOccupied = (x, y, exceptId) => visiblePersons().some((p) => p.id !== exceptId && Math.abs(posOf(p.id).x - x) < COLW * 0.85 && Math.abs(posOf(p.id).y - y) < ROWH * 0.55);
   // Pin `id` at (x,y); if that spot is taken, open room by shifting the right side over.
   // Linking someone who is already on the canvas must never teleport them: pin
   // the spot they are standing on before the structure changes underneath.
   function pinInPlace(id) { if (id && !isManual(id) && personById(id)) { const q = posOf(id); posMap()[id] = { x: q.x, y: q.y }; } }
-  function placeAt(id, x, y) {
-    if (spotOccupied(x, y, id)) makeRoomAt(x - COLW * 0.5, COLW, new Set([id]));
+  function placeAt(id, x, y, dir) {
+    const d = dir == null ? 1 : dir;
+    x = clearOfCouples(x, y, id, d);
+    // Someone standing just BEHIND the spot (the person we were added from,
+    // usually): step forward off them rather than landing on top of them.
+    const back = rowOutward(x, y, id, -d)[0];
+    if (back && Math.abs(back.x - x) < MINGAP) { x = back.x + d * MINGAP; x = clearOfCouples(x, y, id, d); }
+    if (spotOccupied(x, y, id)) {
+      openRowSlot(x, y, id, d);
+      x = clearOfCouples(x, y, id, d);   // the gap that opened may still sit inside a couple
+    }
     posMap()[id] = { x, y };
   }
   const isManual = (id) => !!(id && posMap()[id]);
   // A new child goes next to the rightmost sibling (same row), or — if the first —
-  // centred one row below the parents. Only pins a spot when that family is
-  // MANUALLY arranged; for a purely auto-laid-out family, auto-layout already
-  // places siblings correctly, so we leave the newcomer to it.
+  // centred one row below the parents. Always pinned somewhere sensible: a
+  // newcomer left to auto-layout can land rows away from the family they were
+  // just added to.
   function placeNewChild(u, childId) {
     const sibs = childLinksOfUnion(u.id).map((l) => l.child).filter((c) => c !== childId && personById(c) && inView(c));
     if (sibs.length) {
       const right = sibs.reduce((r, c) => (posOf(c).x > posOf(r).x ? c : r), sibs[0]);
-      if (!isManual(right)) return;
       const rp = posOf(right); placeAt(childId, rp.x + COLW, rp.y);
     } else {
       if (u.a == null) return;   // a sibling group has nobody to sit under
-      if (!isManual(u.a) && !isManual(u.b)) return;
       const A = posOf(u.a), B = u.b != null ? posOf(u.b) : null;
       const x = B ? (A.x + B.x) / 2 : A.x;
       const y = (B ? Math.max(A.y, B.y) : A.y) + ROWH;
@@ -1560,25 +1689,80 @@
 
   // ---- shared add-a-relative actions (used by the tree + menu and the profile) ----
   const guessSpouseSex = (p) => (p && p.sex === "male") ? "female" : (p && p.sex === "female") ? "male" : "unknown";
+  // Nobody alive was born much more than 130 years ago. A blank person added
+  // next to people with dates can be placed in time from the family around
+  // them — a parent is at least 20 years older than their oldest child, a child
+  // is born within about 50 years of their parents, a husband or wife within
+  // about 25 of their spouse — and anyone who would be older than that is
+  // marked deceased on the spot.
+  const GEN_MIN = 20, GEN_MAX = 50, SPOUSE_SPAN = 25, OLDEST_LIVING = 130;
+  function latestBirthYear(p) {
+    if (!p) return null;
+    if (p.birth != null) return p.birth;
+    const bounds = [];
+    unionsOfPerson(p.id).forEach((u) => {
+      childLinksOfUnion(u.id).forEach((l) => {
+        const c = personById(l.child);
+        if (c && c.birth != null) bounds.push(c.birth - GEN_MIN);      // older than their oldest child
+      });
+      const oid = u.a === p.id ? u.b : u.a;
+      const o = oid && personById(oid);
+      if (o && o.birth != null) bounds.push(o.birth + SPOUSE_SPAN);    // near enough their spouse's age
+    });
+    parentLinksOfPerson(p.id).forEach((l) => {
+      const u = unionById(l.union); if (!u) return;
+      [u.a, u.b].forEach((pid) => {
+        const q = pid && personById(pid);
+        if (q && q.birth != null) bounds.push(q.birth + GEN_MAX);      // born while their parents still could
+      });
+    });
+    return bounds.length ? Math.min(...bounds) : null;
+  }
+  function markLongGone(p) {
+    if (!p || isDeceased(p)) return false;
+    const y = latestBirthYear(p);
+    if (y == null || new Date().getFullYear() - y <= OLDEST_LIVING) return false;
+    p.deceased = true;
+    return true;
+  }
   // Focus a freshly-added blank person so you can just type their name and Save.
   function focusNewPerson(np, msg) {
+    const gone = markLongGone(np);
     selectedId = np.id;
     relayoutAndSave();
-    ensurePanel(); fillPersonForm(np);
+    ensurePanel(); fillPersonForm(np); showPersonForm(np);
     const nameEl = $("#pFirst"); if (nameEl) { nameEl.focus(); nameEl.select(); }
-    toast(msg || "Added — type their name and Save");
+    toast((msg || "Added — type their name and Save") + (gone ? " · marked deceased (born well over " + OLDEST_LIVING + " years ago)" : ""));
   }
 
+  // Somebody standing alone as a parent has an empty seat beside them in that
+  // family. A spouse added to them is nearly always the other parent, so they
+  // take that seat instead of starting a separate marriage — unless a child
+  // there already has a second parent somewhere else.
+  function soloParentSeat(personId) {
+    return unionsOfPerson(personId).find((u) => {
+      if (u.b != null || u.a !== personId) return false;
+      const kids = childLinksOfUnion(u.id).map((l) => l.child).filter((c) => personById(c));
+      if (!kids.length) return false;
+      return kids.every((c) => parentLinksOfPerson(c).every((l) => {
+        const uu = unionById(l.union);
+        return !uu || uu.id === u.id || uu.a == null || uu.b == null;
+      }));
+    }) || null;
+  }
   // Add a NEW blank spouse/partner on a chosen side of a person and name them.
   function quickAddSpouse(personId, side) {
     if (readonly) return;
     const p = personById(personId); if (!p) return;
     pushUndo();
     const sp = addPerson({ name: "New spouse", sex: guessSpouseSex(p) });
-    addUnion(personId, sp.id, "married");
+    const seat = soloParentSeat(personId);
+    if (seat) seat.b = sp.id; else addUnion(personId, sp.id, "married");
     const pp = posOf(personId);
-    placeAt(sp.id, pp.x + (side === "left" ? -COLW : COLW), pp.y);   // pin to the clicked side
-    focusNewPerson(sp, "Added spouse — type their name and Save");
+    placeAt(sp.id, pp.x + (side === "left" ? -COLW : COLW), pp.y, side === "left" ? -1 : 1);   // pin to the clicked side
+    focusNewPerson(sp, seat
+      ? "Added spouse — and the other parent of " + (childLinksOfUnion(seat.id).map((l) => personById(l.child)).filter(Boolean).map((c) => c.first || c.name).join(", ") || "their children")
+      : "Added spouse — type their name and Save");
   }
 
   // Add a NEW blank child of a person (their own union; make a solo one if none).
@@ -2549,7 +2733,7 @@
     // Fall back to parsing the display name for any person not yet split into parts.
     const np = (p.first !== undefined || p.last !== undefined || p.middle !== undefined) ? p : parseName(p.name);
     $("#pFirst").value = np.first || "";
-    $("#pMiddle").value = np.middle || "";
+    $("#pMiddle").value = middleAsTyped(np.middle);
     $("#pLast").value = np.last || "";
     $("#pNick").value = np.nickname || "";
     $("#pMaiden").value = np.maiden || "";
@@ -2731,8 +2915,11 @@
       pinInPlace(personId);
       if (!partnerId) partnerId = addPerson({ name: "New spouse", sex: guessSpouseSex(personById(personId)) }).id;
       else pinInPlace(partnerId);
-      addUnion(personId, partnerId, "married");
-      if (isManual(personId) && !isManual(partnerId)) { const pp = posOf(personId); placeAt(partnerId, pp.x + COLW, pp.y); }
+      // Standing alone as a parent? The new spouse takes the empty seat in that
+      // family — the other parent — rather than starting a separate marriage.
+      const seat = soloParentSeat(personId);
+      if (seat) seat.b = partnerId; else addUnion(personId, partnerId, "married");
+      if (!isManual(partnerId)) { const pp = posOf(personId); placeAt(partnerId, pp.x + COLW, pp.y); }   // beside them, on their row
       if (!pid) focusNewPerson(personById(partnerId), "Added spouse — type their name and Save");
       else { refreshRel(personId); toast("Linked as a couple"); }
     }, [personId]);
@@ -2758,8 +2945,13 @@
         pinInPlace(personId);   // gaining a parent must not move them
         const parId = pid || addPerson({ name: "New parent", sex: "unknown" }).id;
         const existing = parentLinksOfPerson(personId).map((l) => unionById(l.union)).find(Boolean);
-        if (existing && existing.b == null && existing.a !== parId) existing.b = parId;   // fill the empty slot
-        else { const u = unionsOfPerson(parId)[0] || addUnion(parId, null, "married"); addChild(u.id, personId, "bio"); }
+        if (existing && existing.b == null && existing.a !== parId) {
+          existing.b = parId;                                        // fill the empty slot
+          if (!isManual(parId)) { const ax = posOf(existing.a); placeAt(parId, ax.x + COLW, ax.y); }   // beside the parent they join
+        } else {
+          const u = unionsOfPerson(parId)[0] || addUnion(parId, null, "married"); addChild(u.id, personId, "bio");
+          if (!isManual(parId)) { const cp = posOf(personId); placeAt(parId, cp.x, cp.y - ROWH); }     // a row above their child
+        }
         if (!pid) focusNewPerson(personById(parId), "Added parent — type their name and Save");
         else refreshRel(personId);
       }, [personId]);
@@ -3038,9 +3230,15 @@
   }
   function updatePhotoPreview() {
     const img = $("#photoPreview"), clr = $("#photoClear"), adj = $("#photoAdjustBtn");
+    const lab = $("#photoDropLabel");
     if (pendingPhoto) { img.src = pendingPhoto; img.hidden = false; clr.hidden = false; if (adj) adj.hidden = false; }
     else { img.hidden = true; clr.hidden = true; if (adj) adj.hidden = true; }
+    if (lab) lab.hidden = !!pendingPhoto;
   }
+
+  // A middle name typed as "V." keeps just the letter: the period is added
+  // wherever the name is shown, so leaving it in the box would double it up.
+  { const m = $("#pMiddle"); if (m) m.addEventListener("blur", () => { const v = middleAsTyped(m.value); if (v !== m.value) m.value = v; }); }
 
   document.querySelectorAll("#sexToggle button").forEach((b) => (b.onclick = () => setSex(b.dataset.sex)));
 
@@ -4922,7 +5120,8 @@
         const txt2 = (v) => { const i = document.createElement("input"); i.type = "text"; i.value = v || ""; return i; };
         const np0 = (p.first !== undefined || p.last !== undefined) ? p : parseName(p.name || "");
         const fFirst = field("First name", txt2(np0.first));
-        const fMiddle = field("Middle name", txt2(np0.middle));
+        const fMiddle = field("Middle name", txt2(middleAsTyped(np0.middle)));
+        fMiddle.addEventListener("blur", () => { fMiddle.value = middleAsTyped(fMiddle.value); });
         const fLast = field("Last name", txt2(np0.last));
         const fNick = field("Nickname", txt2(np0.nickname));
         const fMaiden = field("Maiden name", txt2(np0.maiden));
@@ -6632,7 +6831,7 @@
   }
   // Keyboard shortcuts: M move, T tidy; with a selection — C snap close,
   // W snap wide, L lock/unlock, G group/ungroup, H hide, K center on children
-  // (kids), P center on parents. Ignored while typing or in a dialog.
+  // (kids), P center on parents, B birth order. Ignored while typing or in a dialog.
   document.addEventListener("keydown", (e) => {
     if (readonly || e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target;
@@ -6660,6 +6859,7 @@
     else if (k === "h") barBtn(/Hide selected/);
     else if (k === "k") barBtn(/Center on children/);
     else if (k === "p") barBtn(/Center on parents/);
+    else if (k === "b") barBtn(/Birth order/);
   });
   function updateViewSwitcher() {
     const sec = document.getElementById("viewSwitchSec");
