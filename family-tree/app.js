@@ -695,7 +695,7 @@
   function unionDateLabel(u) {
     const dbits = [];
     if (u.marriage) dbits.push((u.status === "partners" ? "" : "m. ") + (isISODate(u.marriage) ? fmtDateShort(u.marriage) : u.marriage));
-    if (u.status === "divorced" && u.divorce) dbits.push("div. " + u.divorce);
+    if (u.status === "divorced" && u.divorce) dbits.push("div. " + (isISODate(u.divorce) ? fmtDateShort(u.divorce) : u.divorce));
     return dbits.length ? dbits.join("   ") : "";
   }
   const unionBetween = (aId, bId) => state.unions.find((u) => (u.a === aId && u.b === bId) || (u.a === bId && u.b === aId));
@@ -892,7 +892,8 @@
   // the year. Nobody with neither can be placed, so they keep their own order.
   const birthKey = (p) => {
     if (!p) return null;
-    if (p.birthDate) { const t = Date.parse(p.birthDate + "T12:00:00"); if (!isNaN(t)) return t; }
+    const q = dateParts(p.birthDate);
+    if (q) return Date.UTC(q.y, (q.m || 1) - 1, q.d || 1);
     return p.birth != null ? Date.UTC(p.birth, 0, 1) : null;
   };
   // Put a row of brothers and sisters in the order they were born — oldest on
@@ -1463,18 +1464,68 @@
     }
     return out;
   }
-  function fmtDate(iso) {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ""); if (!m) return iso || "";
-    const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-    return months[+m[2] - 1] + " " + (+m[3]) + ", " + m[1];
+  /* --------- dates we may only partly know ---------------------------------
+     Half the dates in a family tree are incomplete: a year, sometimes a month
+     and year, sometimes the whole thing. All three are kept in one field, as
+     as much ISO as is known — "1908", "1908-03" or "1908-03-25" — so nothing
+     that is known has to be thrown away to record it.                        */
+  const MONTHS_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const isISODate = (s) => /^\d{4}(-\d{2}(-\d{2})?)?$/.test(s || "");
+  const dateParts = (iso) => {
+    const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(iso || "");
+    return m ? { y: +m[1], m: m[2] ? +m[2] : null, d: m[3] ? +m[3] : null } : null;
+  };
+  const dateYear = (iso) => { const p = dateParts(iso); return p ? p.y : null; };
+  function fmtDateWith(names, iso) {
+    const p = dateParts(iso); if (!p) return iso || "";
+    if (p.m == null) return String(p.y);
+    if (p.d == null) return names[p.m - 1] + " " + p.y;
+    return names[p.m - 1] + " " + p.d + ", " + p.y;
   }
-  const isISODate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || "");
+  const fmtDate = (iso) => fmtDateWith(MONTHS_LONG, iso);
   // Compact date for tight spots like the marriage line ("Jun 12, 1970").
-  function fmtDateShort(iso) {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ""); if (!m) return iso || "";
-    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    return months[+m[2] - 1] + " " + (+m[3]) + ", " + m[1];
+  const fmtDateShort = (iso) => fmtDateWith(MONTHS_SHORT, iso);
+  function isoDate(y, mo, d) {
+    if (!(y >= 1 && y <= 9999)) return null;
+    const ys = String(y).padStart(4, "0");
+    if (mo == null) return ys;
+    if (!(mo >= 1 && mo <= 12)) return null;
+    const ms = ys + "-" + String(mo).padStart(2, "0");
+    if (d == null) return ms;
+    if (!(d >= 1 && d <= 31)) return null;
+    return ms + "-" + String(d).padStart(2, "0");
   }
+  // Read a date written any of the ways a date gets written: "1912", "6/1912",
+  // "6/14/1912", "14/6/1912", "June 14, 1912", "Jun 1912", "1912-06-14".
+  // A number over 12 can only be a day, so 14/6 and 6/14 both land on June 14;
+  // where either reading is possible the American order (month first) is taken.
+  function parseLooseDate(str) {
+    const s = String(str == null ? "" : str).trim();
+    if (!s) return null;
+    const iso = /^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?$/.exec(s);
+    if (iso) return isoDate(+iso[1], +iso[2], iso[3] ? +iso[3] : null);
+    const nm = /(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?/i.exec(s);
+    if (nm) {
+      const mo = MONTHS_SHORT.findIndex((x) => x.toLowerCase() === nm[1].toLowerCase()) + 1;
+      const nums = (s.replace(nm[0], " ").match(/\d+/g) || []).map(Number);
+      const y = nums.find((n) => n > 31);
+      const d = nums.find((n) => n <= 31);
+      return y ? isoDate(y, mo, d == null ? null : d) : null;
+    }
+    const parts = s.split(/[^\d]+/).filter(Boolean).map(Number);
+    if (!parts.length) return null;
+    if (parts.length === 1) return parts[0] > 999 ? isoDate(parts[0], null, null) : null;
+    const y = parts[parts.length - 1];
+    if (y < 1000) return null;                       // without a year there is no date
+    if (parts.length === 2) return isoDate(y, parts[0], null);
+    if (parts.length > 3) return null;
+    const a = parts[0], b = parts[1];
+    return a > 12 ? isoDate(y, b, a) : isoDate(y, a, b);
+  }
+  // What to put in a date box: the date as it reads, so it can be edited in
+  // the same words it is shown in.
+  const dateBoxText = (iso, year) => (iso ? fmtDate(iso) : (year != null ? String(year) : ""));
   // How old they are — at death for someone who has passed, today for everyone
   // else. Null when it can't be known (no birth, or gone with no date to stop
   // the clock at). Months come back too when both ends are dated precisely
@@ -1483,7 +1534,8 @@
   function ageInfo(p) {
     if (!p) return null;
     const at = (exact, year) => {
-      if (exact && /^\d{4}-\d{2}-\d{2}$/.test(exact)) return { y: +exact.slice(0, 4), m: +exact.slice(5, 7), d: +exact.slice(8, 10) };
+      const q = dateParts(exact);
+      if (q) return q;                                       // as much as is known: year, month, or the day too
       if (year != null && Number.isFinite(+year)) return { y: +year, m: null, d: null };
       return null;
     };
@@ -1493,7 +1545,7 @@
     else { const n = new Date(); e = { y: n.getFullYear(), m: n.getMonth() + 1, d: n.getDate() }; }
     if (b.m != null && e.m != null) {
       let mo = (e.y - b.y) * 12 + (e.m - b.m);
-      if (e.d < b.d) mo--;                                   // the day of the month hasn't come round yet
+      if (b.d != null && e.d != null && e.d < b.d) mo--;     // the day of the month hasn't come round yet
       if (mo < 0 || mo > 130 * 12) return null;
       return { years: Math.floor(mo / 12), months: mo };
     }
@@ -2742,15 +2794,11 @@
     renderGalleryPanel(p);
     { const box = $("#galleryBox"); if (box) box.hidden = readonly; }
     $("#pName").value = p.name || "";
-    $("#pBirth").value = p.birth == null ? "" : p.birth;
-    $("#pDeath").value = p.death == null ? "" : p.death;
+    $("#pBirth").value = dateBoxText(p.birthDate, p.birth);
+    $("#pDeath").value = dateBoxText(p.deathDate, p.death);
     $("#pCause").value = p.causeOfDeath || "";
     $("#causeField").hidden = !isDeceased(p);
-    $("#pBirthDate").value = p.birthDate || "";
-    $("#pDeathDate").value = p.deathDate || "";
-    // Expand the "Exact dates" section when there's a full date to show, so
-    // imported day/month dates are visible without hunting for the toggle.
-    const exd = document.querySelector(".exact-dates"); if (exd) exd.open = !!(p.birthDate || p.deathDate);
+    syncDateEchoes();
     $("#pDeceased").checked = isDeceased(p);
     { const m = p.military || null;
       $("#pMilitary").checked = !!m;
@@ -2785,6 +2833,7 @@
     photoDirty = false; photoReplaced = false;
     showPersonForm(null);
     syncAgeLine(null);
+    syncDateEchoes();
     setSex("male");
     pendingPhoto = null; updatePhotoPreview();
     setColor("");
@@ -3130,41 +3179,34 @@
         const nextStatus = { married: "partners", partners: "divorced", divorced: "married" };
         const kn = kindToggle(nounPartner(s, stt), () => relSetStatus(u.id, nextStatus[stt], pid), "Click to change: married → partners → divorced");
         rowFor(other, kn, removeBtn(() => relUnlinkUnion(u.id, pid)));
-        // marriage (exact date) / divorce (year only) for this couple, on their own line
+        // Married / divorced dates for this couple, on their own line — one box
+        // each, taking as much of the date as is known (1961, 6/1961, 6/12/1961).
         const st = u.status || "married";
         const dRow = document.createElement("li"); dRow.className = "rel-dates";
-        const dateField = (label, field, type, val) => {
+        const dateField = (label, field, val) => {
           const wrap = document.createElement("span"); wrap.className = "rel-date-field";
           const lab = document.createElement("span"); lab.className = "rel-date-label"; lab.textContent = label;
           const i = document.createElement("input");
-          i.type = type; i.className = "rel-date" + (type === "date" ? " rel-date-full" : "");
-          if (type === "text") i.placeholder = "year";
-          i.value = val || "";
-          i.onchange = () => relSetUnionField(u.id, field, i.value, pid, true);   // quiet: typing must not rebuild the form
+          i.type = "text"; i.className = "rel-date rel-date-full"; i.placeholder = "1961 · 6/1961 · 6/12/1961";
+          i.value = isISODate(val) ? fmtDate(val) : (val || "");
+          const echo = document.createElement("span"); echo.className = "date-echo";
+          const commit = (quiet) => {
+            const iso = parseLooseDate(i.value);
+            const raw = i.value.trim();
+            echo.classList.toggle("bad", !!raw && !iso);
+            echo.textContent = !raw ? "" : (!iso ? "Can't read that date" : (fmtDate(iso) === raw ? "" : fmtDate(iso)));
+            // Only a date we could read is stored; anything else is left in the
+            // box to be corrected rather than silently dropped.
+            if (!raw || iso) relSetUnionField(u.id, field, iso || "", pid, quiet);
+          };
+          i.oninput = () => commit(true);      // quiet: typing must not rebuild the form
           i.onblur = () => { relFieldUndoKey = null; refreshRel(pid); };
           i.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); i.blur(); } };
-          wrap.appendChild(lab); wrap.appendChild(i);
+          wrap.appendChild(lab); wrap.appendChild(i); wrap.appendChild(echo);
           return wrap;
         };
-        // Marriage takes an exact date; only fill the picker from an ISO value
-        // (a legacy year-only entry can't populate a date box but still shows on the tree).
-        dRow.appendChild(dateField(st === "partners" ? "Together" : "Married", "marriage", "date", isISODate(u.marriage) ? u.marriage : ""));
-        // …or just a year when the exact day isn't known (either box works;
-        // whichever was filled last wins)
-        {
-          const yWrap = document.createElement("span"); yWrap.className = "rel-date-field";
-          const yLab = document.createElement("span"); yLab.className = "rel-date-label"; yLab.textContent = "or year";
-          const yi = document.createElement("input"); yi.type = "text"; yi.className = "rel-date"; yi.placeholder = "year";
-          yi.value = !isISODate(u.marriage) ? (u.marriage || "") : "";
-          yi.onchange = () => { relSetUnionField(u.id, "marriage", yi.value, pid, true); const di = dRow.querySelector('input[type="date"]'); if (di && yi.value.trim()) di.value = ""; };
-          yi.onblur = () => { relFieldUndoKey = null; refreshRel(pid); };
-          yi.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); yi.blur(); } };
-          const di = dRow.querySelector('input[type="date"]');
-          if (di) di.addEventListener("change", () => { if (di.value) yi.value = ""; });
-          yWrap.appendChild(yLab); yWrap.appendChild(yi);
-          dRow.appendChild(yWrap);
-        }
-        if (st === "divorced") dRow.appendChild(dateField("Divorced", "divorce", "text", u.divorce));
+        dRow.appendChild(dateField(st === "partners" ? "Together" : "Married", "marriage", u.marriage));
+        if (st === "divorced") dRow.appendChild(dateField("Divorced", "divorce", u.divorce));
         box.appendChild(dRow);
       });
     }
@@ -3245,10 +3287,13 @@
   $("#personForm").addEventListener("submit", (e) => {
     e.preventDefault();
     const id = $("#personId").value;
-    const birthDate = $("#pBirthDate").value || null, deathDate = $("#pDeathDate").value || null;
-    // A full date wins over the year box, so the tree year always matches the exact date.
-    const birthYear = birthDate ? birthDate.slice(0, 4) : $("#pBirth").value;
-    const deathYear = deathDate ? deathDate.slice(0, 4) : $("#pDeath").value;
+    // One box per date, holding as much of it as is known. The year is what
+    // the tree shows; anything finer is kept alongside it.
+    const bIso = parseLooseDate($("#pBirth").value), dIso = parseLooseDate($("#pDeath").value);
+    const birthDate = bIso && bIso.length > 4 ? bIso : null;
+    const deathDate = dIso && dIso.length > 4 ? dIso : null;
+    const birthYear = bIso ? dateYear(bIso) : null;
+    const deathYear = dIso ? dateYear(dIso) : null;
     const np = nameParts({ first: $("#pFirst").value.trim(), middle: $("#pMiddle").value.trim(), last: $("#pLast").value.trim(), nickname: $("#pNick").value.trim(), maiden: formSex === "female" ? $("#pMaiden").value.trim() : "", suffix: $("#pSuffix").value.trim() });
     const data = { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: birthYear, death: deathYear, birthDate, deathDate, deceased: $("#pDeceased").checked, causeOfDeath: $("#pCause").value.trim() || null, sex: formSex, color: formColor, photo: pendingPhoto };
     if (id) {
@@ -3277,32 +3322,46 @@
     relayoutAndSave();
     toast("Saved");
   });
-  // Entering a full date fills in (and keeps in sync) the year that shows on the tree.
-  $("#pBirthDate").addEventListener("change", () => { const v = $("#pBirthDate").value; if (v) $("#pBirth").value = v.slice(0, 4); });
-  $("#pDeathDate").addEventListener("change", () => { const v = $("#pDeathDate").value; if (v) { $("#pDeath").value = v.slice(0, 4); $("#pDeceased").checked = true; } syncCauseVis(); });
+  // Say back what was typed, in words, so a date is never silently misread.
+  function syncDateEchoes() {
+    [["#pBirth", "#pBirthEcho"], ["#pDeath", "#pDeathEcho"]].forEach(([inSel, outSel]) => {
+      const i = $(inSel), o = $(outSel); if (!i || !o) return;
+      const raw = i.value.trim();
+      const iso = parseLooseDate(raw);
+      o.classList.toggle("bad", !!raw && !iso);
+      if (!raw) o.textContent = "";
+      else if (!iso) o.textContent = "Can't read that — try 1912, 6/1912 or 6/14/1912";
+      else o.textContent = fmtDate(iso) === raw ? "" : fmtDate(iso);
+    });
+  }
+  // Entering a death date says they've passed away.
+  const deathTyped = () => { if (parseLooseDate($("#pDeath").value)) $("#pDeceased").checked = true; syncCauseVis(); };
+  $("#pDeath").addEventListener("input", deathTyped);
+  $("#pDeath").addEventListener("change", deathTyped);
   // The cause-of-death box shows only once the form says they've passed away.
-  function syncCauseVis() { $("#causeField").hidden = !($("#pDeceased").checked || $("#pDeath").value || $("#pDeathDate").value); }
+  function syncCauseVis() { $("#causeField").hidden = !($("#pDeceased").checked || $("#pDeath").value.trim()); }
   // Their age, from whatever the boxes say right now — at death once they've
   // passed away, today's age while they're living.
   function syncAgeLine(p) {
     const el2 = $("#ageLine"); if (!el2) return;
+    const bIso = p ? null : parseLooseDate($("#pBirth").value), dIso = p ? null : parseLooseDate($("#pDeath").value);
     const src = p || {
-      birth: $("#pBirth").value ? parseInt($("#pBirth").value, 10) : null,
-      death: $("#pDeath").value ? parseInt($("#pDeath").value, 10) : null,
-      birthDate: $("#pBirthDate").value || null,
-      deathDate: $("#pDeathDate").value || null,
+      birth: dateYear(bIso),
+      death: dateYear(dIso),
+      birthDate: bIso && bIso.length > 4 ? bIso : null,
+      deathDate: dIso && dIso.length > 4 ? dIso : null,
       deceased: $("#pDeceased").checked,
     };
     const a = ageLabel(src);
     el2.hidden = !a;
     el2.textContent = !a ? "" : (isDeceased(src) ? "Age at death: " + a : "Age: " + a);
   }
-  ["#pBirth", "#pDeath", "#pBirthDate", "#pDeathDate", "#pDeceased"].forEach((sel) => {
-    const n = $(sel); if (n) { n.addEventListener("input", () => syncAgeLine(null)); n.addEventListener("change", () => syncAgeLine(null)); }
+  ["#pBirth", "#pDeath", "#pDeceased"].forEach((sel) => {
+    const n = $(sel);
+    if (n) { n.addEventListener("input", () => { syncAgeLine(null); syncDateEchoes(); }); n.addEventListener("change", () => { syncAgeLine(null); syncDateEchoes(); }); }
   });
   { const c = $("#pMilitary"); if (c) c.addEventListener("change", () => { $("#militaryFields").hidden = !c.checked; }); }
   $("#pDeceased").addEventListener("change", syncCauseVis);
-  $("#pDeath").addEventListener("input", syncCauseVis);
   { const b = $("#galleryAddBtn"), inp = $("#galleryInput");
     if (b && inp) {
       b.onclick = () => { if (!$("#personId").value) return toast("Save this person first, then add photos"); inp.click(); };
@@ -5095,7 +5154,7 @@
       const s = section("Details", "pcard-details");
       const view = document.createElement("div");
       const line = (label, val) => { const d = document.createElement("div"); d.className = "pcard-detline"; d.innerHTML = "<b>" + label + ":</b> "; d.appendChild(document.createTextNode(val)); view.appendChild(d); };
-      const fmt = (exact, year) => exact ? new Date(exact + "T12:00:00").toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : (year != null ? String(year) : "—");
+      const fmt = (exact, year) => (exact ? fmtDate(exact) : (year != null ? String(year) : "—"));
       line("Born", fmt(p.birthDate, p.birth));
       line(isDeceased(p) ? "Died" : "Status", isDeceased(p) ? fmt(p.deathDate, p.death) : "Living");
       { const a = ageLabel(p); if (a) line(isDeceased(p) ? "Age at death" : "Age", a); }
@@ -5115,8 +5174,6 @@
         bar.hidden = true; view.hidden = true;
         const f = document.createElement("div"); f.className = "pcard-editform";
         const field = (label, input) => { const w = document.createElement("label"); w.className = "pcard-field"; const t = document.createElement("span"); t.textContent = label; w.appendChild(t); w.appendChild(input); f.appendChild(w); return input; };
-        const num = (v) => { const i = document.createElement("input"); i.type = "number"; i.value = v == null ? "" : v; return i; };
-        const date = (v) => { const i = document.createElement("input"); i.type = "date"; i.value = v || ""; return i; };
         const txt2 = (v) => { const i = document.createElement("input"); i.type = "text"; i.value = v || ""; return i; };
         const np0 = (p.first !== undefined || p.last !== undefined) ? p : parseName(p.name || "");
         const fFirst = field("First name", txt2(np0.first));
@@ -5126,10 +5183,18 @@
         const fNick = field("Nickname", txt2(np0.nickname));
         const fMaiden = field("Maiden name", txt2(np0.maiden));
         const fSuffix = field("Suffix (Jr., III…)", txt2(np0.suffix));
-        const bYear = field("Born (year)", num(p.birth));
-        const bDate = field("Exact birth date (optional)", date(p.birthDate));
-        const dYear = field("Died (year, if applicable)", num(p.death));
-        const dDate = field("Exact death date (optional)", date(p.deathDate));
+        // One box per date, taking as much of it as is known: 1912, 6/1912
+        // or 6/14/1912. What it read back is echoed under the box.
+        const bDate = field("Born", txt2(dateBoxText(p.birthDate, p.birth)));
+        const bEcho = document.createElement("div"); bEcho.className = "date-echo"; bDate.parentNode.appendChild(bEcho);
+        const dDate = field("Died (if applicable)", txt2(dateBoxText(p.deathDate, p.death)));
+        const dEcho = document.createElement("div"); dEcho.className = "date-echo"; dDate.parentNode.appendChild(dEcho);
+        const echo = (inp, out) => {
+          const raw = inp.value.trim(), iso = parseLooseDate(raw);
+          out.classList.toggle("bad", !!raw && !iso);
+          out.textContent = !raw ? "" : (!iso ? "Can't read that — try 1912, 6/1912 or 6/14/1912" : (fmtDate(iso) === raw ? "" : fmtDate(iso)));
+        };
+        [[bDate, bEcho], [dDate, dEcho]].forEach(([i, o]) => { i.addEventListener("input", () => echo(i, o)); echo(i, o); });
         const dec = document.createElement("input"); dec.type = "checkbox"; dec.checked = isDeceased(p);
         const decWrap = document.createElement("label"); decWrap.className = "pcard-check"; decWrap.appendChild(dec); decWrap.appendChild(document.createTextNode(" Has passed away"));
         f.appendChild(decWrap);
@@ -5137,8 +5202,8 @@
         const causeW = document.createElement("label"); causeW.className = "pcard-field"; causeW.hidden = !isDeceased(p);
         const causeT = document.createElement("span"); causeT.textContent = "Cause of death (optional)";
         causeW.appendChild(causeT); causeW.appendChild(causeI); f.appendChild(causeW);
-        const syncCause = () => { causeW.hidden = !(dec.checked || dYear.value || dDate.value); };
-        dec.addEventListener("change", syncCause); dYear.addEventListener("input", syncCause); dDate.addEventListener("change", syncCause);
+        const syncCause = () => { causeW.hidden = !(dec.checked || dDate.value.trim()); };
+        dec.addEventListener("change", syncCause); dDate.addEventListener("input", syncCause);
         // military service — the tick reveals branch, rank and notes
         const mil = document.createElement("input"); mil.type = "checkbox"; mil.checked = servedInMilitary(p);
         const milWrap = document.createElement("label"); milWrap.className = "pcard-check"; milWrap.appendChild(mil); milWrap.appendChild(document.createTextNode(" Served in the military"));
@@ -5158,13 +5223,11 @@
         s.appendChild(f);
         cancel.onclick = () => { f.remove(); bar.hidden = false; view.hidden = false; };
         saveB.onclick = () => {
-          const birthDate = bDate.value || null, deathDate = dDate.value || null;
-          // Exactly like the desktop editor: a full date wins over the year box.
-          const by = birthDate ? parseInt(birthDate.slice(0, 4), 10) : (bYear.value ? parseInt(bYear.value, 10) : null);
-          const dy = deathDate ? parseInt(deathDate.slice(0, 4), 10) : (dYear.value ? parseInt(dYear.value, 10) : null);
-          p.birth = isNaN(by) ? null : by; p.birthDate = birthDate;
-          p.death = isNaN(dy) ? null : dy; p.deathDate = deathDate;
-          p.deceased = !!(dec.checked || dy || deathDate);
+          const bIso = parseLooseDate(bDate.value), dIso = parseLooseDate(dDate.value);
+          const by = dateYear(bIso), dy = dateYear(dIso);
+          p.birth = by; p.birthDate = bIso && bIso.length > 4 ? bIso : null;
+          p.death = dy; p.deathDate = dIso && dIso.length > 4 ? dIso : null;
+          p.deceased = !!(dec.checked || dy);
           if (causeI.value.trim() && isDeceased(p)) p.causeOfDeath = causeI.value.trim(); else delete p.causeOfDeath;
           if (mil.checked) p.military = { branch: mBranch.value.trim(), rank: mRank.value.trim(), notes: mNotes.value.trim() };
           else delete p.military;
