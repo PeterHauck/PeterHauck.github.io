@@ -3507,6 +3507,66 @@
   }
 
   /* ============================================================ MODALS */
+  // A long list of people is no use as a plain dropdown once the tree runs to
+  // hundreds: this turns one into a type-to-search box. The <select> stays put
+  // as the value itself, so everything reading .value carries on unchanged.
+  function makeSearchableSelect(sel) {
+    if (!sel || sel.dataset.searchable) return;
+    sel.dataset.searchable = "1";
+    const opts = [...sel.options].map((o) => ({ value: o.value, label: o.textContent }));
+    const wrap = document.createElement("div"); wrap.className = "combo";
+    const input = document.createElement("input");
+    input.type = "text"; input.className = "combo-input"; input.autocomplete = "off";
+    input.placeholder = "Type a name to search…";
+    const list = document.createElement("ul"); list.className = "combo-list"; list.hidden = true;
+    sel.parentNode.insertBefore(wrap, sel);
+    wrap.appendChild(input); wrap.appendChild(list); wrap.appendChild(sel);
+    sel.classList.add("combo-hidden");
+    const labelOf = (v) => (opts.find((o) => o.value === v) || {}).label || "";
+    input.value = labelOf(sel.value);
+    let marked = -1, shown = [];
+    const draw = (q) => {
+      const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      shown = opts.filter((o) => words.every((w) => o.label.toLowerCase().includes(w))).slice(0, 60);
+      list.textContent = "";
+      if (!shown.length) {
+        const li = document.createElement("li"); li.className = "combo-empty"; li.textContent = "Nobody by that name";
+        list.appendChild(li);
+      }
+      shown.forEach((o, i) => {
+        const li = document.createElement("li");
+        li.className = "combo-item" + (i === marked ? " on" : "") + (o.value === sel.value ? " cur" : "");
+        li.textContent = o.label;
+        li.onmousedown = (e) => { e.preventDefault(); pick(i); };
+        list.appendChild(li);
+      });
+      list.hidden = false;
+    };
+    const pick = (i) => {
+      const o = shown[i]; if (!o) return;
+      sel.value = o.value;
+      input.value = o.label;
+      list.hidden = true; marked = -1;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    const mark = (d) => {
+      if (list.hidden) { marked = -1; draw(input.value); }
+      if (!shown.length) return;
+      marked = (marked + d + shown.length) % shown.length;
+      [...list.querySelectorAll(".combo-item")].forEach((li, i) => li.classList.toggle("on", i === marked));
+      const on = list.querySelector(".combo-item.on"); if (on && on.scrollIntoView) on.scrollIntoView({ block: "nearest" });
+    };
+    input.addEventListener("focus", () => { marked = -1; draw(""); input.select(); });
+    input.addEventListener("input", () => { marked = 0; draw(input.value); });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") { e.preventDefault(); mark(1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); mark(-1); }
+      else if (e.key === "Enter") { e.preventDefault(); pick(marked < 0 ? 0 : marked); }
+      else if (e.key === "Escape" && !list.hidden) { e.preventDefault(); e.stopPropagation(); list.hidden = true; }
+    });
+    input.addEventListener("blur", () => { setTimeout(() => { list.hidden = true; input.value = labelOf(sel.value); }, 120); });
+    return input;
+  }
   function openModal(title, hint, bodyHtml, onOk, okLabel) {
     const back = document.createElement("div");
     back.className = "modal-backdrop";
@@ -3517,6 +3577,9 @@
     back.querySelector("[data-cancel]").onclick = close;
     back.addEventListener("click", (e) => { if (e.target === back) close(); });
     back.querySelector("[data-ok]").onclick = () => { if (onOk(back) !== false) close(); };
+    // Any dropdown long enough to be a hunt becomes a search box instead.
+    const combos = [...back.querySelectorAll("select")].filter((sel) => sel.options.length > 8).map(makeSearchableSelect);
+    if (combos[0]) setTimeout(() => { try { combos[0].focus(); } catch (e) {} }, 0);
     return back;
   }
   function personOptions(selectedVal, includeNone) {
@@ -6378,7 +6441,7 @@
     m.hidden = !vis; $("#tbMenu").classList.toggle("active", vis);
     if (vis) { updatePeopleList(); const f = $("#peopleFilter"); if (f) setTimeout(() => f.focus(), 0); }
   }
-  { const b = $("#personEditBtn"); if (b) b.onclick = () => { const p = personById($("#personId").value); if (p) showPersonForm(p); }; }
+  { const b = $("#personEditBtn"); if (b) { b.title = "Edit their details — hotkey: E"; b.onclick = () => { const p = personById($("#personId").value); if (p) showPersonForm(p); }; } }
   { const b = $("#pmSettings"); if (b) b.onclick = () => { togglePeopleMenu(false); toggleSettings(true); }; }
   { const b = $("#settingsClose"); if (b) b.onclick = () => toggleSettings(false); }
   function toggleSettings(show) {
@@ -6892,9 +6955,10 @@
       row("🔭 " + (v.name || "Untitled") + " (" + n + ")", !!(viewPreview && viewPreview.view.id === v.id), () => startViewPreview(v));
     });
   }
-  // Keyboard shortcuts: M move, T tidy; with a selection — C snap close,
-  // W snap wide, L lock/unlock, G group/ungroup, H hide, K center on children
-  // (kids), P center on parents, B birth order. Ignored while typing or in a dialog.
+  // Keyboard shortcuts: M move, T tidy, E edit whoever is selected; with a
+  // selection — C snap close, W snap wide, L lock/unlock, G group/ungroup,
+  // H hide, K center on children (kids), P center on parents, B birth order.
+  // Ignored while typing or in a dialog.
   document.addEventListener("keydown", (e) => {
     if (readonly || e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target;
@@ -6923,6 +6987,19 @@
     else if (k === "k") barBtn(/Center on children/);
     else if (k === "p") barBtn(/Center on parents/);
     else if (k === "b") barBtn(/Birth order/);
+    else if (k === "e") {
+      // Straight into editing the selected person — the same as their pencil.
+      const one = selection.size === 1 ? personById(pidOf([...selection][0])) : null;
+      const p = personById(selectedId) || one;
+      if (p) {
+        e.preventDefault();
+        ensurePanel();
+        selectedId = p.id;
+        fillPersonForm(p); showPersonForm(p);
+        const n = $("#pFirst"); if (n) { n.focus(); n.select(); }
+        render();
+      }
+    }
   });
   function updateViewSwitcher() {
     const sec = document.getElementById("viewSwitchSec");
