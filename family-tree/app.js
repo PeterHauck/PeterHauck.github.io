@@ -727,6 +727,45 @@
   // spacing beside a neighbour on their row, ease exactly onto it. Hold Alt to
   // place them freely.
   const GRAVITY = 16;
+  // Where a drag would sit "centred": a parent (or a couple) over the middle of
+  // their children, or under the middle of their own parents. Only things
+  // standing still can anchor — anyone being dragged along moves with you, so
+  // there is nothing to line up with.
+  function centeringSpots(nk, px, dragging) {
+    const out = [];
+    const start = dragging && dragging[nk];
+    if (!start) return out;
+    const pid = pidOf(nk);
+    const near = (id) => (isCopyKey(nk) ? nkFor(id, nk) : id);
+    const stillX = (oNk) => {
+      if (!oNk || (dragging && dragging[oNk] !== undefined)) return null;   // travelling with us
+      const q = nkPos(oNk);
+      return q ? q.x : null;
+    };
+    // …over the middle of their children
+    unionsOfPerson(pid).forEach((u) => {
+      const kidNks = childLinksOfUnion(u.id).map((l) => l.child)
+        .filter((id) => personById(id) && inView(id))
+        .map((id) => (isCopyKey(nk) ? nkFor(id, nk) : nkInUnion(id, u.id)));
+      const xs = kidNks.map(stillX).filter((x) => x != null);
+      if (!xs.length) return;
+      const mid = (Math.min(...xs) + Math.max(...xs)) / 2;
+      const oid = u.a === pid ? u.b : u.a;
+      const oNk = oid != null && personById(oid) && inView(oid) ? near(oid) : null;
+      if (!oNk) { out.push(mid); return; }                                  // on their own
+      if (dragging[oNk] !== undefined) out.push(mid - (dragging[oNk].x - start.x) / 2);   // the couple travels as one
+      else { const ox = stillX(oNk); if (ox != null) out.push(2 * mid - ox); }            // their half of the couple
+    });
+    // …under the middle of their own parents
+    parentLinksOfPerson(pid).forEach((l) => {
+      const u = unionById(l.union); if (!u) return;
+      const ax = u.a != null && personById(u.a) && inView(u.a) ? stillX(near(u.a)) : null;
+      const bx = u.b != null && personById(u.b) && inView(u.b) ? stillX(near(u.b)) : null;
+      if (ax == null && bx == null) return;
+      out.push(ax != null && bx != null ? (ax + bx) / 2 : (ax != null ? ax : bx));
+    });
+    return out;
+  }
   function gravityDX(nk, px, py, dragging) {
     const pid = pidOf(nk);
     let best = null, bd = GRAVITY;
@@ -740,6 +779,10 @@
     };
     visiblePersons().forEach((p) => consider(p.id, posOf(p.id)));
     Object.keys(copyPos).forEach((k) => consider(k, copyPos[k]));
+    // Lining up with the family above or below counts for as much as lining up
+    // with a neighbour, so a parent dropped almost over their children lands
+    // exactly over them.
+    centeringSpots(nk, px, dragging).forEach((c) => { const d = Math.abs(c - px); if (d < bd) { bd = d; best = c; } });
     return best == null ? 0 : best - px;
   }
   function snapChainSpacing(mode) {
@@ -790,9 +833,11 @@
     kids.forEach((nk) => { if (isCopyKey(nk) && !((state.echoPos || {})[nk])) { const q = nkPos(nk); if (q) (state.echoPos || (state.echoPos = {}))[nk] = { x: q.x, y: q.y }; } });
     const xs = kids.map((nk) => nkPos(nk).x);
     const target = (Math.min(...xs) + Math.max(...xs)) / 2;
-    const A = nkPos(aNk), B = nkPos(bNk);
-    const dx = target - (A.x + B.x) / 2;
-    applyToolMoves([{ id: aNk, x: A.x + dx, y: A.y, dx }, { id: bNk, x: B.x + dx, y: B.y, dx }], kids);
+    const A = nkPos(aNk), B = bNk != null ? nkPos(bNk) : null;
+    const dx = target - (B ? (A.x + B.x) / 2 : A.x);
+    const moves = [{ id: aNk, x: A.x + dx, y: A.y, dx }];
+    if (B) moves.push({ id: bNk, x: B.x + dx, y: B.y, dx });
+    applyToolMoves(moves, kids);
     save(); render();
     toast("Centered over their children");
   }
@@ -1108,6 +1153,16 @@
       { const b = btn("⇔ Snap wide", () => snapChainSpacing("couple")); b.title = "Hotkey: W"; }
     }
     if (cu && childLinksOfUnion(cu.id).length) { const b = btn("⌖ Center on children", () => centerCoupleOnChildren(cu, ids.find((k) => pidOf(k) === cu.a), ids.find((k) => pidOf(k) === cu.b))); b.title = "Hotkey: K"; }
+    // One person on their own centres over their own children too — a mother
+    // whose husband isn't on the tree still belongs over her family.
+    else if (ids.length === 1) {
+      const me = pidOf(ids[0]);
+      const solo = unionsOfPerson(me)
+        .filter((u) => { const o = u.a === me ? u.b : u.a; return o == null || !personById(o) || !inView(o); })   // no partner standing beside them
+        .map((u) => ({ u, n: childLinksOfUnion(u.id).filter((l) => personById(l.child) && inView(l.child)).length }))
+        .filter((x) => x.n).sort((x, y) => y.n - x.n)[0];
+      if (solo) { const b = btn("⌖ Center on children", () => centerCoupleOnChildren(solo.u, ids[0], null)); b.title = "Hotkey: K"; }
+    }
     const cpu = commonParentUnion(ids);
     if (cpu) { const b = btn("⌖ Center on parents", centerSelectionOnParents); b.title = "Hotkey: P"; }
     if (cpu && ids.length >= 2) { const b = btn("🎂 Birth order", arrangeBirthOrder); b.title = "Oldest to youngest, left to right — a husband and wife stay side by side. Hotkey: B"; }
@@ -3067,7 +3122,15 @@
     const u = unionById(l.union);
     const other = u ? (u.a === parId ? u.b : u.a) : null;
     if (!u || other == null) { deleteLink(l.id); }
-    else { let ou = state.unions.find((x) => x.a === other && x.b == null); if (!ou) ou = addUnion(other, null, u.status || "married"); l.union = ou.id; }
+    else {
+      let ou = state.unions.find((x) => x.a === other && x.b == null);
+      if (!ou) ou = addUnion(other, null, u.status || "married");
+      // The child hangs off the remaining parent alone now. Mark the OLD pairing
+      // as deliberately gone, or the next copy of the tree that still has it —
+      // a phone that hasn't caught up — quietly puts that parent back.
+      markRemoved(tombKey.link(l.union, l.child));
+      l.union = ou.id;
+    }
     refreshRel(pid);
   }
   // Relationship nouns, gendered from the *other* person's sex.
@@ -5794,7 +5857,7 @@
       else toast("That cloud copy didn’t open with that password" + (when ? " (cloud saved " + when + ")" : ""));
       return;
     }
-    loadObject(r.obj);
+    adoptTree(r.obj);   // the site's copy, minus anything deleted on this device
     try { localStorage.setItem("familyTree.familyPass", r.pw); localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || 0)); localStorage.setItem("familyTree.cloudDirty", "0"); } catch (e) {}
     setBaseVersion(cp.savedAt || 0);
     // Persist what we pulled — without this, ⟳ showed fresh data but the next
@@ -5876,7 +5939,7 @@
     if (fam) {
       const r = await decryptWithKnown(cp.payload);   // family password OR viewer password (via the wrap)
       if (!r) return false;                            // stored password doesn't open it → fall back to local
-      loadObject(r.obj);
+      adoptTree(r.obj);                                // …keeping anything deleted on this device deleted
       try { localStorage.setItem("familyTree.cloudSavedAt", String(savedAt)); } catch (e) {}
       setBaseVersion(savedAt);
       try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}   // refresh the local cache (no re-upload)
@@ -5906,7 +5969,7 @@
       if (!cp || !cp.payload) return;
       const r = await decryptWithKnown(cp.payload);   // family password OR viewer password (via the wrap)
       if (!r) return;
-      loadObject(r.obj);
+      adoptTree(r.obj);
       try { localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || info.savedAt)); } catch (e) {}
       setBaseVersion(cp.savedAt || info.savedAt);
       try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}   // persist so it survives the next visit
@@ -6056,6 +6119,30 @@
   // either side stays that way; arrangements are ours, with theirs filling gaps.
   // The cost is that a deletion made here can come back if another device still
   // has that person — recoverable in a click, unlike losing them.
+  // Apply a set of tombstones to the tree as it stands. Used by the merge, and
+  // by any pull that takes the site's copy whole — so a deletion made here is
+  // never undone by fetching a copy that still has it.
+  function applyRemovals(removed) {
+    let n = 0;
+    Object.keys(removed || {}).forEach((k) => {
+      if (k.startsWith("p:")) { const id = k.slice(2); if (state.persons.some((p) => p.id === id)) { deletePerson(id); n++; } }
+      else if (k.startsWith("u:")) { const id = k.slice(2); if (state.unions.some((u) => u.id === id)) { deleteUnion(id); n++; } }
+      else if (k.startsWith("l:")) {
+        const i = k.indexOf(">"); const uu = k.slice(2, i), cc = k.slice(i + 1);
+        const before = state.links.length;
+        state.links = state.links.filter((l) => !(l.union === uu && l.child === cc));
+        if (state.links.length !== before) n++;
+      }
+    });
+    return n;
+  }
+  // Take a copy of the site's tree whole, while keeping this device's deletions.
+  function adoptTree(obj) {
+    const keep = Object.assign({}, state.removed || {});
+    loadObject(obj);
+    state.removed = Object.assign({}, state.removed || {}, keep);
+    return applyRemovals(keep);
+  }
   function mergeTreeFrom(other) {
     if (!other || !Array.isArray(other.persons)) return null;
     const sum = { people: 0, unions: 0, links: 0, hidden: 0, fields: 0, views: 0, keepsakes: 0, removed: 0 };
@@ -6063,14 +6150,7 @@
     // stays removed, and a removal the other side made is applied here too.
     const gone = Object.assign({}, other.removed || {}, state.removed || {});
     state.removed = gone;
-    Object.keys(other.removed || {}).forEach((k) => {
-      if ((state.removed || {})[k] && !(other.removed || {})[k]) return;
-      if (k.startsWith("p:")) { const id = k.slice(2); if (state.persons.some((p) => p.id === id)) { deletePerson(id); sum.removed++; } }
-      else if (k.startsWith("u:")) { const id = k.slice(2); if (state.unions.some((u) => u.id === id)) { deleteUnion(id); sum.removed++; } }
-      else if (k.startsWith("l:")) { const i = k.indexOf(">"); const uu = k.slice(2, i), cc = k.slice(i + 1);
-        const before = state.links.length; state.links = state.links.filter((l) => !(l.union === uu && l.child === cc));
-        if (state.links.length !== before) sum.removed++; }
-    });
+    sum.removed = applyRemovals(other.removed);
     const mine = {}; state.persons.forEach((p) => (mine[p.id] = p));
     // people: everyone they have that we don't
     other.persons.forEach((o) => {
