@@ -2340,7 +2340,14 @@
       const li = document.createElement("li");
       li.className = (p.id === selectedId ? "sel " : "") + (isHidden(p.id) ? "hidden" : "");
       li.innerHTML = miniShape(p.sex) + `<span>${escapeHtml(p.name)}</span><span class="meta">${dateStr(p)}</span>`;
-      li.onclick = () => { selectPerson(p.id); if (!isHidden(p.id)) centerOn(p.id); };
+      li.onclick = () => {
+        selectPerson(p.id);
+        if (!isHidden(p.id)) centerOn(p.id);
+        // Their profile is the point of picking them, so the panel comes back
+        // if it was put away — and the keyboard leaves the search box, so the
+        // shortcuts (E to edit them) work on the person just picked.
+        if (!readonly) { ensurePanel(); const f = $("#peopleFilter"); if (f) f.blur(); }
+      };
       ul.appendChild(li);
     });
   }
@@ -6994,7 +7001,9 @@
     ready: () => !!selBarBtn(re, re2),
     run: () => { const b = selBarBtn(re, re2); if (b) b.click(); },
   });
-  const editTarget = () => personById(selectedId) || (selection.size === 1 ? personById(pidOf([...selection][0])) : null);
+  // Who E edits: the one person picked in Move mode if that's what's showing,
+  // otherwise whoever was last clicked.
+  const editTarget = () => (selection.size === 1 ? personById(pidOf([...selection][0])) : null) || personById(selectedId);
   const PICK_TWO = "Pick two or more people in Move mode";
   const PICK_SOME = "Pick people in Move mode";
   const HOTKEYS = [
