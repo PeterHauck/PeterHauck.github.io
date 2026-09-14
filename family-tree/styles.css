@@ -232,10 +232,24 @@ button.btn.danger { color: var(--divorce); }
 /* legend + toolbar floating on canvas */
 .floating { position: absolute; z-index: 4; }
 #toolbar {
-  top: 14px; left: 14px; display: flex; gap: 6px; align-items: center;
+  top: 14px; left: 14px; display: flex; flex-direction: column; gap: 6px; align-items: stretch;
   background: var(--panel); border: 1px solid var(--panel-border);
   border-radius: 10px; padding: 6px; box-shadow: var(--shadow);
 }
+#toolbar .tb-row { display: flex; gap: 6px; align-items: center; }
+/* the shortcut strip: one chip per key, dimmed when it doesn't apply */
+#toolbar .hk-row { flex-wrap: wrap; gap: 4px; border-top: 1px solid var(--panel-border); padding-top: 6px; max-width: 680px; }
+#toolbar button.hk {
+  width: auto; height: 26px; padding: 0 8px 0 4px; gap: 5px; border-radius: 7px;
+  font-size: 12px; color: var(--muted); border: 1px solid transparent;
+}
+#toolbar button.hk kbd {
+  font: inherit; font-weight: 700; min-width: 17px; padding: 1px 4px; border-radius: 4px;
+  background: var(--paper); border: 1px solid var(--panel-border); color: var(--ink);
+}
+#toolbar button.hk:hover:not(:disabled) { background: var(--paper); border-color: var(--accent); color: var(--ink); }
+#toolbar button.hk:disabled { opacity: .34; cursor: default; }
+#toolbar button.hk.on kbd { background: var(--accent); border-color: var(--accent); color: #fff; }
 #toolbar button {
   width: 34px; height: 34px; border-radius: 7px; border: 1px solid transparent;
   background: transparent; cursor: pointer; font-size: 16px; display:flex;align-items:center;justify-content:center;
@@ -250,7 +264,7 @@ button.btn.danger { color: var(--divorce); }
 
 /* People list + menu, opened by ☰ (docked under the toolbar) */
 #peopleMenu {
-  top: 60px; left: 14px; width: 300px; max-width: calc(100vw - 28px);
+  top: var(--tb-bottom, 60px); left: 14px; width: 300px; max-width: calc(100vw - 28px);
   background: var(--panel); border: 1px solid var(--panel-border);
   border-radius: 12px; padding: 10px; box-shadow: var(--shadow);
   display: flex; flex-direction: column; max-height: calc(100vh - 80px);
@@ -258,7 +272,7 @@ button.btn.danger { color: var(--divorce); }
 /* Settings: the app-and-tree drawer, opened from the ☰ menu. Same shell as the
    people menu, wider, because it holds the passwords and backup controls. */
 #settingsMenu {
-  top: 60px; left: 14px; width: 380px; max-width: calc(100vw - 28px);
+  top: var(--tb-bottom, 60px); left: 14px; width: 380px; max-width: calc(100vw - 28px);
   background: var(--panel); border: 1px solid var(--panel-border);
   border-radius: 12px; padding: 10px 12px; box-shadow: var(--shadow);
   display: flex; flex-direction: column; max-height: calc(100vh - 80px); z-index: 44;
@@ -714,6 +728,8 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
   #toolbar .zoomlabel { width: 42px; font-size: 12px; display: flex; align-items: center; justify-content: center; }
   #tbMenu, #tbImport, #tbRearrange, #tbTidy, #toolbar .sep,
   #panelToggle, #peopleMenu, #panel, #hiddenChip { display: none !important; }
+  /* no keyboard on a phone, so no shortcut strip */
+  #hotkeys { display: none !important; }
   #tbFit, #tbZoomIn, #tbZoomOut, #tbSync { display: flex; }
 
   /* legend is compact and starts collapsed on phones (tap to expand) */

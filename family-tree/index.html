@@ -64,6 +64,7 @@
 
       <!-- floating toolbar -->
       <div id="toolbar" class="floating">
+        <div class="tb-row">
         <button id="tbViews" title="Views" aria-label="Views" hidden>☰</button>
         <button id="tbMenu" title="People &amp; menu" aria-label="People and menu">☰</button>
         <button id="tbImport" title="Add people from an obituary (Claude reads it for you)">✨</button>
@@ -76,6 +77,10 @@
         <button id="tbZoomOut" title="Zoom out">－</button>
         <span class="zoomlabel" id="zoomLabel">100%</span>
         <button id="tbZoomIn" title="Zoom in">＋</button>
+        </div>
+        <!-- Every keyboard shortcut, live: the ones that don't apply right now
+             are greyed out. Clicking one does the same as pressing the key. -->
+        <div id="hotkeys" class="tb-row hk-row" hidden></div>
       </div>
 
       <!-- people & menu (opened by ☰) -->
