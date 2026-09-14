@@ -1082,6 +1082,7 @@
     $("#peopleCount").textContent = state.persons.length;
     updateHiddenChip();
     updateSelBar();
+    renderHotkeys();
     updateViewSwitcher();
     { const b = $("#pmEnableEdit"); if (b) b.hidden = readonly || isOwner(); }
   }
@@ -1122,8 +1123,8 @@
     });
     { const b = btn("⤒ Row up", () => nudgeGeneration(-1)); b.title = "Move up one row — hotkey: ["; }
     { const b = btn("⤓ Row down", () => nudgeGeneration(1)); b.title = "Move down one row — hotkey: ]"; }
-    if (ids.length >= 2) btn("🔗 Group", () => { makeGroup(ids); render(); toast("Grouped — they now move together (any tool, any drag)"); });
-    if (ids.some((id) => groupOf(id))) btn("⛓ Ungroup", () => { ungroup(ids); render(); toast("Ungrouped — they move separately again"); });
+    if (ids.length >= 2) btn("🔗 Group", () => { pushUndo(); makeGroup(ids); render(); toast("Grouped — they now move together (any tool, any drag) · Cmd+Z to undo"); });
+    if (ids.some((id) => groupOf(id))) btn("⛓ Ungroup", () => { pushUndo(); ungroup(ids); render(); toast("Ungrouped — they move separately again · Cmd+Z to undo"); });
     // A repeated person selected here can be taken off the canvas without being
     // taken off the tree — the copy goes, the person stays.
     if (ids.some((nk) => removableCopy(nk))) btn("⧉ Remove copy", () => {
@@ -6242,11 +6243,13 @@
     if (!undoStack.length) { toast("Nothing to undo"); return; }
     const cur = snapshot();
     if (restoreSnapshot(undoStack.pop())) { redoStack.push(cur); toast("Undone"); }
+    renderHotkeys();   // the strip is drawn during the restore, before these stacks settle
   }
   function redo() {
     if (!redoStack.length) { toast("Nothing to redo"); return; }
     const cur = snapshot();
     if (restoreSnapshot(redoStack.pop())) { undoStack.push(cur); toast("Redone"); }
+    renderHotkeys();
   }
   document.addEventListener("keydown", (e) => {
     const mod = e.metaKey || e.ctrlKey;
@@ -6972,47 +6975,105 @@
   // selection — C snap close, W snap wide, L lock/unlock, G group/ungroup,
   // H hide, K center on children (kids), P center on parents, B birth order.
   // Ignored while typing or in a dialog.
+  // Every shortcut in one table, so the strip in the toolbar and the keys
+  // themselves can never drift apart: the strip is drawn FROM this list, and a
+  // key does nothing when the list says it doesn't apply right now.
+  const selBarBtn = (re, re2) => {
+    const bs = [...document.querySelectorAll("#selBar button")];
+    return bs.find((x) => re.test(x.textContent)) || (re2 ? bs.find((x) => re2.test(x.textContent)) : null) || null;
+  };
+  const allOneGroup = () => {
+    const ids = [...selection];
+    const g0 = ids.length ? groupOf(ids[0]) : null;
+    return !!g0 && ids.every((id) => groupOf(id) === g0);
+  };
+  // A shortcut that works through the selection bar is available exactly when
+  // that button is on screen — one rule, no second opinion to keep in step.
+  const barKey = (k, label, need, re, re2) => ({
+    k, label, need,
+    ready: () => !!selBarBtn(re, re2),
+    run: () => { const b = selBarBtn(re, re2); if (b) b.click(); },
+  });
+  const editTarget = () => personById(selectedId) || (selection.size === 1 ? personById(pidOf([...selection][0])) : null);
+  const PICK_TWO = "Pick two or more people in Move mode";
+  const PICK_SOME = "Pick people in Move mode";
+  const HOTKEYS = [
+    { k: "M", label: "Move mode", need: "", hint: "Drag people about and box-select them",
+      ready: () => true, run: () => $("#tbRearrange").click(), lit: () => $("#tbRearrange").classList.contains("active") },
+    { k: "T", label: "Tidy up", need: "", hint: "Put every generation on its own line",
+      ready: () => true, run: () => $("#tbTidy").click() },
+    { k: "E", label: "Edit", need: "Click somebody first", hint: "Edit the selected person",
+      ready: () => !!editTarget(), run: () => editSelectedPerson() },
+    barKey("C", "Snap close", PICK_TWO, /Snap close/),
+    barKey("W", "Snap wide", PICK_TWO, /Snap wide/),
+    barKey("K", "On children", "Pick a couple who have children", /Center on children/),
+    barKey("P", "On parents", "Pick people who share parents", /Center on parents/),
+    barKey("B", "Birth order", "Pick brothers and sisters", /Birth order/),
+    { k: "L", label: () => (selBarBtn(/🔓 Unlock/) && !selBarBtn(/🔒 Lock/) ? "Unlock" : "Lock"), need: PICK_SOME,
+      hint: "Hold them where they are — or let them go",
+      ready: () => !!selBarBtn(/🔒 Lock/, /🔓 Unlock/),
+      run: () => { const b = selBarBtn(/🔒 Lock/, /🔓 Unlock/); if (b) b.click(); } },
+    { k: "G", label: () => (allOneGroup() ? "Ungroup" : "Group"), need: PICK_TWO,
+      hint: "Make them move together, whatever moves them",
+      ready: () => !!selBarBtn(/🔗 Group/, /⛓ Ungroup/),
+      run: () => {
+        const b = allOneGroup() ? selBarBtn(/⛓ Ungroup/, null) : selBarBtn(/🔗 Group/, /⛓ Ungroup/);
+        if (b) b.click();
+      } },
+    barKey("H", "Hide", PICK_SOME, /Hide selected/),
+    { k: "[", label: "Row up", need: PICK_SOME, hint: "Move them up one generation row",
+      ready: () => selection.size > 0, run: () => nudgeGeneration(-1) },
+    { k: "]", label: "Row down", need: PICK_SOME, hint: "Move them down one generation row",
+      ready: () => selection.size > 0, run: () => nudgeGeneration(1) },
+    { k: "⌘Z", label: "Undo", need: "Nothing to undo yet", hint: "Undo the last change (Ctrl+Z on Windows)",
+      ready: () => undoStack.length > 0, run: () => undo(), plain: false },
+    { k: "⌘⇧Z", label: "Redo", need: "Nothing to redo", hint: "Redo what you just undid (Ctrl+Shift+Z on Windows)",
+      ready: () => redoStack.length > 0, run: () => redo(), plain: false },
+  ];
+  const hkLabel = (h) => (typeof h.label === "function" ? h.label() : h.label);
+  function editSelectedPerson() {
+    const p = editTarget(); if (!p) return;
+    ensurePanel();
+    selectedId = p.id;
+    fillPersonForm(p); showPersonForm(p);
+    const n = $("#pFirst"); if (n) { n.focus(); n.select(); }
+    render();
+  }
+  // The strip under the toolbar: every shortcut, with the ones that don't apply
+  // right now greyed out. Clicking one does exactly what pressing the key does.
+  function renderHotkeys() {
+    const host = $("#hotkeys"); if (!host) return;
+    host.hidden = readonly;
+    if (readonly) return;
+    host.textContent = "";
+    HOTKEYS.forEach((h) => {
+      const on = !!h.ready();
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "hk" + (h.lit && h.lit() ? " on" : "");
+      b.setAttribute("data-key", h.k);
+      b.disabled = !on;
+      const kb = document.createElement("kbd"); kb.textContent = h.k;
+      const lb = document.createElement("span"); lb.textContent = hkLabel(h);
+      b.appendChild(kb); b.appendChild(lb);
+      b.title = (h.hint || hkLabel(h)) + " — press " + h.k + (on || !h.need ? "" : ". " + h.need + ".");
+      b.onclick = () => { if (h.ready()) h.run(); };
+      host.appendChild(b);
+    });
+    // The menus dock under the toolbar, which is taller with the strip on it.
+    const tb = $("#toolbar");
+    if (tb) document.documentElement.style.setProperty("--tb-bottom", (tb.getBoundingClientRect().bottom + 12) + "px");
+  }
   document.addEventListener("keydown", (e) => {
     if (readonly || e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
     if (document.querySelector(".modal-backdrop") || !$("#lock").hidden) return;
     const k = (e.key || "").toLowerCase();
-    const barBtn = (re, re2) => {
-      const bs = [...document.querySelectorAll("#selBar button")];
-      const b = bs.find((x) => re.test(x.textContent)) || (re2 && bs.find((x) => re2.test(x.textContent)));
-      if (b) { e.preventDefault(); b.click(); }
-    };
-    if (k === "m") { e.preventDefault(); $("#tbRearrange").click(); }
-    else if (k === "t") { e.preventDefault(); $("#tbTidy").click(); }
-    else if (k === "[" && selection.size) { e.preventDefault(); nudgeGeneration(-1); }
-    else if (k === "]" && selection.size) { e.preventDefault(); nudgeGeneration(1); }
-    else if (k === "c") barBtn(/Snap close/);
-    else if (k === "w") barBtn(/Snap wide/);
-    else if (k === "l") barBtn(/🔒 Lock/, /🔓 Unlock/);
-    else if (k === "g") {
-      const ids2 = [...selection];
-      const g0 = ids2.length ? groupOf(ids2[0]) : null;
-      const sameGroup = !!g0 && ids2.every((id) => groupOf(id) === g0);
-      barBtn(sameGroup ? /⛓ Ungroup/ : /🔗 Group/, sameGroup ? null : /⛓ Ungroup/);
-    }
-    else if (k === "h") barBtn(/Hide selected/);
-    else if (k === "k") barBtn(/Center on children/);
-    else if (k === "p") barBtn(/Center on parents/);
-    else if (k === "b") barBtn(/Birth order/);
-    else if (k === "e") {
-      // Straight into editing the selected person — the same as their pencil.
-      const one = selection.size === 1 ? personById(pidOf([...selection][0])) : null;
-      const p = personById(selectedId) || one;
-      if (p) {
-        e.preventDefault();
-        ensurePanel();
-        selectedId = p.id;
-        fillPersonForm(p); showPersonForm(p);
-        const n = $("#pFirst"); if (n) { n.focus(); n.select(); }
-        render();
-      }
-    }
+    const h = HOTKEYS.find((x) => x.plain !== false && x.k.toLowerCase() === k);
+    if (!h || !h.ready()) return;
+    e.preventDefault();
+    h.run();
   });
   function updateViewSwitcher() {
     const sec = document.getElementById("viewSwitchSec");
