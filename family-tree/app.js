@@ -1631,13 +1631,21 @@
   // 🔒 Locked people shift too: a lock protects someone's PLACE IN THE LAYOUT
   // from arranging tools — when the whole tree slides over to make room for a
   // new person, locked people must ride along or the layout tears around them.
-  const MINGAP = COLW * 0.85;   // the closest two people are ever placed
-  // Everyone standing on one row, nearest first, walking outward from x.
+  // The closest two people are ever placed side by side — the same spacing
+  // "Snap close" uses, so a row that has been snapped close doesn't read as
+  // overcrowded the moment somebody new is added to it.
+  const MINGAP = SIBLING_GAP;
+  // Everyone on one row who is in the way of a newcomer at x, nearest first,
+  // walking outward in the direction the newcomer came from. Anyone standing
+  // within a slot's width BEHIND x counts too: they would be overlapped where
+  // they are, and they move on with everybody else rather than being stepped
+  // around. Whoever the newcomer was added from is a full column away, so they
+  // are never in this set and never move.
   function rowOutward(x, y, id, dir) {
     return visiblePersons()
       .filter((p) => p.id !== id && Math.abs(posOf(p.id).y - y) < ROWH * 0.55)
       .map((p) => ({ id: p.id, x: posOf(p.id).x }))
-      .filter((m) => (dir > 0 ? m.x > x : m.x < x))
+      .filter((m) => (dir > 0 ? m.x > x - MINGAP : m.x < x + MINGAP))
       .sort((a, b) => (dir > 0 ? a.x - b.x : b.x - a.x));
   }
   // Make room for somebody at x — by moving as little as possible. Only people
@@ -1648,7 +1656,7 @@
   function openRowSlot(x, y, id, dir) {
     const row = rowOutward(x, y, id, dir);
     if (!row.length) return;
-    let push = MINGAP - Math.abs(row[0].x - x);
+    let push = MINGAP - (dir > 0 ? row[0].x - x : x - row[0].x);
     if (push <= 0.5) return;                       // there was room here after all
     for (let i = 0; i < row.length && push > 0.5; i++) {
       const q = posOf(row[i].id);
@@ -1683,22 +1691,27 @@
     }
     return x;
   }
-  const spotOccupied = (x, y, exceptId) => visiblePersons().some((p) => p.id !== exceptId && Math.abs(posOf(p.id).x - x) < COLW * 0.85 && Math.abs(posOf(p.id).y - y) < ROWH * 0.55);
+  const spotOccupied = (x, y, exceptId) => visiblePersons().some((p) => p.id !== exceptId && Math.abs(posOf(p.id).x - x) < MINGAP - 0.5 && Math.abs(posOf(p.id).y - y) < ROWH * 0.55);
   // Pin `id` at (x,y); if that spot is taken, open room by shifting the right side over.
   // Linking someone who is already on the canvas must never teleport them: pin
   // the spot they are standing on before the structure changes underneath.
   function pinInPlace(id) { if (id && !isManual(id) && personById(id)) { const q = posOf(id); posMap()[id] = { x: q.x, y: q.y }; } }
   function placeAt(id, x, y, dir) {
     const d = dir == null ? 1 : dir;
-    x = clearOfCouples(x, y, id, d);
-    // Someone standing just BEHIND the spot (the person we were added from,
-    // usually): step forward off them rather than landing on top of them.
-    const back = rowOutward(x, y, id, -d)[0];
-    if (back && Math.abs(back.x - x) < MINGAP) { x = back.x + d * MINGAP; x = clearOfCouples(x, y, id, d); }
-    if (spotOccupied(x, y, id)) {
-      openRowSlot(x, y, id, d);
-      x = clearOfCouples(x, y, id, d);   // the gap that opened may still sit inside a couple
+    // The newcomer keeps the spot they were given; it's the row that gives way.
+    // Stepping them sideways instead only moves the problem along — they end up
+    // standing on whoever is next. Somebody in the way (a partner included)
+    // moves on with everyone beyond them, which is also what keeps a marriage
+    // line whole: the couple travels together rather than being cut in half.
+    for (let i = 0; i < 6; i++) {
+      if (spotOccupied(x, y, id)) { openRowSlot(x, y, id, d); continue; }
+      // Clear of everybody, yet still standing on a marriage line — a couple
+      // sitting wide apart — so step past them instead.
+      const nx = clearOfCouples(x, y, id, d);
+      if (Math.abs(nx - x) <= 0.5) break;
+      x = nx;
     }
+    if (spotOccupied(x, y, id)) openRowSlot(x, y, id, d);
     posMap()[id] = { x, y };
   }
   const isManual = (id) => !!(id && posMap()[id]);
