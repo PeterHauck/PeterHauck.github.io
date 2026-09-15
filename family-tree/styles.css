@@ -683,7 +683,8 @@ button.btn.tiny.danger { color: var(--divorce); border-color: var(--divorce); }
 .pm-linkrow { display: flex; gap: 6px; margin: 10px 0 2px; }
 .pm-linkrow input { flex: 1; min-width: 0; padding: 8px 9px; border-radius: 8px; border: 1px solid var(--panel-border); background: var(--paper); color: var(--ink); font-size: 14px; }
 .pm-linkrow .btn { flex: none; }
-.photo-menu.dropping { outline: 2px dashed var(--accent); outline-offset: 4px; }
+.photo-menu.dropping, .gallery-add.dropping { outline: 2px dashed var(--accent); outline-offset: 4px; }
+.gallery-add .ga-count { margin: -6px 0 10px; color: var(--adopt); }
 /* any picture box, while a picture is being dragged over it */
 .photo-drop.dropping, .pv-photo.dropping, #galleryBox.dropping { outline: 2px dashed var(--accent); outline-offset: 3px; }
 #galleryBox.dropping { border-radius: 10px; }
