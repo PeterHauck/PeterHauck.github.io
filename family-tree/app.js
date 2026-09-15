@@ -3595,9 +3595,16 @@
   // drag to move and pinch/slide to zoom within a square frame, and returns a
   // clean square JPEG via onDone. Also surfaces a clear error if the image can't
   // be read (e.g. an unsupported HEIC), instead of failing silently.
+  // One crop editor at a time. The picture is read before the editor is built,
+  // so a second tap that lands in that gap must be turned away here, not by
+  // looking for a dialog that hasn't been put on screen yet.
+  let photoAdjusting = false;
   function openPhotoAdjust(src, onDone) {
+    if (photoAdjusting) return;
+    if (!src) return;
+    photoAdjusting = true;
     const probe = new Image();
-    probe.onerror = () => toast("Couldn’t read that image — try a JPG or PNG (a screenshot of it works too).");
+    probe.onerror = () => { photoAdjusting = false; toast("Couldn’t read that image — try a JPG or PNG (a screenshot of it works too)."); };
     probe.onload = () => {
       const V = 280, OUT = 400;
       const natW = probe.naturalWidth, natH = probe.naturalHeight;
@@ -3606,13 +3613,13 @@
 
       const back = document.createElement("div");
       back.className = "modal-backdrop";
-      back.innerHTML = `<div class="modal"><h2>Adjust photo</h2>
+      back.innerHTML = `<div class="modal photo-adjust"><h2>Adjust photo</h2>
         <div class="hint">Drag to move, and pinch or use the slider to zoom. The circle shows what fills a round profile.</div>
         <div class="pa-stage" id="paStage"><canvas id="paCanvas" width="${V}" height="${V}"></canvas><div class="pa-guide"></div></div>
         <div class="pa-zoom"><span>−</span><input type="range" id="paZoom" min="1" max="4" step="0.01" value="1"><span>+</span></div>
         <div class="btn-row"><button class="btn" data-cancel>Cancel</button><button class="btn primary" id="paOk">Use photo</button></div></div>`;
       document.body.appendChild(back);
-      const close = () => back.remove();
+      const close = () => { photoAdjusting = false; back.remove(); };
       back.querySelector("[data-cancel]").onclick = close;
       back.addEventListener("click", (e) => { if (e.target === back) close(); });
       const cv = back.querySelector("#paCanvas"), ctx = cv.getContext("2d");
@@ -5059,6 +5066,10 @@
   }
   function openPhotoMenu(p, onChange) {
     if (readonly || !isOwner()) return;
+    // One menu, however many times the picture is tapped: a second tap while
+    // it's open is the same tap, not a second menu stacked behind the first.
+    const already = document.querySelector(".modal-backdrop .photo-menu");
+    if (already) return already.parentNode;
     const back = document.createElement("div"); back.className = "modal-backdrop";
     const m = document.createElement("div"); m.className = "modal photo-menu";
     const h = document.createElement("h2"); h.textContent = "Profile picture"; m.appendChild(h);

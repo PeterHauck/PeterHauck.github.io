@@ -365,7 +365,7 @@ button.btn.danger { color: var(--divorce); }
 
 /* ---------- Lock / password screen ---------- */
 #lock {
-  position: fixed; inset: 0; z-index: 50; display:flex; align-items:center; justify-content:center;
+  position: fixed; inset: 0; z-index: 95; display:flex; align-items:center; justify-content:center;
   background: var(--bg);
 }
 #lock .card {
@@ -378,8 +378,12 @@ button.btn.danger { color: var(--divorce); }
 #lock .err { color: var(--divorce); font-size: 12.5px; min-height: 16px; margin-top: 8px; }
 
 /* modal */
+/* What sits in front of what. A dialog is always in front of whatever opened
+   it — the profile card on a phone included, which used to cover the picture
+   menu completely:  panel 30 · card 60 · dialogs 80 · record viewer 85 ·
+   full-screen photo 90 · password screen 95 · toast 100.                    */
 .modal-backdrop {
-  position: fixed; inset:0; background: rgba(0,0,0,.45); z-index: 40;
+  position: fixed; inset:0; background: rgba(0,0,0,.45); z-index: 80;
   display:flex; align-items:center; justify-content:center; padding: 20px;
 }
 .modal {
@@ -393,7 +397,7 @@ button.btn.danger { color: var(--divorce); }
 .toast {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
   background: var(--ink); color: var(--paper); padding: 10px 16px; border-radius: 8px;
-  font-size: 13px; z-index: 60; box-shadow: var(--shadow); opacity: 0; transition: opacity .2s;
+  font-size: 13px; z-index: 100; box-shadow: var(--shadow); opacity: 0; transition: opacity .2s;
 }
 .toast.show { opacity: 1; }
 
@@ -642,7 +646,7 @@ button.btn.tiny.danger { color: var(--divorce); border-color: var(--divorce); }
 /* read-only profile card (opened by tapping a person on mobile) — a bottom sheet */
 .pcard-back { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; justify-content: center; }
 /* a record/obituary viewer opened from the profile card sits ABOVE it */
-.docview-backdrop { z-index: 70; }
+.docview-backdrop { z-index: 85; }
 .pcard { background: var(--panel); width: 100%; max-width: 560px; max-height: 88vh; overflow-y: auto; border-radius: 16px 16px 0 0; box-shadow: var(--shadow); padding: 16px 16px calc(20px + env(safe-area-inset-bottom)); }
 .pcard-head { display: flex; align-items: flex-start; gap: 12px; }
 .age-line { font-size: 12px; color: var(--muted); margin: -6px 0 10px; }
@@ -749,7 +753,7 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 
 /* GitHub-key expiry banner: amber = expiring soon, red = expired */
 .token-banner {
-  position: fixed; top: 0; left: 0; right: 0; z-index: 90;
+  position: fixed; top: 0; left: 0; right: 0; z-index: 75;
   background: #fff7e6; color: #7a4b12; border-bottom: 1px solid #e5c37a;
   padding: 10px 14px; font-size: 14px; line-height: 1.45;
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
