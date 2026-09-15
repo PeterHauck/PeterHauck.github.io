@@ -3538,7 +3538,11 @@
   $("#pDeceased").addEventListener("change", syncCauseVis);
   { const b = $("#galleryAddBtn"), inp = $("#galleryInput");
     if (b && inp) {
-      b.onclick = () => { if (!$("#personId").value) return toast("Save this person first, then add photos"); inp.click(); };
+      b.onclick = () => {
+        const p = personById($("#personId").value);
+        if (!p) return toast("Save this person first, then add photos");
+        openGalleryAdd(p, () => { const cur = personById(p.id); if (cur) { renderGalleryPanel(cur); renderPersonHead(cur); } });
+      };
       inp.onchange = async () => {
         const p = personById($("#personId").value); if (!p) return;
         const n = await galleryAdd(p, inp.files); inp.value = "";
@@ -5018,6 +5022,18 @@
     if (added) { save(); try { cloudSaveTree(false); } catch (e) {} scheduleSweep(); }
     return added;
   }
+  // A picture already in hand (fetched from a link, say) straight into the
+  // gallery — the same route as a picked file, minus the reading.
+  async function galleryAddImage(p, dataUrl) {
+    if (!dataUrl) return 0;
+    const full = await new Promise((res) => { const im = new Image(); im.onload = () => { try { res(downscale(im, 1400)); } catch (e) { res(dataUrl); } }; im.onerror = () => res(null); im.src = dataUrl; });
+    if (!full) { toast("Couldn’t read that picture"); return 0; }
+    if (!Array.isArray(p.gallery)) p.gallery = [];
+    try { p.gallery.push({ ref: await mediaUpload(full) }); }
+    catch (e) { p.gallery.push({ data: full }); }
+    save(); try { cloudSaveTree(false); } catch (e) {} scheduleSweep();
+    return 1;
+  }
   const galleryPicSrc = (g) => (g.data || (g.ref && mediaMem.get(g.ref)) || null);
   // A strip of thumbnails: tap to enlarge, ★ to make it the tree picture, ✕ to remove.
   function renderGallery(host, p, onChange) {
@@ -5260,6 +5276,23 @@
   // Facebook's are served by a cache box inside your own ISP, so its address
   // doesn't exist anywhere else and no amount of fetching will find it.
   const linkIsLocalOnly = (url) => /(^|\.)fbcdn\.net|scontent[.-]/i.test(String(url));
+  // The picture behind a link, fetched BY THE SITE — so it works on pictures
+  // the browser itself couldn't read. Returns { image } or { error }, and the
+  // caller decides what to do with either; { cancelled } when no passcode was
+  // given. One route for every box that takes a link.
+  async function fetchLinkImage(url) {
+    if (linkIsLocalOnly(url)) return { error: "That Facebook link only works on the device it was copied from" };
+    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
+    if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
+    if (!pass) return { cancelled: true };
+    try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
+    toast("Fetching the photo…");
+    try {
+      const data = await callArchive({ passcode: pass, url });
+      if (!data || !data.image) return { error: "No picture at that link" };
+      return { image: data.image };
+    } catch (e) { return { error: e.message || "Couldn’t fetch that link" }; }
+  }
   async function fetchPhotoFromLink(p, url, onChange) {
     // Whatever goes wrong with a link, the answer is the same and the box is
     // reopened ready for it: copy the picture itself and paste it in.
@@ -5267,21 +5300,90 @@
       toast(why + " — right-click the photo → Copy image, then paste it here (⌘V / Ctrl-V).");
       openPhotoMenu(p, onChange);
     };
-    if (linkIsLocalOnly(url)) { askForPaste("That Facebook link only works on the device it was copied from"); return; }
-    let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
-    if (!pass) pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || "";
-    if (!pass) return;
-    try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {}
-    toast("Fetching the photo…");
-    try {
-      const data = await callArchive({ passcode: pass, url });
-      if (!data || !data.image) return askForPaste("No picture at that link");
-      openPhotoAdjust(data.image, async (sq) => {
-        const kept = await setTreePicture(p, sq, data.image, null, true);
-        toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated");
-        if (onChange) onChange();
-      });
-    } catch (e) { askForPaste(e.message || "Couldn’t fetch that link"); }
+    const got = await fetchLinkImage(url);
+    if (got.cancelled) return;
+    if (got.error) return askForPaste(got.error);
+    openPhotoAdjust(got.image, async (sq) => {
+      const kept = await setTreePicture(p, sq, got.image, null, true);
+      toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated");
+      if (onChange) onChange();
+    });
+  }
+  // "Add photos" opens this rather than jumping straight to a file box: a
+  // picture arrives as often from a link or the clipboard as from a file, and
+  // all three belong in the same place. Stays open so several can go in.
+  function openGalleryAdd(p, onChange) {
+    if (readonly || !isOwner()) return null;
+    if (document.querySelector(".modal-backdrop .gallery-add")) return null;   // one at a time
+    let added = 0;
+    const back = document.createElement("div"); back.className = "modal-backdrop";
+    const m = document.createElement("div"); m.className = "modal gallery-add";
+    const h = document.createElement("h2"); h.textContent = "Add photos"; m.appendChild(h);
+    const hint = document.createElement("div"); hint.className = "hint";
+    hint.textContent = "Paste a picture (⌘V) or drop one here, paste a link to one, or choose files from this device. They go into " + ((p.first || p.name || "their") + (/(s)$/i.test(p.first || "") ? "'" : "'s")) + " photos.";
+    m.appendChild(hint);
+    const say = document.createElement("div"); say.className = "hint ga-count"; m.appendChild(say);
+    const count = (n) => {
+      added += n;
+      say.textContent = added ? added + (added === 1 ? " photo added" : " photos added") : "";
+      doneBtn.textContent = added ? "Done" : "Cancel";
+      if (onChange) onChange();
+    };
+    // a link
+    const row = document.createElement("div"); row.className = "pm-linkrow";
+    const link = document.createElement("input");
+    link.type = "text"; link.placeholder = "Paste a photo link — or the picture itself"; link.autocomplete = "off"; link.spellcheck = false;
+    const go = document.createElement("button"); go.type = "button"; go.className = "btn"; go.textContent = "Add";
+    const runLink = async () => {
+      const url = (link.value || "").trim();
+      if (!url) { toast("Paste a link first"); link.focus(); return; }
+      go.disabled = true;
+      const got = await fetchLinkImage(url);
+      go.disabled = false;
+      if (got.cancelled) return;
+      if (got.error) { toast(got.error + " — copy the picture itself and paste it here instead"); link.select(); return; }
+      const n = await galleryAddImage(p, got.image);
+      link.value = "";
+      if (n) count(n);
+    };
+    go.onclick = runLink;
+    link.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); runLink(); } });
+    row.appendChild(link); row.appendChild(go); m.appendChild(row);
+    // files
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = "image/*,.heic,.heif,application/pdf,.pdf"; inp.multiple = true; inp.style.display = "none";
+    inp.onchange = async () => { const n = await galleryAdd(p, inp.files); inp.value = ""; if (n) count(n); };
+    m.appendChild(inp);
+    const btns = document.createElement("div"); btns.className = "btn-row";
+    const pick = document.createElement("button"); pick.type = "button"; pick.className = "btn"; pick.textContent = "📁 Choose files…";
+    pick.onclick = () => inp.click();
+    const doneBtn = document.createElement("button"); doneBtn.type = "button"; doneBtn.className = "btn"; doneBtn.textContent = "Cancel";
+    btns.appendChild(pick); btns.appendChild(doneBtn); m.appendChild(btns);
+    // paste / drop, the same as every other picture box
+    const take = async (files) => { const n = await galleryAdd(p, files); if (n) count(n); };
+    const onPaste = (e) => {
+      const items = (e.clipboardData && e.clipboardData.items) || [];
+      for (const it of items) {
+        if (it.type && it.type.indexOf("image/") === 0) { e.preventDefault(); e.stopPropagation(); take([it.getAsFile()]); return; }
+      }
+    };
+    document.addEventListener("paste", onPaste, true);
+    const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+    m.addEventListener("dragover", (e) => { stop(e); m.classList.add("dropping"); });
+    m.addEventListener("dragleave", () => m.classList.remove("dropping"));
+    m.addEventListener("drop", (e) => {
+      stop(e); m.classList.remove("dropping");
+      const dt = e.dataTransfer;
+      if (dt && dt.files && dt.files.length) return take(dt.files);
+      const u = dt && (dt.getData("text/uri-list") || dt.getData("text/plain"));
+      if (u && u.trim()) { link.value = u.trim(); runLink(); }
+    });
+    const close = () => { document.removeEventListener("paste", onPaste, true); back.remove(); };
+    doneBtn.onclick = close;
+    back.addEventListener("click", (e) => { if (e.target === back) close(); });
+    back.appendChild(m); document.body.appendChild(back);
+    setTimeout(() => { try { link.focus(); } catch (e) {} }, 0);
+    return back;
   }
   // Pick one of their gallery photos to become the tree picture, then crop it.
   function openGalleryPick(p, onChange) {
@@ -5464,7 +5566,8 @@
         if (n) toast(n === 1 ? "Photo added" : n + " photos added");
       };
       const add = document.createElement("button"); add.className = "btn small"; add.textContent = "🖼 Add pictures to gallery";
-      add.onclick = () => galInput.click();
+      // Same box as the computer: a link, a pasted picture, or files.
+      add.onclick = () => openGalleryAdd(p, () => { closeProfileCard(); openProfileCard(id); }) || galInput.click();
       s.appendChild(add); s.appendChild(galInput);
       const galHost = document.createElement("div");
       renderGallery(galHost, p, () => { closeProfileCard(); openProfileCard(id); });
