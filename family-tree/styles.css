@@ -378,6 +378,20 @@ button.btn.danger { color: var(--divorce); }
 #lock .err { color: var(--divorce); font-size: 12.5px; min-height: 16px; margin-top: 8px; }
 
 /* modal */
+/* right-click menu on the bare grid: add space, or add somebody */
+.ctx-menu {
+  position: fixed; z-index: 70; min-width: 210px; padding: 6px;
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: 10px; box-shadow: var(--shadow);
+}
+.ctx-menu .ctx-hint { font-size: 11.5px; color: var(--muted); padding: 4px 8px 6px; }
+.ctx-menu .ctx-item {
+  display: block; width: 100%; text-align: left; border: none; background: transparent;
+  color: var(--ink); font-size: 13px; padding: 8px 9px; border-radius: 7px; cursor: pointer;
+}
+.ctx-menu .ctx-item:hover { background: var(--paper); }
+.ctx-menu .ctx-sep { height: 1px; background: var(--panel-border); margin: 5px 2px; }
+
 /* What sits in front of what. A dialog is always in front of whatever opened
    it — the profile card on a phone included, which used to cover the picture
    menu completely:  panel 30 · card 60 · dialogs 80 · record viewer 85 ·
