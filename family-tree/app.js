@@ -2838,9 +2838,10 @@
     else placeholder();
     if (isDeceased(p)) av.classList.add("deceased");
     if (!readonly && isOwner()) {
-      av.classList.add("tappable"); av.title = "Change their picture";
+      av.classList.add("tappable"); av.title = "Change their picture — click, or paste (⌘V) / drop one here";
       const cam = document.createElement("span"); cam.className = "pcard-photo-cam"; cam.textContent = "📷"; av.appendChild(cam);
       av.onclick = () => openPhotoMenu(p, () => { const cur = personById(p.id); if (cur) { renderPersonHead(cur); renderGalleryPanel(cur); } });
+      makePhotoTarget(av, (f) => takeProfilePhoto(f), "picture");
     }
     row.appendChild(av);
     const txt2 = document.createElement("div"); txt2.className = "pv-text";
@@ -3467,17 +3468,92 @@
     }
   };
 
-  /* photo upload with downscale */
-  $("#photoDrop").onclick = () => $("#photoInput").click();
-  $("#photoClear").onclick = () => { pendingPhoto = null; photoDirty = true; updatePhotoPreview(); };
-  $("#photoUrlBtn").onclick = () => setPhotoFromUrl($("#photoUrl").value);
-  $("#photoInput").addEventListener("change", async (e) => {
-    const file = e.target.files[0]; e.target.value = ""; if (!file) return;
+  /* ---------------- pictures pasted or dropped straight into a box ----------
+     The clipboard already holds the pixels, so nothing has to be fetched — the
+     quickest way in for any picture, and the only way in for one whose link
+     can't be followed (Facebook's, say). Every picture box takes a paste and a
+     drop: the tree picture in the form, the picture on their profile, and the
+     gallery. Whichever box the pointer is over takes the paste; with the
+     pointer elsewhere it goes to the tree picture.                          */
+  let hoverPhotoBox = null;
+  function makePhotoTarget(el, take, kind) {
+    if (!el || el.dataset.photoTarget) return el;
+    el.dataset.photoTarget = kind || "picture";
+    el._takePhoto = take;
+    el.addEventListener("pointerenter", () => { hoverPhotoBox = el; });
+    el.addEventListener("pointerleave", () => { if (hoverPhotoBox === el) hoverPhotoBox = null; });
+    el.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); el.classList.add("dropping"); });
+    el.addEventListener("dragleave", () => el.classList.remove("dropping"));
+    el.addEventListener("drop", (e) => {
+      e.preventDefault(); e.stopPropagation(); el.classList.remove("dropping");
+      const dt = e.dataTransfer;
+      const f = dt && dt.files && dt.files[0];
+      if (f) return take(f);
+      const u = dt && (dt.getData("text/uri-list") || dt.getData("text/plain"));
+      if (u && u.trim()) takePhotoLink(el, u.trim());
+    });
+    return el;
+  }
+  // A link dropped on a box: the tree picture fetches it; the gallery says so.
+  function takePhotoLink(el, url) {
+    if (el.dataset.photoTarget === "gallery") { toast("Drop the picture itself here — a link only works on the tree picture"); return; }
+    if ($("#personForm") && !$("#personForm").hidden) { const b = $("#photoUrl"); if (b) b.value = url; setPhotoFromUrl(url); return; }
+    const p = personById($("#personId").value); if (p) fetchPhotoFromLink(p, url, () => { const cur = personById(p.id); if (cur) { renderPersonHead(cur); renderGalleryPanel(cur); } });
+  }
+  // Stage a picked/pasted/dropped picture as the tree picture in the FORM
+  // (nothing is saved until Save is pressed, same as choosing a file).
+  async function stageFormPhoto(file) {
+    if (!file) return;
     let src = null;
     try { src = await fileAsPictureDataUrl(file); }
     catch (err) { toast(isPdfFile(file) ? "Couldn’t read that PDF — try saving the page as a JPG." : "Couldn’t convert that HEIC photo — try exporting it as JPG."); return; }
     if (!src) return toast("Couldn’t read that file.");
     openPhotoAdjust(src, (photo) => { pendingPhoto = photo; photoDirty = true; photoReplaced = true; updatePhotoPreview(); });
+  }
+  // …and straight onto the person when their profile (not the form) is showing.
+  async function takeProfilePhoto(file) {
+    const p = personById($("#personId").value);
+    if (!p) return toast("Click somebody first, then paste their picture");
+    const full = await fileAsFullImage(file); if (!full) return;
+    openPhotoAdjust(full, async (sq) => {
+      const kept = await setTreePicture(p, sq, full, null, true);
+      renderPersonHead(personById(p.id) || p); renderGalleryPanel(personById(p.id) || p);
+      toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated");
+    });
+  }
+  async function takeGalleryPhoto(file) {
+    const p = personById($("#personId").value);
+    if (!p) return toast("Save this person first, then add photos");
+    const n = await galleryAdd(p, [file]);
+    if (n) { renderGalleryPanel(personById(p.id) || p); toast("Photo added to their gallery"); }
+  }
+  // One listener for the whole page: a picture on the clipboard goes to the box
+  // under the pointer, or to the tree picture when the pointer is elsewhere.
+  document.addEventListener("paste", (e) => {
+    if (readonly || e.defaultPrevented) return;
+    if (document.querySelector(".modal-backdrop")) return;      // a dialog handles its own pastes
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    let file = null;
+    for (const it of items) { if (it.type && it.type.indexOf("image/") === 0) { file = it.getAsFile(); break; } }
+    if (!file) return;                                          // pasting text stays pasting text
+    // A box the pointer has since left — or one that has been redrawn out from
+    // under it — doesn't count as the target.
+    const hovered = hoverPhotoBox && hoverPhotoBox._takePhoto && hoverPhotoBox.isConnected && hoverPhotoBox.offsetParent !== null ? hoverPhotoBox : null;
+    const box = hovered || ($("#personForm") && !$("#personForm").hidden ? $("#photoDrop") : null);
+    e.preventDefault();
+    if (box && box._takePhoto) box._takePhoto(file);
+    else takeProfilePhoto(file);
+  });
+
+  /* photo upload with downscale */
+  $("#photoDrop").onclick = () => $("#photoInput").click();
+  makePhotoTarget($("#photoDrop"), (f) => stageFormPhoto(f), "picture");
+  { const g = $("#galleryBox"); if (g) makePhotoTarget(g, (f) => takeGalleryPhoto(f), "gallery"); }
+  $("#photoClear").onclick = () => { pendingPhoto = null; photoDirty = true; updatePhotoPreview(); };
+  $("#photoUrlBtn").onclick = () => setPhotoFromUrl($("#photoUrl").value);
+  $("#photoInput").addEventListener("change", async (e) => {
+    const file = e.target.files[0]; e.target.value = ""; if (!file) return;
+    stageFormPhoto(file);
   });
   // Set when the staged photo is a DIFFERENT picture (a file, a drop, a link) —
   // not when it's the current one being re-framed with Adjust.
