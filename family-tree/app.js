@@ -2792,6 +2792,95 @@
     const one = ids.length === 1 ? ((personById(pidOf(ids[0])) || {}).first || "They") : ids.length + " people";
     toast(one + " moved a row " + (dir < 0 ? "up" : "down"));
   }
+  /* ---------------- right-click the empty grid: make room, or add somebody ----
+     Room to put people in is its own job, separate from arranging who is
+     already there. Right-clicking a bare patch of grid opens everything to the
+     right of that spot — on that row, or straight down the board — and nothing
+     else about the layout is touched: no re-layout, no tidying, no reflow.   */
+  const SPACE_STEP = COLW;                      // one column per click
+  function spaceTargets(worldX, worldY, rowOnly) {
+    const onRow = (q) => !rowOnly || Math.abs(q.y - worldY) < ROWH * 0.55;
+    const people = visiblePersons().map((p) => ({ id: p.id, q: posOf(p.id) })).filter((m) => m.q && onRow(m.q));
+    const eco = echoMap();
+    const copies = Object.keys(eco).filter((k) => eco[k] && onRow(eco[k])).map((k) => ({ key: k, q: eco[k] }));
+    return { people, copies };
+  }
+  // Move everyone right of the spot over by `amount` (negative closes the gap).
+  function addSpaceAt(worldX, worldY, rowOnly, amount) {
+    const { people, copies } = spaceTargets(worldX, worldY, rowOnly);
+    const right = people.filter((m) => m.q.x > worldX).concat(copies.filter((m) => m.q.x > worldX));
+    if (!right.length) { toast(rowOnly ? "Nobody on this row to the right of there" : "Nobody to the right of there"); return 0; }
+    if (amount < 0) {
+      // Closing a gap can only take back what the gap actually holds.
+      const leftEdge = people.concat(copies).filter((m) => m.q.x <= worldX).reduce((mx, m) => Math.max(mx, m.q.x), -Infinity);
+      const rightEdge = right.reduce((mn, m) => Math.min(mn, m.q.x), Infinity);
+      const room = leftEdge === -Infinity ? Math.abs(amount) : (rightEdge - leftEdge) - MINGAP;
+      if (room <= 1) { toast("No spare room to close here"); return 0; }
+      amount = -Math.min(Math.abs(amount), room);
+    }
+    pushUndo();
+    const eco = echoMap();
+    right.forEach((m) => {
+      if (m.id) posMap()[m.id] = { x: m.q.x + amount, y: m.q.y };
+      else eco[m.key] = { x: m.q.x + amount, y: m.q.y };
+    });
+    save(); render();
+    return right.length;
+  }
+  // The row a spot belongs to: the height people near it are standing at, so a
+  // person added by hand lines up with the generation they were dropped into.
+  function rowYNear(worldY) {
+    let best = null, bd = ROWH * 0.5;
+    visiblePersons().forEach((p) => { const q = posOf(p.id); const d = Math.abs(q.y - worldY); if (d < bd) { bd = d; best = q.y; } });
+    return best == null ? worldY : best;
+  }
+  function closeGridMenu() { const m = document.getElementById("gridMenu"); if (m) m.remove(); }
+  function openGridMenu(clientX, clientY, world) {
+    closeGridMenu();
+    const m = document.createElement("div"); m.id = "gridMenu"; m.className = "ctx-menu";
+    const hint = document.createElement("div"); hint.className = "ctx-hint";
+    hint.textContent = "Everything to the right of here moves over.";
+    m.appendChild(hint);
+    const item = (label, title, fn) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "ctx-item";
+      b.textContent = label; if (title) b.title = title;
+      b.onclick = () => fn();
+      m.appendChild(b); return b;
+    };
+    item("⇥ Add space in this row", "One column of room, on this row only — hold the menu open to add more",
+      () => { const n = addSpaceAt(world.x, world.y, true, SPACE_STEP); if (n) toast("Space added on this row — click again for more · Cmd+Z to undo"); });
+    item("⇥ Add space in every row", "One column of room, straight down the whole board",
+      () => { const n = addSpaceAt(world.x, world.y, false, SPACE_STEP); if (n) toast("Space added down the board — click again for more · Cmd+Z to undo"); });
+    item("⇤ Close the space here", "Take a column back, as far as there is room for",
+      () => { const n = addSpaceAt(world.x, world.y, true, -SPACE_STEP); if (n) toast("Closed up · Cmd+Z to undo"); });
+    const sep = document.createElement("div"); sep.className = "ctx-sep"; m.appendChild(sep);
+    item("＋ Add a person here", "Somebody new, standing on this spot — connect them up afterwards", () => {
+      closeGridMenu();
+      pushUndo();
+      const np = addPerson({ name: "New person", sex: "unknown" });
+      posMap()[np.id] = { x: world.x, y: rowYNear(world.y) };
+      focusNewPerson(np, "Added here — type their name and Save");
+    });
+    document.body.appendChild(m);
+    // keep it on screen
+    const r = m.getBoundingClientRect();
+    m.style.left = Math.min(clientX, window.innerWidth - r.width - 8) + "px";
+    m.style.top = Math.min(clientY, window.innerHeight - r.height - 8) + "px";
+    const away = (e) => { if (!m.contains(e.target)) { closeGridMenu(); document.removeEventListener("pointerdown", away, true); } };
+    setTimeout(() => document.addEventListener("pointerdown", away, true), 0);
+    m.addEventListener("contextmenu", (e) => e.preventDefault());
+    return m;
+  }
+  svg.addEventListener("contextmenu", (e) => {
+    if (readonly) return;
+    // Anything with a right-click of its own (a connector, a drop line, a
+    // person) keeps it — this is only for bare grid.
+    if (e.target.closest && e.target.closest("g.person, .add-plus, .hidden-badge, .doc-badge, .bus-hit, .drop-hit, .jump-badge")) return;
+    e.preventDefault();
+    openGridMenu(e.clientX, e.clientY, toWorld(e.clientX, e.clientY));
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeGridMenu(); });
+
   stage.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY); }, { passive: false });
 
   /* ============================================================ FORMS */
