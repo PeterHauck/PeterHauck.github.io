@@ -260,6 +260,7 @@ button.btn.danger { color: var(--divorce); }
 #tbSync.sync-error { color: var(--divorce); background: color-mix(in srgb, var(--divorce) 12%, transparent); border-color: var(--divorce); }
 #toolbar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 #toolbar .sep { width:1px; height:22px; background: var(--panel-border); margin:0 2px; }
+#tbFind { display: none; }          /* phones only — the computer has the ☰ list */
 #toolbar .zoomlabel { font-size:12px; color:var(--muted); width:44px; text-align:center; }
 
 /* People list + menu, opened by ☰ (docked under the toolbar) */
@@ -750,6 +751,7 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
   #toolbar .zoomlabel { width: 42px; font-size: 12px; display: flex; align-items: center; justify-content: center; }
   #tbMenu, #tbImport, #tbRearrange, #tbTidy, #toolbar .sep,
   #panelToggle, #peopleMenu, #panel, #hiddenChip { display: none !important; }
+  #tbFind { display: flex; }
   /* no keyboard on a phone, so no shortcut strip */
   #hotkeys { display: none !important; }
   #tbFit, #tbZoomIn, #tbZoomOut, #tbSync { display: flex; }
@@ -835,6 +837,17 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 .vs-row.active { background: var(--accent); color: #fff; }
 #viewSwitchSec { border-bottom: 1px solid var(--panel-border); padding-bottom: 6px; margin-bottom: 6px; }
 .vsheet .vs-row { font-size: 15px; padding: 12px 12px; }
+/* find-someone sheet (phones): type a name, tap to fly there */
+.find-box { width: 100%; padding: 12px; font-size: 16px; margin-bottom: 8px; }
+.find-list { list-style: none; margin: 0; padding: 0; }
+.find-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 13px 10px; border-bottom: 1px solid var(--panel-border); cursor: pointer;
+}
+.find-row:active { background: var(--paper); }
+.find-name { font-size: 15.5px; }
+.find-meta { font-size: 12.5px; color: var(--muted); flex: none; }
+.find-empty { padding: 14px 10px; color: var(--muted); font-size: 14px; }
 @media (min-width: 721px) {
   #tbViews { display: none !important; }   /* desktop switches views inside the ☰ menu */
 }

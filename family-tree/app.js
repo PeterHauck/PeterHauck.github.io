@@ -2428,6 +2428,7 @@
     return { x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 };
   }
   function fitView() {
+    stopGlide();
     const b = bbox(); const r = stage.getBoundingClientRect();
     const s = Math.min(r.width / b.w, r.height / b.h, 1.2);
     view.scale = Math.max(0.15, s);
@@ -2436,6 +2437,7 @@
     applyView();
   }
   function centerOn(id) {
+    stopGlide();
     const p = posOf(id); const r = stage.getBoundingClientRect();
     view.tx = r.width / 2 - p.x * view.scale;
     view.ty = r.height / 2 - p.y * view.scale;
@@ -2474,6 +2476,7 @@
     applyView();
   }
   function zoomAt(factor, cx, cy) {
+    stopGlide();
     const r = stage.getBoundingClientRect();
     cx = cx == null ? r.width / 2 : cx - r.left; cy = cy == null ? r.height / 2 : cy - r.top;
     const ns = Math.min(3, Math.max(0.12, view.scale * factor));
@@ -2522,6 +2525,7 @@
   }
 
   svg.addEventListener("pointerdown", (e) => {
+    stopGlide();                       // a finger on the board stops it dead
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     try { svg.setPointerCapture(e.pointerId); } catch (_) {}
     if (pointers.size >= 2) { startPinch(); marquee = null; updateMarquee(); return; }
@@ -2580,6 +2584,34 @@
     stage.classList.add("panning");
   });
 
+  /* ---- throwing the board: a flick keeps going ---------------------------
+     A tree this wide is miles across on a phone, and a finger can only ever
+     drag one screen at a time. So the speed the finger left at is carried on
+     and eased to a stop — and the quicker the flick, the further it carries,
+     so a small movement can cross a long way. Touching the board stops it
+     dead, the way a page of paper does.                                     */
+  let glide = null;
+  function stopGlide() { if (glide) { cancelAnimationFrame(glide.raf); glide = null; } }
+  function startGlide(vx, vy) {
+    stopGlide();
+    const speed = Math.hypot(vx, vy);                  // screen px per millisecond
+    if (speed < 0.25) return;                          // a slow drag simply stops where it stopped
+    const boost = 1 + Math.min(1.6, speed * 0.55);     // a harder flick throws proportionally further
+    const state = { vx: vx * boost, vy: vy * boost, last: performance.now(), raf: 0 };
+    glide = state;
+    const step = (now) => {
+      if (glide !== state) return;
+      const dt = Math.min(48, now - state.last); state.last = now;
+      view.tx += state.vx * dt; view.ty += state.vy * dt;
+      const decay = Math.pow(0.02, dt / 1000);         // eases out over about a second and a half
+      state.vx *= decay; state.vy *= decay;
+      applyView();
+      if (Math.hypot(state.vx, state.vy) < 0.02) { stopGlide(); return; }
+      state.raf = requestAnimationFrame(step);
+    };
+    state.raf = requestAnimationFrame(step);
+  }
+
   svg.addEventListener("pointermove", (e) => {
     if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pinch && pointers.size >= 2) {
@@ -2596,6 +2628,17 @@
     const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
     if (drag.mode === "pan") {
       if (Math.abs(dx) + Math.abs(dy) > 6) drag.moved = true;
+      // how fast the finger is going right now, smoothed a little so one
+      // jittery frame at the end doesn't decide the throw
+      const now = e.timeStamp || performance.now();
+      const prev = drag.at || { x: e.clientX, y: e.clientY, t: now - 16 };
+      const gap = Math.max(1, now - prev.t);
+      if (gap > 4) {
+        const ix = (e.clientX - prev.x) / gap, iy = (e.clientY - prev.y) / gap;
+        drag.vx = drag.vx == null ? ix : drag.vx * 0.4 + ix * 0.6;
+        drag.vy = drag.vy == null ? iy : drag.vy * 0.4 + iy * 0.6;
+        drag.at = { x: e.clientX, y: e.clientY, t: now };
+      }
       view.tx = drag.tx + dx; view.ty = drag.ty + dy; applyView();
     }
     else if (drag.mode === "group") {
@@ -2640,6 +2683,12 @@
           if (selection.size) toast(selection.size + " selected — drag any of them to move the group");
         } else { selection = new Set(); }
         marquee = null; updateMarquee(); render();
+      }
+      // let go mid-flick and the board carries on (touch and pen — a mouse
+      // drag ends where you put it)
+      if (drag && drag.mode === "pan" && drag.moved && e.pointerType !== "mouse" && drag.vx != null) {
+        const idle = (e.timeStamp || performance.now()) - ((drag.at && drag.at.t) || 0);
+        if (idle < 90) startGlide(drag.vx, drag.vy);   // …unless the finger had already come to rest
       }
       // a tap on a person (no real movement): on mobile, open their read-only
       // profile card; on desktop, select into the editor.
@@ -6837,6 +6886,7 @@
   { const b = $("#pmViews"); if (b) b.onclick = () => { $("#peopleMenu").hidden = true; openViewsModal(); }; }
   { const b = $("#pmEnableEdit"); if (b) b.onclick = () => { $("#peopleMenu").hidden = true; enableEditingHere(); }; }
   { const b = $("#tbViews"); if (b) b.onclick = openViewSheet; }
+  { const b = $("#tbFind"); if (b) b.onclick = openFindSheet; }
   $("#pmArrange").onclick = () => {
     pushUndo();
     const keepPinned = (map) => { const out = {}; Object.keys(state.locked || {}).forEach((id) => { if (map && map[id]) out[id] = map[id]; }); return out; };
@@ -7451,6 +7501,60 @@
     if (!sec) return;
     sec.hidden = !has;
     if (has) buildViewSwitchList(document.getElementById("viewSwitchList"), () => { const m = $("#peopleMenu"); if (m) m.hidden = true; });
+  }
+  // Jump straight to somebody. On a phone the board is miles wide, so looking
+  // a name up beats swiping for it — and it lands them in the middle of the
+  // screen, at a size you can read, with a ring round them so they're easy to
+  // pick out of the crowd.
+  function jumpToPerson(id) {
+    const p = personById(id); if (!p) return;
+    stopGlide();
+    if (view.scale < 0.75) view.scale = 0.9;
+    centerOn(id);
+    selectedId = id; render();
+    toast((p.first || p.name) + " — tap them for their profile");
+  }
+  function openFindSheet() {
+    const back = document.createElement("div"); back.className = "pcard-back"; back.id = "findSheetBack";
+    const card = document.createElement("div"); card.className = "pcard vsheet"; back.appendChild(card);
+    const head = document.createElement("div"); head.className = "pcard-head";
+    const h = document.createElement("h2"); h.textContent = "Find someone"; h.style.margin = "0"; head.appendChild(h);
+    const x = document.createElement("button"); x.className = "pcard-x"; x.textContent = "✕"; x.onclick = () => back.remove(); head.appendChild(x);
+    card.appendChild(head);
+    const body = document.createElement("div"); body.className = "pcard-body"; card.appendChild(body);
+    const box = document.createElement("input");
+    box.type = "text"; box.className = "find-box"; box.placeholder = "Type a name…"; box.autocomplete = "off";
+    body.appendChild(box);
+    const list = document.createElement("ul"); list.className = "find-list"; body.appendChild(list);
+    const fill = (q) => {
+      const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const hits = state.persons
+        .filter((p) => inView(p.id))
+        .filter((p) => words.every((w) => (p.name || "").toLowerCase().includes(w)))
+        .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+        .slice(0, 60);
+      list.textContent = "";
+      if (!hits.length) {
+        const li = document.createElement("li"); li.className = "find-empty";
+        li.textContent = q.trim() ? "Nobody by that name" : "Everyone is listed here";
+        list.appendChild(li); return;
+      }
+      hits.forEach((p) => {
+        const li = document.createElement("li"); li.className = "find-row";
+        const nm = document.createElement("span"); nm.className = "find-name"; nm.textContent = p.name || "Unnamed";
+        const dt = document.createElement("span"); dt.className = "find-meta"; dt.textContent = dateStr(p);
+        li.appendChild(nm); li.appendChild(dt);
+        li.onclick = () => { back.remove(); jumpToPerson(p.id); };
+        list.appendChild(li);
+      });
+    };
+    box.addEventListener("input", () => fill(box.value));
+    box.addEventListener("keydown", (e) => { if (e.key === "Enter") { const first = list.querySelector(".find-row"); if (first) first.click(); } });
+    fill("");
+    back.addEventListener("click", (e) => { if (e.target === back) back.remove(); });
+    document.body.appendChild(back);
+    setTimeout(() => { try { box.focus(); } catch (e) {} }, 0);
+    return back;
   }
   function openViewSheet() {
     const back = document.createElement("div"); back.className = "pcard-back"; back.id = "viewSheetBack";
