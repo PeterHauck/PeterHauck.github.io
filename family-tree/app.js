@@ -2528,7 +2528,7 @@
     stopGlide();                       // a finger on the board stops it dead
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     try { svg.setPointerCapture(e.pointerId); } catch (_) {}
-    if (pointers.size >= 2) { startPinch(); marquee = null; updateMarquee(); return; }
+    if (pointers.size >= 2) { if (drag && drag.hold) { clearTimeout(drag.hold); drag.hold = null; } stopSweep(); startPinch(); marquee = null; updateMarquee(); return; }
 
     const badge = e.target.closest && e.target.closest(".doc-badge");
     if (badge) { openDocsForPerson(badge.getAttribute("data-id")); return; }
@@ -2582,6 +2582,11 @@
     drag = { mode: "pan", startX: e.clientX, startY: e.clientY, tx: view.tx, ty: view.ty, moved: false };
     if (personEl) drag.tapId = personEl.getAttribute("data-id");
     stage.classList.add("panning");
+    // …and a thumb held still on bare board turns into a sweep
+    if (!personEl && e.pointerType !== "mouse") {
+      const at = { x: e.clientX, y: e.clientY };
+      drag.hold = setTimeout(() => { if (drag && !drag.moved) startSweep(at.x, at.y); }, HOLD_MS);
+    }
   });
 
   /* ---- throwing the board: a flick keeps going ---------------------------
@@ -2592,6 +2597,67 @@
      dead, the way a page of paper does.                                     */
   let glide = null;
   function stopGlide() { if (glide) { cancelAnimationFrame(glide.raf); glide = null; } }
+
+  /* ---- press and hold, then sweep -----------------------------------------
+     Hold a bare patch of board for a moment and the thumb becomes a throttle:
+     slide it a little in any direction and the board scrolls that way, faster
+     the further it goes, for as long as it's held there. A thumb's worth of
+     movement crosses the whole tree, and letting go stops it. (Touch only —
+     a mouse has a right-click menu on the same patch of grid.)              */
+  const HOLD_MS = 380;            // how long a still thumb counts as "held"
+  const HOLD_SLOP = 12;           // …and how far it may wander in that time
+  const SWEEP_DEAD = 9;           // a thumb is never perfectly still
+  const SWEEP_REACH = 130;        // how far a thumb goes before it's at full tilt
+  let sweep = null;
+  function sweepDot(show, ax, ay, tx, ty) {
+    let el = document.getElementById("sweepMark");
+    if (!show) { if (el) el.remove(); return; }
+    if (!el) {
+      el = document.createElement("div"); el.id = "sweepMark"; el.className = "sweep-mark";
+      el.innerHTML = '<span class="sweep-ring"></span><span class="sweep-thumb"></span>';
+      document.body.appendChild(el);
+    }
+    el.style.left = ax + "px"; el.style.top = ay + "px";
+    const t = el.querySelector(".sweep-thumb");
+    t.style.transform = "translate(" + (tx - ax) + "px," + (ty - ay) + "px)";
+  }
+  function startSweep(x, y) {
+    stopGlide();
+    // Full tilt crosses the whole tree in a couple of seconds, whatever size it
+    // is and however far out you're zoomed — so a thumb's worth of movement is
+    // always a board's worth of travel.
+    const b = bbox();
+    const span = Math.max(b.w, b.h, 800) * view.scale;
+    const top = Math.max(2500, Math.min(12000, span / 2.2));
+    sweep = { ax: x, ay: y, x, y, top, last: performance.now(), raf: 0 };
+    sweepDot(true, x, y, x, y);
+    try { if (navigator.vibrate) navigator.vibrate(8); } catch (e) {}
+    toastOnce("sweep", "Sweeping — slide your thumb to scroll, lift to stop");
+    const step = (now) => {
+      if (!sweep) return;
+      const dt = Math.min(48, now - sweep.last); sweep.last = now;
+      let dx = sweep.x - sweep.ax, dy = sweep.y - sweep.ay;
+      const dist = Math.hypot(dx, dy);
+      if (dist > SWEEP_DEAD) {
+        // Gentle near the middle and quick at the edge of a thumb's reach, so
+        // there's fine control as well as long distance. Same direction a drag
+        // would go: the board keeps sliding the way the thumb is pushing it.
+        const t = Math.min(1, (dist - SWEEP_DEAD) / SWEEP_REACH);
+        const pull = (sweep.top * t * t) / dist;      // px per second, split over x and y
+        view.tx += dx * pull * (dt / 1000);
+        view.ty += dy * pull * (dt / 1000);
+        applyView();
+      }
+      sweep.raf = requestAnimationFrame(step);
+    };
+    sweep.raf = requestAnimationFrame(step);
+  }
+  function stopSweep() {
+    if (!sweep) return;
+    cancelAnimationFrame(sweep.raf);
+    sweep = null;
+    sweepDot(false);
+  }
   function startGlide(vx, vy) {
     stopGlide();
     const speed = Math.hypot(vx, vy);                  // screen px per millisecond
@@ -2624,10 +2690,13 @@
       applyView(); updateMarquee();
       return;
     }
+    if (sweep) { sweep.x = e.clientX; sweep.y = e.clientY; sweepDot(true, sweep.ax, sweep.ay, sweep.x, sweep.y); return; }
     if (!drag) return;
     const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
     if (drag.mode === "pan") {
       if (Math.abs(dx) + Math.abs(dy) > 6) drag.moved = true;
+      // wandered too far to count as held still
+      if (drag.hold && Math.hypot(dx, dy) > HOLD_SLOP) { clearTimeout(drag.hold); drag.hold = null; }
       // how fast the finger is going right now, smoothed a little so one
       // jittery frame at the end doesn't decide the throw
       const now = e.timeStamp || performance.now();
@@ -2660,6 +2729,14 @@
   });
 
   function endPointer(e) {
+    if (drag && drag.hold) { clearTimeout(drag.hold); drag.hold = null; }
+    if (sweep) {
+      stopSweep(); drag = null;
+      pointers.delete(e.pointerId);
+      try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
+      if (!pointers.size) stage.classList.remove("panning");
+      return;
+    }
     pointers.delete(e.pointerId);
     try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
     if (pointers.size < 2) pinch = null;
@@ -6677,6 +6754,15 @@
   });
 
   /* ============================================================ MISC UI */
+  // Some things only need saying the first couple of times they happen.
+  const toldTimes = {};
+  function toastOnce(key, msg, times) {
+    let n = 0;
+    try { n = +(localStorage.getItem("familyTree.told." + key) || 0) || 0; } catch (e) { n = toldTimes[key] || 0; }
+    if (n >= (times || 2)) return;
+    try { localStorage.setItem("familyTree.told." + key, String(n + 1)); } catch (e) { toldTimes[key] = n + 1; }
+    toast(msg);
+  }
   function toast(msg) {
     const t = $("#toast"); t.textContent = msg; t.classList.add("show");
     clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 1800);
