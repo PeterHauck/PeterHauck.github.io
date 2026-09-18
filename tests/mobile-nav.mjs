@@ -64,13 +64,16 @@ ok('a slow drag stops where the finger stops', Math.abs((slowBefore.x-slowAfter.
 // --- touching the board stops a throw dead
 await flick(220,80);
 await pg.waitForTimeout(60);
-const mid=await tx();
-await pg.evaluate(()=>{const svg=document.getElementById('svg');
+// touch it and read where it stopped in the same breath — a throw at full
+// speed covers ground while a separate measurement is being fetched
+const mid=await pg.evaluate(()=>{const svg=document.getElementById('svg');
   svg.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:200,clientY:400,pointerId:9,isPrimary:true,pointerType:'touch'}));
-  svg.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,clientX:200,clientY:400,pointerId:9,isPrimary:true,pointerType:'touch'}));});
+  svg.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,clientX:200,clientY:400,pointerId:9,isPrimary:true,pointerType:'touch'}));
+  const t=document.getElementById('viewport').getAttribute('transform');
+  const m=/translate\(([-\d.]+)[ ,]([-\d.]+)\)/.exec(t); return {x:+m[1],y:+m[2]};});
 await pg.waitForTimeout(500);
 const stopped=await tx();
-ok('a finger on the board stops the throw', Math.abs(stopped.x-mid.x)<60, JSON.stringify({mid:Math.round(mid.x),stopped:Math.round(stopped.x)}));
+ok('a finger on the board stops the throw', Math.abs(stopped.x-mid.x)<2, JSON.stringify({mid:Math.round(mid.x),stopped:Math.round(stopped.x)}));
 // --- find someone and jump to them
 ok('the phone has a Find button', await pg.evaluate(()=>{const b=document.getElementById('tbFind');
   return !!b && getComputedStyle(b).display!=='none';}));
