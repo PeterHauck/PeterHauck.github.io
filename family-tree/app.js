@@ -2640,12 +2640,13 @@
       const dist = Math.hypot(dx, dy);
       if (dist > SWEEP_DEAD) {
         // Gentle near the middle and quick at the edge of a thumb's reach, so
-        // there's fine control as well as long distance. Same direction a drag
-        // would go: the board keeps sliding the way the thumb is pushing it.
+        // there's fine control as well as long distance. The thumb points the
+        // way you want to GO — push it right and you travel right across the
+        // tree — which is how a stick works and how this reads in the hand.
         const t = Math.min(1, (dist - SWEEP_DEAD) / SWEEP_REACH);
         const pull = (sweep.top * t * t) / dist;      // px per second, split over x and y
-        view.tx += dx * pull * (dt / 1000);
-        view.ty += dy * pull * (dt / 1000);
+        view.tx -= dx * pull * (dt / 1000);
+        view.ty -= dy * pull * (dt / 1000);
         applyView();
       }
       sweep.raf = requestAnimationFrame(step);

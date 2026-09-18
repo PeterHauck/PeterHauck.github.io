@@ -41,11 +41,11 @@ const start=await tx();
 await touch('pointermove',260,500);        // 60px to the right of where it landed
 await pg.waitForTimeout(700);
 const rightish=await tx();
-// the board keeps sliding the way the thumb pushes it — the same direction a
-// drag would take it, just carrying on for as long as the thumb is held there
-ok('the board slides the way the thumb pushes', (rightish.x-start.x)>200, JSON.stringify({moved:Math.round(rightish.x-start.x)}));
+// the thumb points the way you want to go: push it right and you travel right
+// across the tree, for as long as it's held there
+ok('pushing the thumb right travels right across the tree', (start.x-rightish.x)>200, JSON.stringify({moved:Math.round(start.x-rightish.x)}));
 ok('…and it keeps going while the thumb is held there', await (async()=>{
-  const a=await tx(); await pg.waitForTimeout(400); const b=await tx(); return (b.x-a.x)>100;})());
+  const a=await tx(); await pg.waitForTimeout(400); const b=await tx(); return (a.x-b.x)>100;})());
 // further out = faster
 const slowFrom=await tx();
 await touch('pointermove',215,500);        // just 15px out: barely moving
@@ -64,7 +64,7 @@ const upFrom=await tx();
 await touch('pointermove',200,380);
 await pg.waitForTimeout(500);
 const upTo=await tx();
-ok('it steers up and down too', Math.abs(upTo.y-upFrom.y)>200, JSON.stringify({moved:Math.round(upTo.y-upFrom.y)}));
+ok('pushing it up travels up the tree', (upTo.y-upFrom.y)>200, JSON.stringify({moved:Math.round(upTo.y-upFrom.y)}));
 // lifting stops it
 await touch('pointerup',200,380);
 await pg.waitForTimeout(120);
