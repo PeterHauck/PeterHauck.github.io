@@ -76,6 +76,36 @@ const shoved=await pg.evaluate(()=>{const rs=[...document.querySelectorAll('g.pe
   return {left:Math.min(...rs.map(r=>r.left)), right:Math.max(...rs.map(r=>r.right)), w:window.innerWidth};});
 ok('…and can never be shoved off the screen', shoved.right>shoved.w*0.35 && shoved.left<shoved.w*0.65,
    JSON.stringify({left:Math.round(shoved.left),right:Math.round(shoved.right),screen:shoved.w}));
+// --- the top and bottom edge follow the tree's depth where you are
+// a ribbon: six generations deep down the middle, and at the left-hand end
+// just two, sitting in the middle rows — like a branch with no elders on it
+const ribbon=()=>{const persons=[],manual={};let i=0;
+  for(let c=0;c<60;c++){ const lo=c<20?2:0, hi=c<20?4:6;
+    for(let r=lo;r<hi;r++){ const id='p'+(i++);
+      persons.push({id,name:'Person'+id+' Wide',first:'Person'+id,last:'Wide',middle:'',nickname:'',maiden:'',suffix:'',sex:'unknown',birth:1900,docs:[]});
+      manual[id]={x:c*600, y:r*250}; } }
+  return {title:'T',version:9,photoMigrated:true,namesSplit:true,persons,unions:[],links:[],manual,hidden:{},manualHidden:{},focus:[]};};
+await pg.close(); pg=await open(ribbon());
+// how far up can you climb from here, and is anybody still there when you do?
+const climb=async()=>{ for(let i=0;i<14;i++){ await drag(0,340); await pg.waitForTimeout(150); }
+  await pg.waitForTimeout(1400);
+  return pg.evaluate(()=>{const t=document.getElementById('viewport').getAttribute('transform');
+    const m=/translate\(([-\d.]+)[ ,]([-\d.]+)\)/.exec(t);
+    const rs=[...document.querySelectorAll('g.person')].map(g=>g.getBoundingClientRect())
+      .filter(r=>r.right>0&&r.left<window.innerWidth&&r.bottom>0&&r.top<window.innerHeight);
+    return {ty:+m[2], onScreen:rs.length};}); };
+for(let i=0;i<40;i++){ await drag(340,0); await pg.waitForTimeout(140); }  // out to the shallow left-hand end
+await pg.waitForTimeout(1200);
+const shallow=await climb();
+ok('at the shallow end of the tree, somebody is still on screen at the top',
+   shallow.onScreen>0, JSON.stringify(shallow));
+for(let i=0;i<26;i++){ await drag(-340,0); await pg.waitForTimeout(140); }  // back to the deep middle
+await pg.waitForTimeout(1200);
+const deep=await climb();
+ok('…and over the deep part there is further to climb', deep.ty > shallow.ty+200,
+   JSON.stringify({shallowTop:Math.round(shallow.ty), deepTop:Math.round(deep.ty)}));
+ok('…with people on screen there too', deep.onScreen>0, JSON.stringify(deep));
+
 // --- zooming right out keeps the tree on screen rather than flinging it off
 await pg.close(); pg=await open(seed(60,6,600));
 for(let i=0;i<8;i++){ await pg.evaluate(()=>document.getElementById('tbZoomOut').click()); await pg.waitForTimeout(150); }
