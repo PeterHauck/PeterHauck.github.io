@@ -707,6 +707,13 @@ button.btn.tiny.danger { color: var(--divorce); border-color: var(--divorce); }
 .pcard-headtext h2 { margin: 0; font-size: 18px; line-height: 1.2; }
 .pcard-dates { font-size: 13px; color: var(--muted); margin-top: 3px; }
 .pcard-x { border: none; background: transparent; font-size: 17px; color: var(--muted); cursor: pointer; padding: 4px 6px; }
+.pcard-kin { display: flex; gap: 8px; justify-content: space-between; margin: 10px 0 2px; }
+.pcard-kinbtn {
+  flex: 1; min-width: 0; padding: 9px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--panel-border); background: var(--paper); color: var(--muted);
+  font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pcard-kinbtn:active { background: var(--panel-border); }
 .pcard-body { margin-top: 6px; }
 .pcard-section { padding: 12px 0; border-top: 1px solid var(--panel-border); }
 .pcard-section h3 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
