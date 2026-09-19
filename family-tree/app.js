@@ -8106,5 +8106,24 @@
     }
   }
 
+  /* ---- keeping it openable with no signal --------------------------------
+     The tree itself already lives in this browser; what needed a signal was
+     the app around it. A small worker keeps a copy of the page, its script and
+     its styles, always preferring the live ones when there's a connection — so
+     it opens instantly, works on a train, and still updates the moment a new
+     version ships. ?nosw=1 turns it off again and clears what it kept.      */
+  function setupOffline() {
+    if (!("serviceWorker" in navigator)) return;
+    const off = /[?&]nosw=1/.test(location.search);
+    if (off) {
+      navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister())).catch(() => {});
+      if (window.caches) caches.keys().then((ks) => ks.forEach((k) => caches.delete(k))).catch(() => {});
+      return;
+    }
+    if (location.protocol !== "https:" && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") return;
+    window.addEventListener("load", () => { navigator.serviceWorker.register("sw.js").catch(() => {}); });
+  }
+  setupOffline();
+
   init();
 })();
