@@ -1150,7 +1150,7 @@
     // added show up) before drawing.
     drawing = true;
     colorMemo = null;   // family colours recompute each draw (inheritance is live)
-    bboxMemo = null;
+    bboxMemo = null; spotsMemo = null;
     if (hiddenScope) hiddenScope.set = new Set(hiddenMembersFrom(hiddenScope.seedIds).members);
     if (viewPreview) viewPreview.set = viewMembers(viewPreview.view.rules, viewPreview.view.withHidden, viewPreview.view.hide);
     gNodes.textContent = "";
@@ -2497,12 +2497,19 @@
   /* ============================================================ VIEW */
   /* ---- the edge of the board ---------------------------------------------
      Wandering off into blank space is easy to do and horrible to come back
-     from, so the board has an edge: a plain rectangle round the tree with a
-     quarter of a screen of margin on each side, measured per axis so a tall
-     phone doesn't get a tall screen's worth of empty to its left and right as
-     well. The margin is never a whole screen's worth at any zoom, so the tree
-     can't slip off the edge entirely. A tree smaller than the screen sits in
-     the middle and stays there.                                             */
+     from, so the board has an edge: a rectangle round the tree with a quarter
+     of a screen of margin on each side, measured per axis so a tall phone
+     doesn't get a tall screen's worth of empty to its left and right as well.
+     The margin is never a whole screen's worth at any zoom, so the tree can't
+     slip off the edge. A tree smaller than the screen sits in the middle.
+
+     The left and right edges come from the whole tree. The top and bottom
+     come from the part of it you are actually looking at, because a tree is
+     wide and shallow and its depth changes along its length: this one is
+     2,400 units deep all told, but the slice under a phone screen is about
+     650. A rectangle tall enough for the deepest part would be mostly air
+     everywhere else, and you'd lose sight of the tree inside it. So the
+     rectangle stays a rectangle and its top and bottom move with you.       */
   const CARD_ROOM = 90;     // a card's worth of room round the outermost people
   let bboxMemo = null;      // the tree's extent, worked out afresh on each draw
   function boardRoom() {
@@ -2516,6 +2523,31 @@
     const b = bbox(), m = boardRoom();
     return { x: b.x - m.padX, y: b.y - m.padY, w: b.w + m.padX * 2, h: b.h + m.padY * 2 };
   }
+  // everybody's spot, left to right, so "how deep is the tree just here?" only
+  // has to look at the handful of people who could be on the screen
+  let spotsMemo = null;
+  function spotsByX() {
+    if (spotsMemo) return spotsMemo;
+    const a = [];
+    visiblePersons().forEach((p) => { const q = posOf(p.id); if (q) a.push({ x: q.x, y: q.y }); });
+    a.sort((m, n) => m.x - n.x);
+    spotsMemo = a;
+    return spotsMemo;
+  }
+  // the highest and lowest anybody stands between two x's — or, where that
+  // stretch of board is empty, the row of whoever stands nearest to it
+  function deepBetween(x0, x1) {
+    const a = spotsByX();
+    if (!a.length) return null;
+    let lo = 0, hi = a.length;
+    while (lo < hi) { const k = (lo + hi) >> 1; if (a[k].x < x0) lo = k + 1; else hi = k; }
+    let top = Infinity, bot = -Infinity;
+    for (let i = lo; i < a.length && a[i].x <= x1; i++) { if (a[i].y < top) top = a[i].y; if (a[i].y > bot) bot = a[i].y; }
+    if (top !== Infinity) return { lo: top, hi: bot };
+    const after = a[lo], before = a[lo - 1];
+    const pick = !after ? before : !before ? after : (x0 - before.x <= after.x - x1 ? before : after);
+    return { lo: pick.y, hi: pick.y };
+  }
   // the nearest scroll position to (tx, ty) that keeps you on the board
   function fitInBoard(tx, ty) {
     const b = bbox(), m = boardRoom();
@@ -2527,8 +2559,16 @@
       return Math.max(lo, Math.min(hi, t));
     };
     const nx = fit(tx, m.vw, b.x - m.padX, b.w + m.padX * 2);
-    const ny = fit(ty, m.vh, b.y - m.padY, b.h + m.padY * 2);
-    return { tx: nx, ty: ny, stuck: Math.abs(nx - tx) > 0.5 || Math.abs(ny - ty) > 0.5 };
+    const flat = fit(ty, m.vh, b.y - m.padY, b.h + m.padY * 2);     // the whole tree's depth
+    // …then just the depth of what's on the screen, which is only ever tighter
+    const x0 = -nx / view.scale;
+    const deep = deepBetween(x0 - CARD_ROOM, x0 + m.vw / view.scale + CARD_ROOM);
+    const top = deep ? deep.lo - CARD_ROOM : b.y, bot = deep ? deep.hi + CARD_ROOM : b.y + b.h;
+    const ny = fit(flat, m.vh, top - m.padY, (bot - top) + m.padY * 2);
+    // Only the outer rectangle counts as an edge you've run into: the tree's
+    // depth changes as you travel sideways, and a throw shouldn't die just
+    // because the ground rose under it.
+    return { tx: nx, ty: ny, stuck: Math.abs(nx - tx) > 0.5 || Math.abs(flat - ty) > 0.5 };
   }
   function clampView() {
     const at = fitInBoard(view.tx, view.ty);
