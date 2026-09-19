@@ -1107,9 +1107,48 @@
   };
 
   /* ============================================================= RENDER */
+  /* ---- how much of the tree goes into the page ---------------------------
+     A tree this size is thousands of shapes, and a phone pays for every one of
+     them on every frame it draws — even the ones miles off the side of the
+     screen. So on a big tree only the part near the screen is put IN the page,
+     with a screen's worth of margin all round so the edges are ready before
+     you reach them; moving far enough draws the next stretch. Everything is
+     still WORKED OUT for the whole tree — positions, copies, connectors — so
+     every tool still sees the same picture. Small trees are drawn whole, as
+     they always were.                                                        */
+  const CULL_FROM = 60;                  // people: below this, draw the lot
+  let drawWindow = null, lastDrawn = null, redrawQueued = false, drawing = false;
+  function viewWindow(pad) {
+    const r = stage.getBoundingClientRect();
+    const w = (r.width || 800) / view.scale, h = (r.height || 600) / view.scale;
+    const mx = w * pad, my = h * pad;
+    return { x: -view.tx / view.scale - mx, y: -view.ty / view.scale - my, w: w + 2 * mx, h: h + 2 * my };
+  }
+  const boxesMeet = (a, b) => !(a.x + a.w < b.x || b.x + b.w < a.x || a.y + a.h < b.y || b.y + b.h < a.y);
+  const holdsBox = (outer, inner) => inner.x >= outer.x && inner.y >= outer.y &&
+    inner.x + inner.w <= outer.x + outer.w && inner.y + inner.h <= outer.y + outer.h;
+  // Editing handles are mouse furniture: four ＋ badges round every person and
+  // invisible hover strips along every line. A phone has no hover, no editor
+  // panel to send them to — and they are two thirds of everything on the page.
+  const showHandles = () => !readonly && !isMobileView();
+  const drawn = (x, y) => !drawWindow || (x > drawWindow.x && x < drawWindow.x + drawWindow.w && y > drawWindow.y && y < drawWindow.y + drawWindow.h);
+  const boxDrawn = (box) => !drawWindow || boxesMeet(drawWindow, box);
+  // Moved far enough that the next stretch needs drawing? Then draw it — but
+  // no oftener than this, so a long throw or sweep stays smooth instead of
+  // stopping to redraw every few frames.
+  const REDRAW_GAP = 260;
+  let lastRedraw = 0;
+  function ensureDrawn() {
+    if (!lastDrawn || drawing || redrawQueued) return;
+    if (holdsBox(lastDrawn, viewWindow(0.15))) return;
+    redrawQueued = true;
+    const wait = Math.max(0, REDRAW_GAP - (performance.now() - lastRedraw));
+    setTimeout(() => { redrawQueued = false; lastRedraw = performance.now(); render(); }, wait);
+  }
   function render() {
     // Inside a hidden branch, refresh which people belong to it (so ones you just
     // added show up) before drawing.
+    drawing = true;
     colorMemo = null;   // family colours recompute each draw (inheritance is live)
     if (hiddenScope) hiddenScope.set = new Set(hiddenMembersFrom(hiddenScope.seedIds).members);
     if (viewPreview) viewPreview.set = viewMembers(viewPreview.view.rules, viewPreview.view.withHidden, viewPreview.view.hide);
@@ -1118,6 +1157,9 @@
     emptyState.style.display = state.persons.length ? "none" : "flex";
 
     busLevels = computeBusLevels();
+    // Travelling fast? Draw a wider stretch, so the board ahead is already
+    // there instead of arriving in fits and starts.
+    drawWindow = visiblePersons().length > CULL_FROM ? viewWindow(sweep || glide ? 2.4 : 1) : null;
     copyPlacements = []; copySpots = {}; copyPos = {};   // repopulated by the unions below
     visibleUnions().forEach(renderUnion);
     visiblePersons().forEach((p) => renderPerson(p));
@@ -1130,6 +1172,8 @@
     renderHotkeys();
     updateViewSwitcher();
     { const b = $("#pmEnableEdit"); if (b) b.hidden = readonly || isOwner(); }
+    lastDrawn = drawWindow;
+    drawing = false;
   }
 
   // Floating action bar for a group selection (Rearrange mode: drag a box
@@ -1312,6 +1356,7 @@
     // full profile, its own spot (state.echoPos), tagged so drags know which
     // appearance moved.
     const pos = inst ? inst : posOf(p.id);
+    if (!drawn(pos.x, pos.y)) return;          // miles off the screen: not worth a shape
     // this appearance's own key — selection/locks highlight per appearance
     const nk = inst ? inst.uid + ":" + p.id : p.id;
     const g = el("g", { class: "person" + (p.id === selectedId ? " selected" : "") + (selection.has(nk) ? " multi" : ""), transform: `translate(${pos.x},${pos.y})`, "data-id": p.id });
@@ -1417,7 +1462,7 @@
 
     // Four directional add-a-relative "+"s, revealed on hover (CSS). Left/right add
     // a spouse on that side; up adds a parent; down adds a child (below the label).
-    if (!readonly) {
+    if (showHandles()) {
       const OFF = HALF + 20;
       const labelBottom = HALF + 6 + bgH;
       g.appendChild(dirPlus(p.id, "up", 0, -OFF, "Add a parent"));
@@ -2140,6 +2185,21 @@
     const pb = u.b != null ? personById(u.b) : null;
     const A = sibGroup ? null : posOf(u.a), B = pb ? posOf(u.b) : null;
     const kids = childLinksOfUnion(u.id).map((l) => ({ l, p: personById(l.child) })).filter((k) => k.p && inView(k.p.id));
+    // A family well off the side of the screen is skipped whole — not just left
+    // out of the page, but not worked out at all. Deciding that costs a handful
+    // of look-ups; doing the working-out costs a hundred times more, and on a
+    // big tree most families are off the side at any moment.
+    if (drawWindow) {
+      const pts = [];
+      if (A) pts.push(A);
+      if (B) pts.push(B);
+      kids.forEach((k) => { const q = posOf(k.p.id); if (q) pts.push(q); });
+      if (pts.length) {
+        let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+        pts.forEach((q) => { if (q.x < x0) x0 = q.x; if (q.x > x1) x1 = q.x; if (q.y < y0) y0 = q.y; if (q.y > y1) y1 = q.y; });
+        if (!boxesMeet(drawWindow, { x: x0 - COLW, y: y0 - ROWH, w: x1 - x0 + 2 * COLW, h: y1 - y0 + 2 * ROWH })) return;
+      }
+    }
     const gu = el("g", { class: "union", "data-union": u.id });   // group so hover reveals the +
 
     let midX, midY, dropTop, dropXO = null;
@@ -2245,7 +2305,7 @@
         gu.appendChild(el("text", { class: "union-date", x: midX, y: segY - 10 }, txt(dlabel)));
         }
       }
-      if (!readonly) {
+      if (showHandles()) {
         // Hovering the marriage line reveals a + (add a child of this couple) and
         // a +hidden (start a private sub-tree from this couple). A wide invisible
         // hit-line keeps them reachable across the whole line.
@@ -2259,10 +2319,24 @@
       midX = A.x; midY = A.y; dropTop = A.y + HALF; // drop from the single parent's bottom
     }
 
+    // The stretch of board this family's lines cover — including anywhere it
+    // repeats somebody — so a family well off the side can be left out of the
+    // page without leaving a line hanging.
+    const unionBox = () => {
+      const pts = [];
+      if (A) pts.push(A);
+      if (B) pts.push(B);
+      kids.forEach((k) => { const q = posOf(k.p.id); if (q) pts.push(q); });
+      Object.keys(copyPos).forEach((k) => { if (k.indexOf(u.id + ":") === 0 && copyPos[k]) pts.push(copyPos[k]); });
+      if (!pts.length) return null;
+      const xs = pts.map((q) => q.x), ys = pts.map((q) => q.y);
+      return { x: Math.min(...xs) - COLW, y: Math.min(...ys) - ROWH, w: Math.max(...xs) - Math.min(...xs) + 2 * COLW, h: Math.max(...ys) - Math.min(...ys) + 2 * ROWH };
+    };
+    const worthDrawing = () => { const b = unionBox(); return !b || boxDrawn(b); };
     if (!kids.length) {
       // Childless couple: nothing to draw below. (Add a child from either
       // partner's "＋ child" handle.)
-      gLinks.appendChild(gu);
+      if (worthDrawing()) gLinks.appendChild(gu);
       return;
     }
 
@@ -2324,7 +2398,7 @@
       const maxX = Math.max(dropX, ...nearTops.map((c) => c.x));
       if (nearTops.length > 1 || minX !== maxX)
         gu.appendChild(el("line", { class: "link", x1: minX, y1: busY, x2: maxX, y2: busY, style: cstyle }));
-      if (!readonly) {
+      if (showHandles()) {
         const h1 = Math.min(dropX, minX) - 30, h2 = Math.max(dropX, maxX) + 30;
         const bh = el("line", { class: "bus-hit", x1: h1, y1: busY, x2: h2, y2: busY });
         bh.appendChild(el("title", null, txt("Drag to move this family's connector up or down · right-click to reset")));
@@ -2338,7 +2412,7 @@
       }
       nearTops.forEach((c) => {
         gu.appendChild(el("line", { class: "link" + (c.type === "adopted" ? " adopt" : ""), x1: c.x, y1: busY, x2: c.x, y2: c.top, style: c.type === "adopted" ? null : cstyle }));
-        if (!readonly) {
+        if (showHandles()) {
           // Wide invisible strip over the child's drop line: right-click turns
           // this connection into a jump (stub + echo) by hand.
           const hit = el("line", { class: "drop-hit", x1: c.x, y1: busY, x2: c.x, y2: c.top });
@@ -2371,13 +2445,20 @@
       if (bmin !== bmax) gu.appendChild(el("line", { class: "link", x1: bmin, y1: busY, x2: bmax, y2: busY, style: cstyle }));
       echoAnchors.forEach((r) => gu.appendChild(el("line", { class: "link", x1: r.anchorX, y1: busY, x2: r.anchorX, y2: r.anchorTop, style: cstyle })));
     }
-    gLinks.appendChild(gu);
+    if (worthDrawing()) gLinks.appendChild(gu);
   }
 
   function txt(s) { return document.createTextNode(s); }
 
   /* ------------------------------------------------------- people list UI */
-  function updatePeopleList() {
+  // Rebuilding 350-odd rows takes longer than drawing the part of the tree you
+  // can see, and the list is behind the ☰ — closed, most of the time, and not
+  // there at all on a phone. So it waits until somebody opens it.
+  let peopleListStale = true;
+  function updatePeopleList(force) {
+    const menu = $("#peopleMenu");
+    if (!force && menu && menu.hidden) { peopleListStale = true; return; }
+    peopleListStale = false;
     const ul = $("#peopleList"); if (!ul) return; ul.textContent = "";
     const q = (($("#peopleFilter") && $("#peopleFilter").value) || "").trim().toLowerCase();
     // Default order: last name, then first name (then birth year).
@@ -2416,6 +2497,7 @@
   function applyView() {
     gViewport.setAttribute("transform", `translate(${view.tx},${view.ty}) scale(${view.scale})`);
     $("#zoomLabel").textContent = Math.round(view.scale * 100) + "%";
+    ensureDrawn();
   }
   function bbox() {
     // only visible people have layout positions; hidden ones would otherwise
@@ -6957,7 +7039,7 @@
     const m = $("#peopleMenu"); if (!m) return;
     const vis = (show === undefined) ? m.hidden : show;
     m.hidden = !vis; $("#tbMenu").classList.toggle("active", vis);
-    if (vis) { updatePeopleList(); const f = $("#peopleFilter"); if (f) setTimeout(() => f.focus(), 0); }
+    if (vis) { updatePeopleList(true); const f = $("#peopleFilter"); if (f) setTimeout(() => f.focus(), 0); }
   }
   { const b = $("#personEditBtn"); if (b) { b.title = "Edit their details — hotkey: E"; b.onclick = () => { const p = personById($("#personId").value); if (p) showPersonForm(p); }; } }
   { const b = $("#pmSettings"); if (b) b.onclick = () => { togglePeopleMenu(false); toggleSettings(true); }; }
@@ -6982,7 +7064,7 @@
     else state.manual = keepPinned(state.manual);
     selection = new Set(); relayoutAndSave(); fitView(); toast("Auto-arranged");
   };
-  $("#peopleFilter").addEventListener("input", () => updatePeopleList());
+  $("#peopleFilter").addEventListener("input", () => updatePeopleList(true));
   $("#sibLeftBtn").onclick = () => shiftSibling(-1);
   $("#sibRightBtn").onclick = () => shiftSibling(1);
   $("#tbZoomIn").onclick = () => zoomAt(1.2);
@@ -7550,6 +7632,7 @@
     const host = $("#hotkeys"); if (!host) return;
     host.hidden = readonly;
     if (readonly) return;
+    if (!host.offsetParent) return;          // not on screen (a phone) — nothing to draw
     host.textContent = "";
     HOTKEYS.forEach((h) => {
       const on = !!h.ready();

@@ -260,7 +260,7 @@ button.btn.danger { color: var(--divorce); }
 #tbSync.sync-error { color: var(--divorce); background: color-mix(in srgb, var(--divorce) 12%, transparent); border-color: var(--divorce); }
 #toolbar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 #toolbar .sep { width:1px; height:22px; background: var(--panel-border); margin:0 2px; }
-#tbFind { display: none; }          /* phones only — the computer has the ☰ list */
+#toolbar #tbFind { display: none; }   /* phones only — the computer has the ☰ list */
 #toolbar .zoomlabel { font-size:12px; color:var(--muted); width:44px; text-align:center; }
 
 /* People list + menu, opened by ☰ (docked under the toolbar) */
@@ -765,7 +765,7 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
   #toolbar .zoomlabel { width: 42px; font-size: 12px; display: flex; align-items: center; justify-content: center; }
   #tbMenu, #tbImport, #tbRearrange, #tbTidy, #toolbar .sep,
   #panelToggle, #peopleMenu, #panel, #hiddenChip { display: none !important; }
-  #tbFind { display: flex; }
+  #toolbar #tbFind { display: flex; }
   /* no keyboard on a phone, so no shortcut strip */
   #hotkeys { display: none !important; }
   #tbFit, #tbZoomIn, #tbZoomOut, #tbSync { display: flex; }
