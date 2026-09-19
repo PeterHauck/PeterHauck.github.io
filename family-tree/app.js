@@ -2839,7 +2839,11 @@
   const MAP_SIDE = 150;            // the longest side of the map, in screen pixels
   const MAP_AHEAD = 900;           // how far ahead the faint box looks, in milliseconds
   let sweepMap = null;
-  function sweepMapShow(show) {
+  // The map is a nicety; scrolling is not. If anything here goes wrong on some
+  // browser I can't test, the sweep carries on without it.
+  function sweepMapShow(show) { try { mapBuild(show); } catch (e) { sweepMap = null; } }
+  function sweepMapMark(vtx, vty) { try { mapMark(vtx, vty); } catch (e) { sweepMap = null; } }
+  function mapBuild(show) {
     const old = document.getElementById("sweepMap");
     if (old) old.remove();
     sweepMap = null;
@@ -2874,7 +2878,7 @@
     sweepMapMark(0, 0);
   }
   // vtx/vty: how fast the scroll position itself is changing, in px per second
-  function sweepMapMark(vtx, vty) {
+  function mapMark(vtx, vty) {
     const m = sweepMap;
     if (!m) return;
     const r = stage.getBoundingClientRect();
