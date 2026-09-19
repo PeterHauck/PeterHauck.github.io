@@ -14,13 +14,15 @@ const server=http.createServer((q,r)=>{const u=new URL(q.url,'http://x');
   let f=u.pathname;if(f==='/')f='/index.html';const fp=path.join(ROOT,f.split('?')[0]);if(!fs.existsSync(fp)){r.writeHead(404);return r.end();}
   r.writeHead(200,{'content-type':types[path.extname(fp)]||'text/plain'});r.end(fs.readFileSync(fp));});
 await new Promise(x=>server.listen(0,x)); const base=`http://127.0.0.1:${server.address().port}/`;
-// a wide board, like the real one
+// a board shaped like the real one: generations stacked in rows, each row
+// running the whole width, so any strip of it you look at is several rows deep
+const COLS=60, ROWS=6, SP=600;
 const persons=[],manual={};
-for(let i=0;i<40;i++){ const id='p'+i;
+for(let i=0;i<COLS*ROWS;i++){ const id='p'+i;
   persons.push({id,name:'Person'+i+' Wide',first:'Person'+i,last:'Wide',middle:'',nickname:'',maiden:'',suffix:'',sex:'unknown',birth:1900+i,docs:[]});
-  manual[id]={x:i*900,y:(i%3)*250}; }
+  manual[id]={x:(i%COLS)*SP, y:Math.floor(i/COLS)*250}; }
 persons.push({id:'zoe',name:'Zoe Faraway',first:'Zoe',last:'Faraway',middle:'',nickname:'',maiden:'',suffix:'',sex:'female',birth:1980,docs:[]});
-manual['zoe']={x:36000,y:0};
+manual['zoe']={x:COLS*SP+SP,y:0};
 const seed={title:'T',version:9,photoMigrated:true,namesSplit:true,persons,unions:[],links:[],manual,hidden:{},manualHidden:{},focus:[]};
 const browser=await chromium.launch(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{});
 const pg=await browser.newPage({viewport:{width:390,height:840},isMobile:true,hasTouch:true,
