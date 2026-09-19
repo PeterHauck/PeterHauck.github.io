@@ -1150,7 +1150,7 @@
     // added show up) before drawing.
     drawing = true;
     colorMemo = null;   // family colours recompute each draw (inheritance is live)
-    bboxMemo = null; spotsMemo = null;
+    bboxMemo = null;
     if (hiddenScope) hiddenScope.set = new Set(hiddenMembersFrom(hiddenScope.seedIds).members);
     if (viewPreview) viewPreview.set = viewMembers(viewPreview.view.rules, viewPreview.view.withHidden, viewPreview.view.hide);
     gNodes.textContent = "";
@@ -2497,53 +2497,24 @@
   /* ============================================================ VIEW */
   /* ---- the edge of the board ---------------------------------------------
      Wandering off into blank space is easy to do and horrible to come back
-     from, so the board has an edge: a comfortable margin round the tree —
-     about half a screen, never less than a column nor more than nine of them —
-     and the view stops there. A tree smaller than the screen sits in the
-     middle and stays there.                                                 */
+     from, so the board has an edge: a plain rectangle round the tree with a
+     quarter of a screen of margin on each side, measured per axis so a tall
+     phone doesn't get a tall screen's worth of empty to its left and right as
+     well. The margin is never a whole screen's worth at any zoom, so the tree
+     can't slip off the edge entirely. A tree smaller than the screen sits in
+     the middle and stays there.                                             */
   const CARD_ROOM = 90;     // a card's worth of room round the outermost people
   let bboxMemo = null;      // the tree's extent, worked out afresh on each draw
-  // How much blank you're allowed on each side: about half a screen, measured
-  // per axis so a tall phone doesn't get a tall screen's worth of empty to its
-  // left and right as well.
   function boardRoom() {
     const r = stage.getBoundingClientRect();
     const vw = r.width || 800, vh = r.height || 600;
-    const room = (px) => Math.max(160, Math.min(1500, px / view.scale / 2));
+    const room = (px) => Math.max(40, Math.min(700, px / view.scale / 4));
     return { vw, vh, padX: room(vw), padY: room(vh) };
   }
   // the whole board, corner to corner — what the mini map draws
   function boardBox() {
     const b = bbox(), m = boardRoom();
     return { x: b.x - m.padX, y: b.y - m.padY, w: b.w + m.padX * 2, h: b.h + m.padY * 2 };
-  }
-  /* A tree is not a rectangle: out at the far left it may be two rows deep
-     while the middle is ten, and a plain rectangular edge would let you drift
-     up into the empty corner above it. So the top and bottom edge follow the
-     tree — how high and low it actually reaches across the slice of board
-     that's on screen — and only then is the half-screen margin added.       */
-  let spotsMemo = null;
-  function spotsByX() {
-    if (spotsMemo) return spotsMemo;
-    const a = [];
-    visiblePersons().forEach((p) => { const q = posOf(p.id); if (q) a.push({ x: q.x, y: q.y }); });
-    a.sort((m, n) => m.x - n.x);
-    spotsMemo = a;
-    return spotsMemo;
-  }
-  // how high and low the tree reaches between two x's — and if that slice of
-  // board is empty, the row of whoever stands nearest to it
-  function deepBetween(x0, x1) {
-    const a = spotsByX();
-    if (!a.length) return null;
-    let lo = 0, hi = a.length;
-    while (lo < hi) { const m = (lo + hi) >> 1; if (a[m].x < x0) lo = m + 1; else hi = m; }
-    let top = Infinity, bot = -Infinity;
-    for (let i = lo; i < a.length && a[i].x <= x1; i++) { if (a[i].y < top) top = a[i].y; if (a[i].y > bot) bot = a[i].y; }
-    if (top !== Infinity) return { lo: top, hi: bot };
-    const near = a[lo] || a[a.length - 1], before = a[lo - 1];
-    const pick = before && (!a[lo] || x0 - before.x < a[lo].x - x1) ? before : near;
-    return { lo: pick.y, hi: pick.y };
   }
   // the nearest scroll position to (tx, ty) that keeps you on the board
   function fitInBoard(tx, ty) {
@@ -2556,19 +2527,8 @@
       return Math.max(lo, Math.min(hi, t));
     };
     const nx = fit(tx, m.vw, b.x - m.padX, b.w + m.padX * 2);
-    const flat = fit(ty, m.vh, b.y - m.padY, b.h + m.padY * 2);          // the plain rectangle: the real edge
-    // …and then the tree's own depth around here, which only ever tightens it.
-    // "Around here" is generous — a screen and a half either side — so that a
-    // thin patch of tree doesn't pin the board, while the far corners, which
-    // are nowhere near anybody, still do.
-    const x0 = -nx / view.scale, wide = m.vw / view.scale;
-    const deep = deepBetween(x0 - wide * 1.5, x0 + wide * 2.5);
-    const top = deep ? deep.lo - CARD_ROOM : b.y, bot = deep ? deep.hi + CARD_ROOM : b.y + b.h;
-    const ny = fit(flat, m.vh, top - m.padY, (bot - top) + m.padY * 2);
-    // Only the rectangle counts as an edge you've run into: the depth of the
-    // tree changes as you travel sideways, and a throw shouldn't die just
-    // because the ground rose under it.
-    return { tx: nx, ty: ny, stuck: Math.abs(nx - tx) > 0.5 || Math.abs(flat - ty) > 0.5 };
+    const ny = fit(ty, m.vh, b.y - m.padY, b.h + m.padY * 2);
+    return { tx: nx, ty: ny, stuck: Math.abs(nx - tx) > 0.5 || Math.abs(ny - ty) > 0.5 };
   }
   function clampView() {
     const at = fitInBoard(view.tx, view.ty);
@@ -2850,10 +2810,14 @@
     if (!show) return;
     const box = boardBox();
     const k = Math.min(MAP_SIDE / box.w, MAP_SIDE / box.h);
-    const w = Math.max(44, Math.round(box.w * k)), h = Math.max(44, Math.round(box.h * k));
+    // a long thin board gets a map that's too thin to read, so the panel has a
+    // minimum size and the board sits in the middle of it
+    const w = Math.round(box.w * k), h = Math.round(box.h * k);
+    const pw = Math.max(44, w), ph = Math.max(44, h);
+    const ox = Math.round((pw - w) / 2), oy = Math.round((ph - h) / 2);
     const el = document.createElement("div");
     el.id = "sweepMap"; el.className = "sweep-map";
-    el.style.width = w + "px"; el.style.height = h + "px";
+    el.style.width = pw + "px"; el.style.height = ph + "px";
     const bar = document.getElementById("toolbar");
     const under = bar ? bar.getBoundingClientRect().bottom : stage.getBoundingClientRect().top;
     el.style.top = Math.round(Math.max(8, under + 8)) + "px";
@@ -2862,8 +2826,9 @@
     // the people are drawn once — only the two boxes move while you sweep
     const cv = el.querySelector("canvas");
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    cv.width = Math.max(1, Math.round(w * dpr)); cv.height = Math.max(1, Math.round(h * dpr));
     cv.style.width = w + "px"; cv.style.height = h + "px";
+    cv.style.marginLeft = ox + "px"; cv.style.marginTop = oy + "px";
     const g = cv.getContext("2d");
     if (g) {
       g.scale(dpr, dpr);
@@ -2874,7 +2839,7 @@
         g.fillRect((q.x - box.x) * k - 1.3, (q.y - box.y) * k - 1.3, 2.6, 2.6);
       });
     }
-    sweepMap = { el, box, k, now: el.querySelector(".sweep-map-now"), next: el.querySelector(".sweep-map-next") };
+    sweepMap = { el, box, k, ox, oy, now: el.querySelector(".sweep-map-now"), next: el.querySelector(".sweep-map-next") };
     sweepMapMark(0, 0);
   }
   // vtx/vty: how fast the scroll position itself is changing, in px per second
@@ -2884,8 +2849,8 @@
     const r = stage.getBoundingClientRect();
     const vw = r.width || 800, vh = r.height || 600;
     const put = (span, tx, ty) => {
-      span.style.left = ((-tx / view.scale - m.box.x) * m.k) + "px";
-      span.style.top = ((-ty / view.scale - m.box.y) * m.k) + "px";
+      span.style.left = (m.ox + (-tx / view.scale - m.box.x) * m.k) + "px";
+      span.style.top = (m.oy + (-ty / view.scale - m.box.y) * m.k) + "px";
       span.style.width = Math.max(9, (vw / view.scale) * m.k) + "px";
       span.style.height = Math.max(9, (vh / view.scale) * m.k) + "px";
     };
