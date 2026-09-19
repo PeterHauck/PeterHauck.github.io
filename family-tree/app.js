@@ -2498,6 +2498,41 @@
     gViewport.setAttribute("transform", `translate(${view.tx},${view.ty}) scale(${view.scale})`);
     $("#zoomLabel").textContent = Math.round(view.scale * 100) + "%";
     ensureDrawn();
+    rememberView();
+  }
+  // Where you were looking, kept on this device. Coming back to a tree this
+  // size at the far end of it is no use to anybody — you were reading a corner
+  // of it, and that corner is where it should open.
+  let viewMemoTimer = null;
+  function rememberView() {
+    if (viewMemoTimer) return;
+    viewMemoTimer = setTimeout(() => {
+      viewMemoTimer = null;
+      try {
+        localStorage.setItem("familyTree.lastView", JSON.stringify({
+          tx: view.tx, ty: view.ty, scale: view.scale,
+          view: viewPreview ? viewPreview.view.id : "",
+          hidden: hiddenScope ? 1 : 0, at: Date.now(),
+        }));
+      } catch (e) {}
+    }, 600);
+  }
+  // …and back again, if it still points at something. A remembered spot that
+  // now lands in empty space (the tree was rearranged, or it's another tree)
+  // is dropped rather than opening on nothing.
+  function restoreView() {
+    let v = null;
+    try { v = JSON.parse(localStorage.getItem("familyTree.lastView") || "null"); } catch (e) {}
+    if (!v || !Number.isFinite(v.tx) || !Number.isFinite(v.scale) || v.scale <= 0) return false;
+    if (v.view || v.hidden) return false;                    // it was a view or a hidden branch, not the tree itself
+    if (Date.now() - (v.at || 0) > 30 * 864e5) return false; // a month later, start afresh
+    const keep = { tx: view.tx, ty: view.ty, scale: view.scale };
+    view.tx = v.tx; view.ty = v.ty; view.scale = Math.max(0.12, Math.min(3, v.scale));
+    const win = viewWindow(0.2);
+    const someone = visiblePersons().some((p) => { const q = posOf(p.id); return q && q.x > win.x && q.x < win.x + win.w && q.y > win.y && q.y < win.y + win.h; });
+    if (!someone) { view.tx = keep.tx; view.ty = keep.ty; view.scale = keep.scale; return false; }
+    applyView(); render();
+    return true;
   }
   function bbox() {
     // only visible people have layout positions; hidden ones would otherwise
@@ -2508,6 +2543,15 @@
     ids.forEach((id) => { const p = posOf(id); minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); });
     const pad = 90;
     return { x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 };
+  }
+  // A readable opening for a big tree on a small screen: the middle of it, at
+  // a size names can actually be read at.
+  function openMiddle() {
+    const b = bbox(); const r = stage.getBoundingClientRect();
+    view.scale = 0.75;
+    view.tx = r.width / 2 - (b.x + b.w / 2) * view.scale;
+    view.ty = r.height / 2 - (b.y + b.h / 2) * view.scale;
+    applyView(); render();
   }
   function fitView() {
     stopGlide();
@@ -5706,8 +5750,10 @@
     box.appendChild(nameInput); box.appendChild(ta); box.appendChild(post);
     return box;
   }
-  function openProfileCard(id) {
+  let cardTrail = [];        // the walk through the family, for going back
+  function openProfileCard(id, keepTrail) {
     const p = personById(id); if (!p) return;
+    if (!keepTrail) cardTrail = [];
     closeProfileCard();
     const back = document.createElement("div"); back.id = "profileCardBack"; back.className = "pcard-back";
     const card = document.createElement("div"); card.className = "pcard"; back.appendChild(card);
@@ -5975,7 +6021,67 @@
       loadComments(id).then((list) => renderComments(listEl, id, list));
     }
     back.addEventListener("click", (e) => { if (e.target === back) closeProfileCard(); });
+    // ---- phone gestures on the card: drag it down to put it away, swipe
+    // sideways to walk through the family. The two chips at the top do the
+    // same thing for anyone who'd rather tap, and say who's either side.
+    // Left goes BACK the way you came (or to the first of their family, at the
+    // start of a walk); right goes on to the next of their family. So a swipe
+    // and a swipe back always land where you were.
+    const kin = cardKin(p.id).slice(1);
+    const cameFrom = cardTrail.length ? personById(cardTrail[cardTrail.length - 1]) : null;
+    const goneBy = cameFrom || kin[0] || null;
+    const on = kin.find((k) => !goneBy || k.id !== goneBy.id) || null;
+    const step = (q) => { if (!q) return; cardTrail.push(id); closeProfileCard(); openProfileCard(q.id, true); };
+    const stepBack = () => {
+      if (!cardTrail.length) return step(goneBy);
+      const prev = cardTrail.pop(); const trail = cardTrail.slice();
+      closeProfileCard(); openProfileCard(prev, true); cardTrail = trail;
+    };
+    if (goneBy || on) {
+      const row = document.createElement("div"); row.className = "pcard-kin";
+      const chip = (label, fn) => { const b = document.createElement("button"); b.type = "button"; b.className = "pcard-kinbtn";
+        b.textContent = label; b.onclick = fn; row.appendChild(b); };
+      if (goneBy) chip("‹ " + (goneBy.first || goneBy.name), stepBack);
+      if (on) chip((on.first || on.name) + " ›", () => step(on));
+      card.insertBefore(row, card.firstChild.nextSibling);
+    }
+    {
+      let st = null;
+      card.addEventListener("pointerdown", (e) => {
+        if (e.pointerType === "mouse" || e.target.closest("button, input, textarea, a, .gal-cell")) return;
+        st = { x: e.clientX, y: e.clientY, top: card.scrollTop, axis: "", dx: 0, dy: 0 };
+      });
+      card.addEventListener("pointermove", (e) => {
+        if (!st) return;
+        st.dx = e.clientX - st.x; st.dy = e.clientY - st.y;
+        if (!st.axis && Math.abs(st.dx) + Math.abs(st.dy) > 10) {
+          st.axis = Math.abs(st.dx) > Math.abs(st.dy) ? "x" : (st.top <= 0 && st.dy > 0 ? "y" : "scroll");
+        }
+        if (st.axis === "y") { card.style.transform = "translateY(" + Math.max(0, st.dy) + "px)"; card.style.transition = "none"; }
+      });
+      const done = () => {
+        if (!st) return;
+        const s2 = st; st = null;
+        card.style.transition = "transform .18s ease";
+        card.style.transform = "";
+        if (s2.axis === "y" && s2.dy > 90) closeProfileCard();
+        else if (s2.axis === "x" && Math.abs(s2.dx) > 70) { if (s2.dx < 0) step(on); else stepBack(); }
+      };
+      card.addEventListener("pointerup", done);
+      card.addEventListener("pointercancel", done);
+    }
     document.body.appendChild(back);
+  }
+  // Everyone this person is joined to, in the order the card lists them, so
+  // stepping sideways walks the family the way the card reads.
+  function cardKin(pid) {
+    const out = [], seen = new Set([pid]);
+    const add = (id) => { const q = id && personById(id); if (q && !seen.has(id) && inView(id)) { seen.add(id); out.push(q); } };
+    parentsOf(pid).forEach(add);
+    unionsOfPerson(pid).forEach((u) => add(u.a === pid ? u.b : u.a));
+    unionsOfPerson(pid).forEach((u) => childLinksOfUnion(u.id).forEach((l) => add(l.child)));
+    siblingsOf(pid).forEach(add);
+    return [personById(pid)].concat(out);
   }
 
   /* ============================================================ IMPORT/EXPORT/SAVE */
@@ -7325,7 +7431,17 @@
     // Open centred on the chosen people (e.g. Peter & Alicen) if the tree names
     // any that are visible; otherwise fit the whole tree to the screen.
     const focus = (state.focus || []).filter((id) => personById(id) && !isHidden(id));
-    if (focus.length) focusView(focus); else fitView();
+    // Where you were last, if it still points at somebody; else the chosen
+    // people; else the whole tree. On a phone, fitting a tree this wide means
+    // names too small to read, so it opens at reading size on the middle of it.
+    if (!restoreView()) {
+      if (focus.length) focusView(focus);
+      else if (isMobileView() && visiblePersons().length > CULL_FROM) openMiddle();
+      else fitView();
+      // A phone fitting a family in is a phone fitting NAMES down to nothing.
+      // Whatever it opened on, keep it at a size those names can be read at.
+      if (isMobileView() && view.scale < 0.72) { zoomAt(0.72 / view.scale, null, null); render(); }
+    }
   }
 
   /* ---- GitHub key expiry banner: warn the owner BEFORE cloud saves break ---- */
