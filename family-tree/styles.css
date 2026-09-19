@@ -393,6 +393,19 @@ button.btn.danger { color: var(--divorce); }
   background: var(--accent); opacity: .85; box-shadow: var(--shadow);
 }
 
+/* the sweep mini map: the whole tree in miniature, where you are, where you're going */
+.sweep-map {
+  position: fixed; left: 50%; transform: translateX(-50%); z-index: 47;
+  pointer-events: none; padding: 4px; border-radius: 8px; box-sizing: content-box;
+  background: var(--panel); border: 1px solid var(--panel-border); box-shadow: var(--shadow);
+}
+.sweep-map canvas { position: absolute; left: 4px; top: 4px; }
+.sweep-map .sweep-map-now, .sweep-map .sweep-map-next {
+  position: absolute; margin: 4px 0 0 4px; border-radius: 3px; box-sizing: border-box;
+}
+.sweep-map .sweep-map-now { border: 2px solid var(--accent); background: rgba(127, 127, 127, .14); }
+.sweep-map .sweep-map-next { border: 2px dashed var(--accent); opacity: .5; }
+
 /* right-click menu on the bare grid: add space, or add somebody */
 .ctx-menu {
   position: fixed; z-index: 70; min-width: 210px; padding: 6px;

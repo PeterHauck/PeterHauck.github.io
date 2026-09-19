@@ -1150,6 +1150,7 @@
     // added show up) before drawing.
     drawing = true;
     colorMemo = null;   // family colours recompute each draw (inheritance is live)
+    bboxMemo = null; spotsMemo = null;
     if (hiddenScope) hiddenScope.set = new Set(hiddenMembersFrom(hiddenScope.seedIds).members);
     if (viewPreview) viewPreview.set = viewMembers(viewPreview.view.rules, viewPreview.view.withHidden, viewPreview.view.hide);
     gNodes.textContent = "";
@@ -2494,7 +2495,88 @@
   }
 
   /* ============================================================ VIEW */
+  /* ---- the edge of the board ---------------------------------------------
+     Wandering off into blank space is easy to do and horrible to come back
+     from, so the board has an edge: a comfortable margin round the tree —
+     about half a screen, never less than a column nor more than nine of them —
+     and the view stops there. A tree smaller than the screen sits in the
+     middle and stays there.                                                 */
+  const CARD_ROOM = 90;     // a card's worth of room round the outermost people
+  let bboxMemo = null;      // the tree's extent, worked out afresh on each draw
+  // How much blank you're allowed on each side: about half a screen, measured
+  // per axis so a tall phone doesn't get a tall screen's worth of empty to its
+  // left and right as well.
+  function boardRoom() {
+    const r = stage.getBoundingClientRect();
+    const vw = r.width || 800, vh = r.height || 600;
+    const room = (px) => Math.max(160, Math.min(1500, px / view.scale / 2));
+    return { vw, vh, padX: room(vw), padY: room(vh) };
+  }
+  // the whole board, corner to corner — what the mini map draws
+  function boardBox() {
+    const b = bbox(), m = boardRoom();
+    return { x: b.x - m.padX, y: b.y - m.padY, w: b.w + m.padX * 2, h: b.h + m.padY * 2 };
+  }
+  /* A tree is not a rectangle: out at the far left it may be two rows deep
+     while the middle is ten, and a plain rectangular edge would let you drift
+     up into the empty corner above it. So the top and bottom edge follow the
+     tree — how high and low it actually reaches across the slice of board
+     that's on screen — and only then is the half-screen margin added.       */
+  let spotsMemo = null;
+  function spotsByX() {
+    if (spotsMemo) return spotsMemo;
+    const a = [];
+    visiblePersons().forEach((p) => { const q = posOf(p.id); if (q) a.push({ x: q.x, y: q.y }); });
+    a.sort((m, n) => m.x - n.x);
+    spotsMemo = a;
+    return spotsMemo;
+  }
+  // how high and low the tree reaches between two x's — and if that slice of
+  // board is empty, the row of whoever stands nearest to it
+  function deepBetween(x0, x1) {
+    const a = spotsByX();
+    if (!a.length) return null;
+    let lo = 0, hi = a.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (a[m].x < x0) lo = m + 1; else hi = m; }
+    let top = Infinity, bot = -Infinity;
+    for (let i = lo; i < a.length && a[i].x <= x1; i++) { if (a[i].y < top) top = a[i].y; if (a[i].y > bot) bot = a[i].y; }
+    if (top !== Infinity) return { lo: top, hi: bot };
+    const near = a[lo] || a[a.length - 1], before = a[lo - 1];
+    const pick = before && (!a[lo] || x0 - before.x < a[lo].x - x1) ? before : near;
+    return { lo: pick.y, hi: pick.y };
+  }
+  // the nearest scroll position to (tx, ty) that keeps you on the board
+  function fitInBoard(tx, ty) {
+    const b = bbox(), m = boardRoom();
+    const fit = (t, size, start, len) => {
+      const span = len * view.scale;
+      if (span <= size) return (size - span) / 2 - start * view.scale;   // it all fits: sit in the middle
+      const lo = size - (start + len) * view.scale;                      // right/bottom edge of the board
+      const hi = -start * view.scale;                                    // left/top edge
+      return Math.max(lo, Math.min(hi, t));
+    };
+    const nx = fit(tx, m.vw, b.x - m.padX, b.w + m.padX * 2);
+    const flat = fit(ty, m.vh, b.y - m.padY, b.h + m.padY * 2);          // the plain rectangle: the real edge
+    // …and then the tree's own depth around here, which only ever tightens it.
+    // "Around here" is generous — a screen and a half either side — so that a
+    // thin patch of tree doesn't pin the board, while the far corners, which
+    // are nowhere near anybody, still do.
+    const x0 = -nx / view.scale, wide = m.vw / view.scale;
+    const deep = deepBetween(x0 - wide * 1.5, x0 + wide * 2.5);
+    const top = deep ? deep.lo - CARD_ROOM : b.y, bot = deep ? deep.hi + CARD_ROOM : b.y + b.h;
+    const ny = fit(flat, m.vh, top - m.padY, (bot - top) + m.padY * 2);
+    // Only the rectangle counts as an edge you've run into: the depth of the
+    // tree changes as you travel sideways, and a throw shouldn't die just
+    // because the ground rose under it.
+    return { tx: nx, ty: ny, stuck: Math.abs(nx - tx) > 0.5 || Math.abs(flat - ty) > 0.5 };
+  }
+  function clampView() {
+    const at = fitInBoard(view.tx, view.ty);
+    view.tx = at.tx; view.ty = at.ty;
+    return at.stuck;
+  }
   function applyView() {
+    if (clampView()) { if (glide) stopGlide(); }   // nothing to be gained pressing on past the edge
     gViewport.setAttribute("transform", `translate(${view.tx},${view.ty}) scale(${view.scale})`);
     $("#zoomLabel").textContent = Math.round(view.scale * 100) + "%";
     ensureDrawn();
@@ -2535,14 +2617,16 @@
     return true;
   }
   function bbox() {
+    if (bboxMemo) return bboxMemo;
     // only visible people have layout positions; hidden ones would otherwise
     // drag the box back to the origin and throw off fit-to-screen.
     const ids = visiblePersons().map((p) => p.id);
     if (!ids.length) return { x: 0, y: 0, w: 100, h: 100 };
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     ids.forEach((id) => { const p = posOf(id); minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); });
-    const pad = 90;
-    return { x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 };
+    const pad = CARD_ROOM;
+    bboxMemo = { x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 };
+    return bboxMemo;
   }
   // A readable opening for a big tree on a small screen: the middle of it, at
   // a size names can actually be read at.
@@ -2747,6 +2831,68 @@
     const t = el.querySelector(".sweep-thumb");
     t.style.transform = "translate(" + (tx - ax) + "px," + (ty - ay) + "px)";
   }
+  /* ---- the mini map ------------------------------------------------------
+     A sweep moves the board faster than the eye can follow, so while the thumb
+     is down a small map of the whole tree sits at the top of the screen: a
+     speck for every person, a bright box round the part you're looking at now,
+     and a faint box ahead of it showing where you're heading.               */
+  const MAP_SIDE = 150;            // the longest side of the map, in screen pixels
+  const MAP_AHEAD = 900;           // how far ahead the faint box looks, in milliseconds
+  let sweepMap = null;
+  function sweepMapShow(show) {
+    const old = document.getElementById("sweepMap");
+    if (old) old.remove();
+    sweepMap = null;
+    if (!show) return;
+    const box = boardBox();
+    const k = Math.min(MAP_SIDE / box.w, MAP_SIDE / box.h);
+    const w = Math.max(44, Math.round(box.w * k)), h = Math.max(44, Math.round(box.h * k));
+    const el = document.createElement("div");
+    el.id = "sweepMap"; el.className = "sweep-map";
+    el.style.width = w + "px"; el.style.height = h + "px";
+    const bar = document.getElementById("toolbar");
+    const under = bar ? bar.getBoundingClientRect().bottom : stage.getBoundingClientRect().top;
+    el.style.top = Math.round(Math.max(8, under + 8)) + "px";
+    el.innerHTML = '<canvas></canvas><span class="sweep-map-next"></span><span class="sweep-map-now"></span>';
+    document.body.appendChild(el);
+    // the people are drawn once — only the two boxes move while you sweep
+    const cv = el.querySelector("canvas");
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    cv.style.width = w + "px"; cv.style.height = h + "px";
+    const g = cv.getContext("2d");
+    if (g) {
+      g.scale(dpr, dpr);
+      g.fillStyle = (getComputedStyle(document.documentElement).getPropertyValue("--ink") || "#333").trim();
+      g.globalAlpha = 0.5;
+      visiblePersons().forEach((p) => {
+        const q = posOf(p.id); if (!q) return;
+        g.fillRect((q.x - box.x) * k - 1.3, (q.y - box.y) * k - 1.3, 2.6, 2.6);
+      });
+    }
+    sweepMap = { el, box, k, now: el.querySelector(".sweep-map-now"), next: el.querySelector(".sweep-map-next") };
+    sweepMapMark(0, 0);
+  }
+  // vtx/vty: how fast the scroll position itself is changing, in px per second
+  function sweepMapMark(vtx, vty) {
+    const m = sweepMap;
+    if (!m) return;
+    const r = stage.getBoundingClientRect();
+    const vw = r.width || 800, vh = r.height || 600;
+    const put = (span, tx, ty) => {
+      span.style.left = ((-tx / view.scale - m.box.x) * m.k) + "px";
+      span.style.top = ((-ty / view.scale - m.box.y) * m.k) + "px";
+      span.style.width = Math.max(9, (vw / view.scale) * m.k) + "px";
+      span.style.height = Math.max(9, (vh / view.scale) * m.k) + "px";
+    };
+    put(m.now, view.tx, view.ty);
+    const moving = Math.hypot(vtx, vty) > 40;
+    m.next.style.display = moving ? "" : "none";
+    if (moving) {
+      const soon = fitInBoard(view.tx + vtx * (MAP_AHEAD / 1000), view.ty + vty * (MAP_AHEAD / 1000));
+      put(m.next, soon.tx, soon.ty);
+    }
+  }
   function startSweep(x, y) {
     stopGlide();
     // Full tilt crosses the whole tree in a couple of seconds, whatever size it
@@ -2757,6 +2903,7 @@
     const top = Math.max(2500, Math.min(12000, span / 2.2));
     sweep = { ax: x, ay: y, x, y, top, last: performance.now(), raf: 0 };
     sweepDot(true, x, y, x, y);
+    sweepMapShow(true);
     try { if (navigator.vibrate) navigator.vibrate(8); } catch (e) {}
     toastOnce("sweep", "Sweeping — slide your thumb to scroll, lift to stop");
     const step = (now) => {
@@ -2764,6 +2911,7 @@
       const dt = Math.min(48, now - sweep.last); sweep.last = now;
       let dx = sweep.x - sweep.ax, dy = sweep.y - sweep.ay;
       const dist = Math.hypot(dx, dy);
+      let vtx = 0, vty = 0;
       if (dist > SWEEP_DEAD) {
         // Gentle near the middle and quick at the edge of a thumb's reach, so
         // there's fine control as well as long distance. The thumb points the
@@ -2771,10 +2919,12 @@
         // tree — which is how a stick works and how this reads in the hand.
         const t = Math.min(1, (dist - SWEEP_DEAD) / SWEEP_REACH);
         const pull = (sweep.top * t * t) / dist;      // px per second, split over x and y
-        view.tx -= dx * pull * (dt / 1000);
-        view.ty -= dy * pull * (dt / 1000);
+        vtx = -dx * pull; vty = -dy * pull;
+        view.tx += vtx * (dt / 1000);
+        view.ty += vty * (dt / 1000);
         applyView();
       }
+      sweepMapMark(vtx, vty);
       sweep.raf = requestAnimationFrame(step);
     };
     sweep.raf = requestAnimationFrame(step);
@@ -2784,6 +2934,7 @@
     cancelAnimationFrame(sweep.raf);
     sweep = null;
     sweepDot(false);
+    sweepMapShow(false);
   }
   function startGlide(vx, vy) {
     stopGlide();
