@@ -6425,25 +6425,53 @@
     // mode. A read-only phone that adds a note/photo must still push it, or its
     // "unsynced edits" flag never clears and blocks every future pull (the
     // "phone stuck on an old version" bug).
-    if (!ownerCanCloud() && (readonly || !CLOUD_ON())) return;
+    //
+    // And a device that is EDITING always comes through here, even when it has
+    // no way to push yet. It used to turn back at this line, which meant an
+    // edit on a browser missing the site passcode went nowhere and said
+    // nothing — a day's work living in one browser while everything looked
+    // normal. cloudSaveTree is the thing that knows whether a save can go out,
+    // so let it decide, and let it say so.
+    if (readonly && !ownerCanCloud()) return;
     clearTimeout(cloudTimer);
     setCloudStatus("pending");
     cloudTimer = setTimeout(() => cloudSaveTree(false), 1500);   // near-instant: every change reaches the cloud moments after it's made
   }
   let missingPassWarned = false;
+  /* Saving to the site needs the site's own passcode as well as the family
+     password, and a browser that has only the first can edit but never push.
+     The two are very often the same word, so on the way in it's offered to the
+     site once: if the site accepts it, this device can save from the moment
+     it's opened, and nobody has to know there were ever two secrets.        */
+  async function adoptPasscode(pw) {
+    pw = (pw || "").trim();
+    if (!pw || isOwner()) return false;
+    try {
+      const r = await fetch("api/store", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "checkPasscode", passcode: pw }) });
+      if (!r.ok) return false;
+    } catch (e) { return false; }                       // offline: try again next time
+    try { localStorage.setItem("familyTree.importPass", pw); } catch (e) { return false; }
+    missingPassWarned = false;
+    hideStrandedBanner();
+    setCloudStatus("idle");
+    return true;
+  }
   async function cloudSaveTree(manual) {
     if (readonly && !ownerCanCloud()) return;
     let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {}
     // A browser missing its saved passwords must NEVER skip saves silently —
     // that leaves edits stranded on one device while everything looks fine.
     const surface = (what) => {
-      setCloudStatus("error", "Edits aren't reaching your site — " + what + ". Open “Save & back up” and click Save to fix it.");
-      if (!missingPassWarned) { missingPassWarned = true; toast("⚠️ Your edits are NOT saving to your site from this browser — click “☁︎ Save to my site now” once to fix it"); }
+      setCloudStatus("error", "Edits aren't reaching your site — " + what + ".");
+      showStrandedBanner(what);
+      if (!missingPassWarned) { missingPassWarned = true; toast("⚠️ Your changes are staying on this device — see the banner at the top"); }
     };
     if (!fam) { if (!manual) { surface("this browser doesn't have the family password"); return; } fam = prompt("Choose a family password (used to encrypt your saved tree):") || ""; if (!fam) return; try { localStorage.setItem("familyTree.familyPass", fam); } catch (e) {} }
     let pass = ""; try { pass = localStorage.getItem("familyTree.importPass") || ""; } catch (e) {}
     if (!pass) { if (!manual) { surface("this browser doesn't have the import passcode"); return; } pass = prompt("One-time import passcode (set as IMPORT_PASSCODE on the Vercel site):") || ""; if (!pass) return; try { localStorage.setItem("familyTree.importPass", pass); } catch (e) {} missingPassWarned = false; }
     try { localStorage.setItem("familyTree.cloudOn", "1"); } catch (e) {}
+    hideStrandedBanner(); missingPassWarned = false;
     // Whatever this copy is about to go over the top of, its keepsakes come
     // along: a picture or record added on another device is never lost just
     // because this device's copy is the one being pushed. Only costs a lookup,
@@ -7533,7 +7561,7 @@
       // Only claim we're in sync with the cloud if the cloud copy is what opened.
       if (!r.viewer && r.from === "cloud") cloudTreeInfo().then((info) => { if (info && info.savedAt) { try { localStorage.setItem("familyTree.cloudSavedAt", String(info.savedAt)); } catch (e) {} } });
       // The viewer password NEVER opens the editor, even with ?edit in the URL.
-      if (intoEditor && !r.viewer) { readonly = false; save(); }
+      if (intoEditor && !r.viewer) { readonly = false; adoptPasscode(pw).catch(() => {}); save(); }
       else enterReadonly();
       boot();
     }
@@ -7680,6 +7708,29 @@
       if (isMobileView() && view.scale < 0.72) { zoomAt(0.72 / view.scale, null, null); render(); }
     }
   }
+
+  /* ---- "your edits are staying on this device" ------------------------------
+     A toast you might miss is no use for this: it means today's work exists in
+     one browser and nowhere else. The banner stays until it's fixed, and the
+     button on it fixes it.                                                   */
+  function showStrandedBanner(why) {
+    let b = document.getElementById("strandedBanner");
+    if (b) return;
+    b = document.createElement("div");
+    b.id = "strandedBanner";
+    b.className = "token-banner expired";
+    b.innerHTML = `<span class="tb-msg">⚠️ Your changes are only on this device — ${why}, so they aren't reaching your other devices.</span>
+      <button type="button" class="tb-how">Fix this now</button>`;
+    b.querySelector(".tb-how").onclick = async () => {
+      const pw = prompt("Your family password, to let this browser save to your site:") || "";
+      if (!pw) return;
+      if (!(await adoptPasscode(pw))) { toast("That wasn't accepted by your site — nothing was changed."); return; }
+      toast("Saving everything on this device to your site…");
+      try { await cloudSaveTree(true); } catch (e) {}
+    };
+    document.body.appendChild(b);
+  }
+  function hideStrandedBanner() { const b = document.getElementById("strandedBanner"); if (b) b.remove(); }
 
   /* ---- GitHub key expiry banner: warn the owner BEFORE cloud saves break ---- */
   function showTokenBanner(kind, expiresAt) {
@@ -8282,6 +8333,9 @@
     setColor("");
     renderDocsForm(null);
     setTimeout(checkTokenHealth, 4000);   // after boot settles; runs on every path
+    // A browser that can edit but can't save is the one thing that strands a
+    // day's work, so every load tries to put that right before anything is typed.
+    setTimeout(() => { if (!readonly && !isOwner()) { let fam = ""; try { fam = localStorage.getItem("familyTree.familyPass") || ""; } catch (e) {} if (fam) adoptPasscode(fam).catch(() => {}); } }, 1200);
     await loadLocalData();   // pull the saved tree out of IndexedDB (roomy, no server)
     const params = new URLSearchParams(location.search);
     const wantEdit = params.has("edit");
