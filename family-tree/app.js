@@ -36,6 +36,8 @@
   let redoStack = [];
   let view = { tx: 0, ty: 0, scale: 1 };
   let pendingPhoto = null;   // dataURL staged in the person form
+  let pendingPhotoFull = null;  // …and the uncropped original behind it, to re-frame from
+  let pendingFrame = null;      // where the crop was taken from that original
   let photoDirty = false;    // true only when the user changed/cleared the photo this edit
   let formSex = "male";
   let formColor = "";
@@ -3390,6 +3392,8 @@
     setColor(p.color || "");
     photoDirty = false; photoReplaced = false;
     pendingPhoto = photoOf(p);
+    pendingPhotoFull = null;               // fetched only if Adjust is pressed
+    pendingFrame = p.photoFrame || null;
     // An externalised photo may still be loading — fill the preview when it lands.
     if (!pendingPhoto && p.photoRef) mediaGet(p.photoRef).then((u) => {
       if (u && $("#personId").value === p.id && !photoDirty) { pendingPhoto = u; updatePhotoPreview(); }
@@ -3414,7 +3418,7 @@
     syncAgeLine(null);
     syncDateEchoes();
     setSex("male");
-    pendingPhoto = null; updatePhotoPreview();
+    pendingPhoto = null; pendingPhotoFull = null; pendingFrame = null; updatePhotoPreview();
     setColor("");
     $("#personSubmit").textContent = "Add person";
     $("#personCancel").hidden = true;
@@ -3896,9 +3900,28 @@
       if (photoDirty) {
         // a different picture taking over: the old one joins their gallery
         if (pendingPhoto && photoReplaced) archiveTreePicture(p);
-        delete p.photoSrcRef;   // the kept original belongs to the picture being replaced
-        if (pendingPhoto) { p.photo = pendingPhoto; delete p.photoRef; scheduleSweep(); }
-        else { delete p.photo; delete p.photoRef; }
+        if (pendingPhoto) {
+          p.photo = pendingPhoto; delete p.photoRef; scheduleSweep();
+          delete p.photoFrame;
+          if (pendingPhotoFull) {
+            // park the original alongside, so Adjust has it next time. It goes
+            // to the media store in its own time — the picture itself is saved
+            // either way.
+            const full = pendingPhotoFull, who = p.id, cut = pendingFrame;
+            delete p.photoSrcRef;
+            mediaUpload(full).then((ref) => {
+              const q = personById(who);
+              if (q) { q.photoSrcRef = ref; const f = stampFrame(cut, ref); if (f) q.photoFrame = f; save(); }
+            }).catch(() => {});
+          } else if (photoReplaced) {
+            delete p.photoSrcRef;   // a different picture, with no original kept
+          } else {
+            const f = stampFrame(pendingFrame, p.photoSrcRef || "square");
+            if (f) p.photoFrame = f;
+          }
+        } else {
+          delete p.photo; delete p.photoRef; delete p.photoSrcRef; delete p.photoFrame;
+        }
       }
     } else {
       const p = addPerson(data); selectedId = p.id;
@@ -4010,19 +4033,22 @@
   // (nothing is saved until Save is pressed, same as choosing a file).
   async function stageFormPhoto(file) {
     if (!file) return;
-    let src = null;
-    try { src = await fileAsPictureDataUrl(file); }
-    catch (err) { toast(isPdfFile(file) ? "Couldn’t read that PDF — try saving the page as a JPG." : "Couldn’t convert that HEIC photo — try exporting it as JPG."); return; }
-    if (!src) return toast("Couldn’t read that file.");
-    openPhotoAdjust(src, (photo) => { pendingPhoto = photo; photoDirty = true; photoReplaced = true; updatePhotoPreview(); });
+    // the whole picture is kept alongside the square, so Adjust later has the
+    // original to work from rather than the crop
+    const full = await fileAsFullImage(file);
+    if (!full) return;
+    openPhotoAdjust(full, (photo, cut) => {
+      pendingPhoto = photo; pendingPhotoFull = full; pendingFrame = cut;
+      photoDirty = true; photoReplaced = true; updatePhotoPreview();
+    });
   }
   // …and straight onto the person when their profile (not the form) is showing.
   async function takeProfilePhoto(file) {
     const p = personById($("#personId").value);
     if (!p) return toast("Click somebody first, then paste their picture");
     const full = await fileAsFullImage(file); if (!full) return;
-    openPhotoAdjust(full, async (sq) => {
-      const kept = await setTreePicture(p, sq, full, null, true);
+    openPhotoAdjust(full, async (sq, cut) => {
+      const kept = await setTreePicture(p, sq, full, null, true, cut);
       renderPersonHead(personById(p.id) || p); renderGalleryPanel(personById(p.id) || p);
       toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated");
     });
@@ -4055,7 +4081,7 @@
   $("#photoDrop").onclick = () => $("#photoInput").click();
   makePhotoTarget($("#photoDrop"), (f) => stageFormPhoto(f), "picture");
   { const g = $("#galleryBox"); if (g) makePhotoTarget(g, (f) => takeGalleryPhoto(f), "gallery"); }
-  $("#photoClear").onclick = () => { pendingPhoto = null; photoDirty = true; updatePhotoPreview(); };
+  $("#photoClear").onclick = () => { pendingPhoto = null; pendingPhotoFull = null; pendingFrame = null; photoDirty = true; updatePhotoPreview(); };
   $("#photoUrlBtn").onclick = () => setPhotoFromUrl($("#photoUrl").value);
   $("#photoInput").addEventListener("change", async (e) => {
     const file = e.target.files[0]; e.target.value = ""; if (!file) return;
@@ -4064,7 +4090,24 @@
   // Set when the staged photo is a DIFFERENT picture (a file, a drop, a link) —
   // not when it's the current one being re-framed with Adjust.
   let photoReplaced = false;
-  $("#photoAdjustBtn").onclick = () => { if (pendingPhoto) openPhotoAdjust(pendingPhoto, (photo) => { pendingPhoto = photo; photoDirty = true; updatePhotoPreview(); }); };
+  /* Adjust re-frames the picture that was UPLOADED, not the square that was
+     cut out of it last time — so zooming back out shows more of the photo
+     again instead of scaling up a crop. The original is whatever's staged in
+     the form, or the one kept beside their saved picture; only a picture from
+     before originals were kept falls back to the square itself.            */
+  $("#photoAdjustBtn").onclick = async () => {
+    if (!pendingPhoto) return;
+    let src = pendingPhotoFull, frame = pendingFrame;
+    if (!src) {
+      const p = personById($("#personId").value);
+      const got = p ? await photoSourceFor(p).catch(() => null) : null;
+      if (got) { src = got.url; frame = frameOf(p, got.of); }
+      else frame = null;
+    }
+    openPhotoAdjust(src || pendingPhoto, (photo, cut) => {
+      pendingPhoto = photo; pendingFrame = cut; photoDirty = true; updatePhotoPreview();
+    }, frame);
+  };
   // Load a photo from a pasted image link (or any page with a portrait) into the
   // form's staged photo. The fetch runs server-side (Vercel), so it works on
   // cross-origin images the browser itself couldn't read. Save to keep it.
@@ -4080,7 +4123,10 @@
     try {
       const data = await callArchive({ passcode: pass, url });
       if (data && data.image) {
-        openPhotoAdjust(data.image, (photo) => { pendingPhoto = photo; photoDirty = true; photoReplaced = true; updatePhotoPreview(); toast("Photo loaded — click Save to keep it"); });
+        openPhotoAdjust(data.image, (photo, cut) => {
+          pendingPhoto = photo; pendingPhotoFull = data.image; pendingFrame = cut;
+          photoDirty = true; photoReplaced = true; updatePhotoPreview(); toast("Photo loaded — click Save to keep it");
+        });
         return;
       }
       toast("No image found at that link");
@@ -4105,7 +4151,14 @@
   // so a second tap that lands in that gap must be turned away here, not by
   // looking for a dialog that hasn't been put on screen yet.
   let photoAdjusting = false;
-  function openPhotoAdjust(src, onDone) {
+  /* frame: where the crop sat last time, as fractions of the picture —
+     { z: how far zoomed in, 1 = the whole of the short side; cx, cy: the
+     middle of the crop }. Fractions rather than pixels, so the framing still
+     means the same thing when it's applied to the full-size original rather
+     than to the copy it was first framed from. onDone gets the square AND
+     the frame it was cut at, so the next Adjust can start where this left
+     off instead of jumping back to the middle.                             */
+  function openPhotoAdjust(src, onDone, frame) {
     if (photoAdjusting) return;
     if (!src) return;
     photoAdjusting = true;
@@ -4116,6 +4169,12 @@
       const natW = probe.naturalWidth, natH = probe.naturalHeight;
       const minScale = V / Math.min(natW, natH);
       let scale = minScale, ox = (V - natW * scale) / 2, oy = (V - natH * scale) / 2;
+      if (frame && frame.z > 0 && Number.isFinite(frame.cx) && Number.isFinite(frame.cy)) {
+        scale = minScale * Math.max(1, Math.min(4, frame.z));
+        const side = V / scale;
+        ox = -(frame.cx * natW - side / 2) * scale;
+        oy = -(frame.cy * natH - side / 2) * scale;
+      }
 
       const back = document.createElement("div");
       back.className = "modal-backdrop";
@@ -4143,6 +4202,7 @@
         zoom.value = (scale / minScale).toFixed(2);
       };
       clamp(); draw();
+      zoom.value = (scale / minScale).toFixed(2);
 
       zoom.oninput = () => setScaleAround(minScale * parseFloat(zoom.value), V / 2, V / 2);
 
@@ -4172,8 +4232,10 @@
         const out = document.createElement("canvas"); out.width = out.height = OUT;
         const f = OUT / V;
         out.getContext("2d").drawImage(probe, ox * f, oy * f, natW * scale * f, natH * scale * f);
+        const side = V / scale;
+        const cut = { z: scale / minScale, cx: (-ox / scale + side / 2) / natW, cy: (-oy / scale + side / 2) / natH };
         close();
-        onDone(out.toDataURL("image/jpeg", 0.85));
+        onDone(out.toDataURL("image/jpeg", 0.85), cut);
       };
     };
     probe.src = src;
@@ -5470,8 +5532,8 @@
           ev.stopPropagation();
           const full = galleryPicSrc(g) || (g.ref ? await mediaGet(g.ref).catch(() => null) : null);
           if (!full) return toast("That photo is still loading");
-          openPhotoAdjust(full, async (sq) => {
-            const kept = await setTreePicture(p, sq, g.ref ? null : full, g.ref || null, true);
+          openPhotoAdjust(full, async (sq, cut) => {
+            const kept = await setTreePicture(p, sq, g.ref ? null : full, g.ref || null, true, cut);
             toast(kept ? "Tree picture updated — the old one is in their gallery" : "Tree picture updated"); if (onChange) onChange();
           });
         };
@@ -5539,11 +5601,21 @@
   // The best image to (re-)crop from: the full-size original kept when the
   // picture was set, else the square itself — still enough to nudge or zoom in.
   async function photoSourceFor(p) {
-    if (p.photoSrcRef) { const u = await mediaGet(p.photoSrcRef).catch(() => null); if (u) return u; }
-    if (p.photo) return p.photo;
-    if (p.photoRef) return await mediaGet(p.photoRef).catch(() => null);
+    if (p.photoSrcRef) { const u = await mediaGet(p.photoSrcRef).catch(() => null); if (u) return { url: u, of: p.photoSrcRef }; }
+    if (p.photo) return { url: p.photo, of: "square" };
+    if (p.photoRef) { const u = await mediaGet(p.photoRef).catch(() => null); return u ? { url: u, of: "square" } : null; }
     return null;
   }
+  /* A remembered framing only means anything against the picture it was
+     measured on. Each one records which that was, so a frame taken from the
+     full-size original is never re-applied to the square crop (which would
+     open the editor zoomed into a corner) — and the original going missing,
+     through a backup or a picture being replaced, simply means no frame.   */
+  const frameOf = (p, of) => {
+    const f = p && p.photoFrame;
+    return f && f.of === of ? f : null;
+  };
+  const stampFrame = (frame, of) => (frame ? { z: frame.z, cx: frame.cx, cy: frame.cy, of } : null);
   // Save a freshly cropped square as the tree picture, keeping a reference to
   // the full-size original so it can be repositioned again later without the
   // quality loss of re-cropping a crop.
@@ -5569,7 +5641,7 @@
   // keepPrevious: true when this is a DIFFERENT picture taking over, false when
   // it's the same one being re-framed (which would only fill the gallery with
   // near-identical crops).
-  async function setTreePicture(p, square, full, fullRef, keepPrevious) {
+  async function setTreePicture(p, square, full, fullRef, keepPrevious, frame) {
     pushUndo();
     const kept = keepPrevious ? archiveTreePicture(p) : false;
     try { p.photoRef = await mediaUpload(square); delete p.photo; }
@@ -5577,6 +5649,8 @@
     delete p.photoSrcRef;
     if (fullRef) p.photoSrcRef = fullRef;
     else if (full) { try { p.photoSrcRef = await mediaUpload(full); } catch (e) {} }
+    const cutOf = p.photoSrcRef || "square";
+    if (frame) p.photoFrame = stampFrame(frame, cutOf); else delete p.photoFrame;
     p.photoMobile = true;
     save(); try { cloudSaveTree(false); } catch (e) {}
     scheduleSweep(); render();
@@ -5619,9 +5693,12 @@
     m.appendChild(linkRow);
     if (has) opt("🔍 Reposition this picture", async () => {
       close();
+      // the uncropped original, when there is one — repositioning a crop can
+      // only ever show less of the picture, never more
       const src = await photoSourceFor(p);
       if (!src) return toast("That picture is still loading — try again in a moment");
-      openPhotoAdjust(src, async (sq) => { await setTreePicture(p, sq, null, p.photoSrcRef || null, false); after("Picture repositioned"); });
+      openPhotoAdjust(src.url, async (sq, cut) => { await setTreePicture(p, sq, null, p.photoSrcRef || null, false, cut); after("Picture repositioned"); },
+        frameOf(p, src.of));
     });
     if (gal.length) opt("🖼 Choose from their photos", () => { close(); openGalleryPick(p, onChange); });
     const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*,.heic,.heif,application/pdf,.pdf"; fileInput.style.display = "none";
@@ -5629,7 +5706,7 @@
       const file = fileInput.files[0]; if (!file) return;
       close();
       const full = await fileAsFullImage(file); if (!full) return;
-      openPhotoAdjust(full, async (sq) => { const kept = await setTreePicture(p, sq, full, null, true); after(kept ? "Picture updated — the old one is in their gallery" : "Picture updated"); });
+      openPhotoAdjust(full, async (sq, cut) => { const kept = await setTreePicture(p, sq, full, null, true, cut); after(kept ? "Picture updated — the old one is in their gallery" : "Picture updated"); });
     };
     m.appendChild(fileInput);
     opt(has ? "📷 Upload a new picture" : "📷 Upload a picture", () => fileInput.click());
@@ -5651,8 +5728,8 @@
       if (!file) return;
       close();
       const full = await fileAsFullImage(file); if (!full) return;
-      openPhotoAdjust(full, async (sq) => {
-        const kept = await setTreePicture(p, sq, full, null, true);
+      openPhotoAdjust(full, async (sq, cut) => {
+        const kept = await setTreePicture(p, sq, full, null, true, cut);
         toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated");
         if (onChange) onChange();
       });
@@ -5716,8 +5793,8 @@
     const got = await fetchLinkImage(url);
     if (got.cancelled) return;
     if (got.error) return askForPaste(got.error);
-    openPhotoAdjust(got.image, async (sq) => {
-      const kept = await setTreePicture(p, sq, got.image, null, true);
+    openPhotoAdjust(got.image, async (sq, cut) => {
+      const kept = await setTreePicture(p, sq, got.image, null, true, cut);
       toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated");
       if (onChange) onChange();
     });
@@ -5817,8 +5894,8 @@
         const full = galleryPicSrc(g) || (g.ref ? await mediaGet(g.ref).catch(() => null) : null);
         if (!full) return toast("That photo is still loading");
         back.remove();
-        openPhotoAdjust(full, async (sq) => {
-          const kept = await setTreePicture(p, sq, g.ref ? null : full, g.ref || null, true);
+        openPhotoAdjust(full, async (sq, cut) => {
+          const kept = await setTreePicture(p, sq, g.ref ? null : full, g.ref || null, true, cut);
           toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated"); if (onChange) onChange();
         });
       };
