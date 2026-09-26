@@ -123,12 +123,20 @@
   const middleInitial = (m) => /^[A-Za-z]\.?$/.test(String(m || "").trim());
   const middleForDisplay = (m) => (middleInitial(m) ? String(m).trim().charAt(0).toUpperCase() + "." : m);
   const middleAsTyped = (m) => (middleInitial(m) ? String(m).trim().charAt(0).toUpperCase() : String(m || "").trim());
+  /* A woman who married more than once carries more than one married name.
+     They're written in the order she had them — maiden in parentheses, then
+     each earlier husband's surname, then the one she goes by now:
+     "Verlyn Elaine (Taylor) Boyd Nelson". `last` stays the current surname,
+     so everything else that sorts or searches by it is unaffected.        */
+  const priorList = (v) => (Array.isArray(v) ? v : String(v || "").split(","))
+    .map((x) => String(x || "").trim()).filter(Boolean);
   function composeName(p) {
     const bits = [];
     if (p.first) bits.push(p.first);
     if (p.middle) bits.push(middleForDisplay(p.middle));
     if (p.nickname) bits.push('"' + p.nickname + '"');
     if (p.maiden) bits.push("(" + p.maiden + ")");
+    priorList(p.priorNames).forEach((n) => { if (n !== p.last) bits.push(n); });
     if (p.last) bits.push(p.last);
     if (p.suffix) bits.push(p.suffix);
     return bits.join(" ").replace(/\s+/g, " ").trim();
@@ -141,7 +149,7 @@
     if (p.first == null && p.last == null && p.middle == null) return p.name || "";
     const mid = (p.middle || "").trim();
     const initial = mid ? mid.charAt(0).toUpperCase() + "." : "";
-    return composeName({ first: p.first, middle: initial, last: p.last, nickname: p.nickname, maiden: p.maiden, suffix: p.suffix }) || p.name || "";
+    return composeName({ first: p.first, middle: initial, last: p.last, nickname: p.nickname, maiden: p.maiden, priorNames: p.priorNames, suffix: p.suffix }) || p.name || "";
   }
   // Split a written name into parts: pull a "nickname" and a (maiden), peel a
   // trailing generational suffix (Jr., Sr., III, …), then take the first token
@@ -165,6 +173,7 @@
     const parts = has
       ? { first: d.first || "", middle: middleAsTyped(d.middle), last: d.last || "", nickname: d.nickname || "", maiden: d.maiden || "", suffix: d.suffix || "" }
       : parseName(d.name || "");
+    parts.priorNames = priorList(d.priorNames).filter((n) => n !== parts.last);
     parts.middle = middleAsTyped(parts.middle);
     parts.name = composeName(parts) || String(d.name || "").trim() || "Unnamed";
     return parts;
@@ -183,7 +192,7 @@
 
   function addPerson(data) {
     const np = nameParts(data);
-    const p = { id: uid(), name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate || null, deathDate: data.deathDate || null, deceased: !!data.deceased, causeOfDeath: data.causeOfDeath || undefined, sex: data.sex || "unknown", color: data.color || null, photo: data.photo || null, docs: data.docs || [] };
+    const p = { id: uid(), name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, priorNames: np.priorNames, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate || null, deathDate: data.deathDate || null, deceased: !!data.deceased, causeOfDeath: data.causeOfDeath || undefined, sex: data.sex || "unknown", color: data.color || null, photo: data.photo || null, docs: data.docs || [] };
     state.persons.push(p);
     // Anyone added while inside a hidden branch stays hidden from the main tree.
     if (hiddenScope) { if (!state.hidden) state.hidden = {}; state.hidden[p.id] = true; }
@@ -3370,6 +3379,8 @@
     $("#pLast").value = np.last || "";
     $("#pNick").value = np.nickname || "";
     $("#pMaiden").value = np.maiden || "";
+    $("#pPrior").value = priorList(p.priorNames).join(", ");
+    syncPriorEcho();
     $("#pSuffix").value = np.suffix || "";
     renderNotesPanel(p);
     renderGalleryPanel(p);
@@ -3553,8 +3564,47 @@
       if (seat) seat.b = partnerId; else addUnion(personId, partnerId, "married");
       if (!isManual(partnerId)) { const pp = posOf(personId); placeAt(partnerId, pp.x + COLW, pp.y); }   // beside them, on their row
       if (!pid) focusNewPerson(personById(partnerId), "Added spouse — type their name and Save");
-      else { refreshRel(personId); toast("Linked as a couple"); }
+      else { refreshRel(personId); toast("Linked as a couple"); offerMarriedNameBoth(personId, partnerId); }
     }, [personId]);
+  }
+  /* Marrying again usually means another married name, and the moment that
+     becomes knowable is when the new husband turns up with a surname. So it's
+     offered then, rather than left for you to remember: her current surname
+     moves into the earlier ones and his takes its place, which is how she'd
+     be written — "Verlyn Elaine (Taylor) Boyd Nelson". Asked once per name,
+     and no is no.                                                           */
+  const marriedNameAsked = new Set();
+  function offerMarriedName(womanId, surname) {
+    const w = personById(womanId);
+    surname = String(surname || "").trim();
+    if (!w || !surname) return false;
+    if (w.sex !== "female" || !w.maiden) return false;         // nothing to go on
+    if (!w.last || w.last === surname) return false;
+    if (priorList(w.priorNames).includes(surname)) return false;
+    const key = w.id + ":" + surname;
+    if (marriedNameAsked.has(key)) return false;
+    marriedNameAsked.add(key);
+    const who = w.first || w.name || "she";
+    if (!confirm("Is " + who + " also known as " + surname + "?\n\n" + w.last
+      + " would be kept as an earlier married name, so she reads "
+      + composeName({ first: w.first, middle: w.middle, nickname: w.nickname, maiden: w.maiden,
+                      priorNames: priorList(w.priorNames).concat([w.last]), last: surname, suffix: w.suffix })
+      + ".")) return false;
+    pushUndo();
+    w.priorNames = priorList(w.priorNames).concat([w.last]);
+    w.last = surname;
+    w.name = composeName(w) || w.name;
+    save(); render();
+    if (selectedId === w.id) { fillPersonForm(w); showPersonView(w); }
+    toast("Now shown as " + w.name);
+    return true;
+  }
+  // Both halves of a couple, checked against each other: whichever of them is a
+  // woman with a maiden name is the one who might take the other's surname.
+  function offerMarriedNameBoth(aId, bId) {
+    const a = personById(aId), b = personById(bId);
+    if (!a || !b) return;
+    if (!offerMarriedName(aId, b.last)) offerMarriedName(bId, a.last);
   }
   function relAddChild(unionId, personId) {
     pickPerson("Add a child", "Link an existing person as this couple’s child, or create a new one.", (cid) => {
@@ -3847,6 +3897,8 @@
     formSex = s;
     document.querySelectorAll("#sexToggle button").forEach((b) => b.classList.toggle("active", b.dataset.sex === s));
     const mf = $("#maidenField"); if (mf) mf.hidden = (s !== "female");   // maiden name only for females
+    const pf = $("#priorField"); if (pf) pf.hidden = (s !== "female");   // …and so are earlier married names
+    syncPriorEcho();
   }
   function buildColorSwatches() {
     const row = $("#colorRow");
@@ -3885,11 +3937,11 @@
     const deathDate = dIso && dIso.length > 4 ? dIso : null;
     const birthYear = bIso ? dateYear(bIso) : null;
     const deathYear = dIso ? dateYear(dIso) : null;
-    const np = nameParts({ first: $("#pFirst").value.trim(), middle: $("#pMiddle").value.trim(), last: $("#pLast").value.trim(), nickname: $("#pNick").value.trim(), maiden: formSex === "female" ? $("#pMaiden").value.trim() : "", suffix: $("#pSuffix").value.trim() });
-    const data = { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: birthYear, death: deathYear, birthDate, deathDate, deceased: $("#pDeceased").checked, causeOfDeath: $("#pCause").value.trim() || null, sex: formSex, color: formColor, photo: pendingPhoto };
+    const np = nameParts({ first: $("#pFirst").value.trim(), middle: $("#pMiddle").value.trim(), last: $("#pLast").value.trim(), nickname: $("#pNick").value.trim(), maiden: formSex === "female" ? $("#pMaiden").value.trim() : "", priorNames: formSex === "female" ? $("#pPrior").value : "", suffix: $("#pSuffix").value.trim() });
+    const data = { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, priorNames: np.priorNames, suffix: np.suffix, birth: birthYear, death: deathYear, birthDate, deathDate, deceased: $("#pDeceased").checked, causeOfDeath: $("#pCause").value.trim() || null, sex: formSex, color: formColor, photo: pendingPhoto };
     if (id) {
       const p = personById(id);
-      Object.assign(p, { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate, deathDate: data.deathDate, deceased: data.deceased, sex: data.sex, color: data.color || null });
+      Object.assign(p, { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, priorNames: np.priorNames, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate, deathDate: data.deathDate, deceased: data.deceased, sex: data.sex, color: data.color || null });
       const cause = $("#pCause").value.trim();
       if (cause) p.causeOfDeath = cause; else delete p.causeOfDeath;
       if ($("#pMilitary").checked) {
@@ -3931,8 +3983,23 @@
     if (saved) { fillPersonForm(saved); showPersonView(saved); }   // back to their profile
     relayoutAndSave();
     toast("Saved");
+    // A blank spouse gets their surname here, not when they were added, so
+    // this is the moment to ask about hers.
+    if (saved && saved.last) spouseIdsOf(saved.id).forEach((sid) => offerMarriedName(sid, saved.last));
   });
   // Say back what was typed, in words, so a date is never silently misread.
+  // Say the whole name back as it will appear on the tree, so a list of
+  // married names is never a guess about what you'll get.
+  function syncPriorEcho() {
+    const o = $("#pPriorEcho"); if (!o) return;
+    const val = (sel) => { const el = $(sel); return el ? el.value.trim() : ""; };
+    const list = priorList(val("#pPrior"));
+    if (!list.length || formSex !== "female") { o.textContent = ""; return; }
+    o.textContent = composeName({
+      first: val("#pFirst"), middle: val("#pMiddle"), nickname: val("#pNick"),
+      maiden: val("#pMaiden"), priorNames: list, last: val("#pLast"), suffix: val("#pSuffix"),
+    });
+  }
   function syncDateEchoes() {
     [["#pBirth", "#pBirthEcho"], ["#pDeath", "#pDeathEcho"]].forEach(([inSel, outSel]) => {
       const i = $(inSel), o = $(outSel); if (!i || !o) return;
@@ -3966,6 +4033,9 @@
     el2.hidden = !a;
     el2.textContent = !a ? "" : (isDeceased(src) ? "Age at death: " + a : "Age: " + a);
   }
+  ["#pPrior", "#pFirst", "#pMiddle", "#pNick", "#pMaiden", "#pLast", "#pSuffix"].forEach((sel) => {
+    const el = $(sel); if (el) el.addEventListener("input", syncPriorEcho);
+  });
   ["#pBirth", "#pDeath", "#pDeceased"].forEach((sel) => {
     const n = $(sel);
     if (n) { n.addEventListener("input", () => { syncAgeLine(null); syncDateEchoes(); }); n.addEventListener("change", () => { syncAgeLine(null); syncDateEchoes(); }); }
@@ -4033,9 +4103,12 @@
   // (nothing is saved until Save is pressed, same as choosing a file).
   async function stageFormPhoto(file) {
     if (!file) return;
-    // the whole picture is kept alongside the square, so Adjust later has the
-    // original to work from rather than the crop
     const full = await fileAsFullImage(file);
+    stageFormImage(full);
+  }
+  // the whole picture is kept alongside the square, so Adjust later has the
+  // original to work from rather than the crop
+  function stageFormImage(full) {
     if (!full) return;
     openPhotoAdjust(full, (photo, cut) => {
       pendingPhoto = photo; pendingPhotoFull = full; pendingFrame = cut;
@@ -4078,7 +4151,10 @@
   });
 
   /* photo upload with downscale */
-  $("#photoDrop").onclick = () => $("#photoInput").click();
+  $("#photoDrop").onclick = () => {
+    const p = personById($("#personId").value);
+    if (!openPictureAdd(p, (full) => stageFormImage(full))) $("#photoInput").click();
+  };
   makePhotoTarget($("#photoDrop"), (f) => stageFormPhoto(f), "picture");
   { const g = $("#galleryBox"); if (g) makePhotoTarget(g, (f) => takeGalleryPhoto(f), "gallery"); }
   $("#photoClear").onclick = () => { pendingPhoto = null; pendingPhotoFull = null; pendingFrame = null; photoDirty = true; updatePhotoPreview(); };
@@ -5701,15 +5777,21 @@
         frameOf(p, src.of));
     });
     if (gal.length) opt("🖼 Choose from their photos", () => { close(); openGalleryPick(p, onChange); });
+    const takeNew = (full) => {
+      if (!full) return;
+      openPhotoAdjust(full, async (sq, cut) => { const kept = await setTreePicture(p, sq, full, null, true, cut); after(kept ? "Picture updated — the old one is in their gallery" : "Picture updated"); });
+    };
     const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*,.heic,.heif,application/pdf,.pdf"; fileInput.style.display = "none";
     fileInput.onchange = async () => {
       const file = fileInput.files[0]; if (!file) return;
       close();
-      const full = await fileAsFullImage(file); if (!full) return;
-      openPhotoAdjust(full, async (sq, cut) => { const kept = await setTreePicture(p, sq, full, null, true, cut); after(kept ? "Picture updated — the old one is in their gallery" : "Picture updated"); });
+      takeNew(await fileAsFullImage(file));
     };
     m.appendChild(fileInput);
-    opt(has ? "📷 Upload a new picture" : "📷 Upload a picture", () => fileInput.click());
+    opt(has ? "📷 Add a new picture" : "📷 Add a picture", () => {
+      close();
+      if (!openPictureAdd(p, takeNew)) fileInput.click();
+    });
     if (has) opt("🗑 Remove this picture", () => {
       if (!confirm("Remove their tree picture? Any photos in their gallery stay.")) return;
       close(); pushUndo();
@@ -5870,6 +5952,78 @@
     });
     const close = () => { document.removeEventListener("paste", onPaste, true); back.remove(); };
     doneBtn.onclick = close;
+    back.addEventListener("click", (e) => { if (e.target === back) close(); });
+    back.appendChild(m); document.body.appendChild(back);
+    setTimeout(() => { try { link.focus(); } catch (e) {} }, 0);
+    return back;
+  }
+  /* ---- one chooser for a profile picture, whichever way it arrives ---------
+     A picture turns up as often from a link or the clipboard as from a file,
+     so asking for a profile picture opens the same sort of box the gallery's
+     "Add photos" does — a link, a file, a paste, a drop — instead of jumping
+     straight into a file window. Whatever it's given it hands back one
+     full-size picture, and the caller decides where that goes.             */
+  function openPictureAdd(who, onPicture) {
+    if (readonly || !isOwner()) return null;
+    if (document.querySelector(".modal-backdrop .picture-add")) return null;   // one at a time
+    const back = document.createElement("div"); back.className = "modal-backdrop";
+    const m = document.createElement("div"); m.className = "modal picture-add";
+    const h = document.createElement("h2"); h.textContent = "Profile picture"; m.appendChild(h);
+    const hint = document.createElement("div"); hint.className = "hint";
+    hint.textContent = "Paste a picture (⌘V) or drop one here, paste a link to one, or choose a file from this device."
+      + (who ? " You'll be able to position it next." : "");
+    m.appendChild(hint);
+    let closed = false;
+    const close = () => { if (closed) return; closed = true; document.removeEventListener("paste", onPaste, true); back.remove(); };
+    const hand = (full) => { if (!full) return; close(); onPicture(full); };
+    // a link
+    const row = document.createElement("div"); row.className = "pm-linkrow";
+    const link = document.createElement("input");
+    link.type = "text"; link.placeholder = "Paste a photo link — or the picture itself"; link.autocomplete = "off"; link.spellcheck = false;
+    const go = document.createElement("button"); go.type = "button"; go.className = "btn"; go.textContent = "Use";
+    const runLink = async () => {
+      const url = (link.value || "").trim();
+      if (!url) { toast("Paste a link first"); link.focus(); return; }
+      go.disabled = true;
+      const got = await fetchLinkImage(url);
+      go.disabled = false;
+      if (got.cancelled) return;
+      if (got.error) { toast(got.error + " — copy the picture itself and paste it here instead"); link.select(); return; }
+      hand(got.image);
+    };
+    go.onclick = runLink;
+    link.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); runLink(); } });
+    row.appendChild(link); row.appendChild(go); m.appendChild(row);
+    // a file
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = "image/*,.heic,.heif,application/pdf,.pdf"; inp.style.display = "none";
+    inp.onchange = async () => { const f = inp.files[0]; inp.value = ""; if (!f) return; const full = await fileAsFullImage(f); hand(full); };
+    m.appendChild(inp);
+    const btns = document.createElement("div"); btns.className = "btn-row";
+    const pick = document.createElement("button"); pick.type = "button"; pick.className = "btn"; pick.textContent = "📁 Choose a file…";
+    pick.onclick = () => inp.click();
+    const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "Cancel";
+    cancel.onclick = close;
+    btns.appendChild(pick); btns.appendChild(cancel); m.appendChild(btns);
+    // …or pasted, or dropped on it
+    const takeFile = async (f) => { const full = await fileAsFullImage(f); hand(full); };
+    const onPaste = (e) => {
+      const items = (e.clipboardData && e.clipboardData.items) || [];
+      for (const it of items) {
+        if (it.type && it.type.indexOf("image/") === 0) { e.preventDefault(); e.stopPropagation(); takeFile(it.getAsFile()); return; }
+      }
+    };
+    document.addEventListener("paste", onPaste, true);
+    const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+    m.addEventListener("dragover", (e) => { stop(e); m.classList.add("dropping"); });
+    m.addEventListener("dragleave", () => m.classList.remove("dropping"));
+    m.addEventListener("drop", (e) => {
+      stop(e); m.classList.remove("dropping");
+      const dt = e.dataTransfer;
+      if (dt && dt.files && dt.files.length) return takeFile(dt.files[0]);
+      const u = dt && (dt.getData("text/uri-list") || dt.getData("text/plain"));
+      if (u && u.trim()) { link.value = u.trim(); runLink(); }
+    });
     back.addEventListener("click", (e) => { if (e.target === back) close(); });
     back.appendChild(m); document.body.appendChild(back);
     setTimeout(() => { try { link.focus(); } catch (e) {} }, 0);
