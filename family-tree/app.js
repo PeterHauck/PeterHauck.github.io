@@ -4033,9 +4033,12 @@
   // (nothing is saved until Save is pressed, same as choosing a file).
   async function stageFormPhoto(file) {
     if (!file) return;
-    // the whole picture is kept alongside the square, so Adjust later has the
-    // original to work from rather than the crop
     const full = await fileAsFullImage(file);
+    stageFormImage(full);
+  }
+  // the whole picture is kept alongside the square, so Adjust later has the
+  // original to work from rather than the crop
+  function stageFormImage(full) {
     if (!full) return;
     openPhotoAdjust(full, (photo, cut) => {
       pendingPhoto = photo; pendingPhotoFull = full; pendingFrame = cut;
@@ -4078,7 +4081,10 @@
   });
 
   /* photo upload with downscale */
-  $("#photoDrop").onclick = () => $("#photoInput").click();
+  $("#photoDrop").onclick = () => {
+    const p = personById($("#personId").value);
+    if (!openPictureAdd(p, (full) => stageFormImage(full))) $("#photoInput").click();
+  };
   makePhotoTarget($("#photoDrop"), (f) => stageFormPhoto(f), "picture");
   { const g = $("#galleryBox"); if (g) makePhotoTarget(g, (f) => takeGalleryPhoto(f), "gallery"); }
   $("#photoClear").onclick = () => { pendingPhoto = null; pendingPhotoFull = null; pendingFrame = null; photoDirty = true; updatePhotoPreview(); };
@@ -5701,15 +5707,21 @@
         frameOf(p, src.of));
     });
     if (gal.length) opt("🖼 Choose from their photos", () => { close(); openGalleryPick(p, onChange); });
+    const takeNew = (full) => {
+      if (!full) return;
+      openPhotoAdjust(full, async (sq, cut) => { const kept = await setTreePicture(p, sq, full, null, true, cut); after(kept ? "Picture updated — the old one is in their gallery" : "Picture updated"); });
+    };
     const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*,.heic,.heif,application/pdf,.pdf"; fileInput.style.display = "none";
     fileInput.onchange = async () => {
       const file = fileInput.files[0]; if (!file) return;
       close();
-      const full = await fileAsFullImage(file); if (!full) return;
-      openPhotoAdjust(full, async (sq, cut) => { const kept = await setTreePicture(p, sq, full, null, true, cut); after(kept ? "Picture updated — the old one is in their gallery" : "Picture updated"); });
+      takeNew(await fileAsFullImage(file));
     };
     m.appendChild(fileInput);
-    opt(has ? "📷 Upload a new picture" : "📷 Upload a picture", () => fileInput.click());
+    opt(has ? "📷 Add a new picture" : "📷 Add a picture", () => {
+      close();
+      if (!openPictureAdd(p, takeNew)) fileInput.click();
+    });
     if (has) opt("🗑 Remove this picture", () => {
       if (!confirm("Remove their tree picture? Any photos in their gallery stay.")) return;
       close(); pushUndo();
@@ -5870,6 +5882,78 @@
     });
     const close = () => { document.removeEventListener("paste", onPaste, true); back.remove(); };
     doneBtn.onclick = close;
+    back.addEventListener("click", (e) => { if (e.target === back) close(); });
+    back.appendChild(m); document.body.appendChild(back);
+    setTimeout(() => { try { link.focus(); } catch (e) {} }, 0);
+    return back;
+  }
+  /* ---- one chooser for a profile picture, whichever way it arrives ---------
+     A picture turns up as often from a link or the clipboard as from a file,
+     so asking for a profile picture opens the same sort of box the gallery's
+     "Add photos" does — a link, a file, a paste, a drop — instead of jumping
+     straight into a file window. Whatever it's given it hands back one
+     full-size picture, and the caller decides where that goes.             */
+  function openPictureAdd(who, onPicture) {
+    if (readonly || !isOwner()) return null;
+    if (document.querySelector(".modal-backdrop .picture-add")) return null;   // one at a time
+    const back = document.createElement("div"); back.className = "modal-backdrop";
+    const m = document.createElement("div"); m.className = "modal picture-add";
+    const h = document.createElement("h2"); h.textContent = "Profile picture"; m.appendChild(h);
+    const hint = document.createElement("div"); hint.className = "hint";
+    hint.textContent = "Paste a picture (⌘V) or drop one here, paste a link to one, or choose a file from this device."
+      + (who ? " You'll be able to position it next." : "");
+    m.appendChild(hint);
+    let closed = false;
+    const close = () => { if (closed) return; closed = true; document.removeEventListener("paste", onPaste, true); back.remove(); };
+    const hand = (full) => { if (!full) return; close(); onPicture(full); };
+    // a link
+    const row = document.createElement("div"); row.className = "pm-linkrow";
+    const link = document.createElement("input");
+    link.type = "text"; link.placeholder = "Paste a photo link — or the picture itself"; link.autocomplete = "off"; link.spellcheck = false;
+    const go = document.createElement("button"); go.type = "button"; go.className = "btn"; go.textContent = "Use";
+    const runLink = async () => {
+      const url = (link.value || "").trim();
+      if (!url) { toast("Paste a link first"); link.focus(); return; }
+      go.disabled = true;
+      const got = await fetchLinkImage(url);
+      go.disabled = false;
+      if (got.cancelled) return;
+      if (got.error) { toast(got.error + " — copy the picture itself and paste it here instead"); link.select(); return; }
+      hand(got.image);
+    };
+    go.onclick = runLink;
+    link.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); runLink(); } });
+    row.appendChild(link); row.appendChild(go); m.appendChild(row);
+    // a file
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = "image/*,.heic,.heif,application/pdf,.pdf"; inp.style.display = "none";
+    inp.onchange = async () => { const f = inp.files[0]; inp.value = ""; if (!f) return; const full = await fileAsFullImage(f); hand(full); };
+    m.appendChild(inp);
+    const btns = document.createElement("div"); btns.className = "btn-row";
+    const pick = document.createElement("button"); pick.type = "button"; pick.className = "btn"; pick.textContent = "📁 Choose a file…";
+    pick.onclick = () => inp.click();
+    const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "Cancel";
+    cancel.onclick = close;
+    btns.appendChild(pick); btns.appendChild(cancel); m.appendChild(btns);
+    // …or pasted, or dropped on it
+    const takeFile = async (f) => { const full = await fileAsFullImage(f); hand(full); };
+    const onPaste = (e) => {
+      const items = (e.clipboardData && e.clipboardData.items) || [];
+      for (const it of items) {
+        if (it.type && it.type.indexOf("image/") === 0) { e.preventDefault(); e.stopPropagation(); takeFile(it.getAsFile()); return; }
+      }
+    };
+    document.addEventListener("paste", onPaste, true);
+    const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+    m.addEventListener("dragover", (e) => { stop(e); m.classList.add("dropping"); });
+    m.addEventListener("dragleave", () => m.classList.remove("dropping"));
+    m.addEventListener("drop", (e) => {
+      stop(e); m.classList.remove("dropping");
+      const dt = e.dataTransfer;
+      if (dt && dt.files && dt.files.length) return takeFile(dt.files[0]);
+      const u = dt && (dt.getData("text/uri-list") || dt.getData("text/plain"));
+      if (u && u.trim()) { link.value = u.trim(); runLink(); }
+    });
     back.addEventListener("click", (e) => { if (e.target === back) close(); });
     back.appendChild(m); document.body.appendChild(back);
     setTimeout(() => { try { link.focus(); } catch (e) {} }, 0);

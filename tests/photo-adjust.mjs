@@ -31,6 +31,21 @@ const openForm=async()=>{ await pg.evaluate(()=>{const b=document.getElementById
   await pg.waitForTimeout(600); };
 await openForm();
 ok('the edit form is open', await pg.evaluate(()=>!document.getElementById('personForm').hidden));
+// the photo box now offers a choice rather than a file window
+await pg.evaluate(()=>document.getElementById('photoDrop').click());
+await pg.waitForTimeout(500);
+const chooser=await pg.evaluate(()=>{const m=document.querySelector('.modal-backdrop .picture-add');
+  if(!m) return null;
+  return {link:!!m.querySelector('.pm-linkrow input'),
+          file:[...m.querySelectorAll('button')].some(b=>/choose a file/i.test(b.textContent)),
+          hint:(m.querySelector('.hint')||{}).textContent||''};});
+ok('clicking the photo box offers a choice, not just a file window', !!chooser, JSON.stringify(chooser));
+ok('…with a box for a link', !!chooser && chooser.link, JSON.stringify(chooser));
+ok('…and a button for a file', !!chooser && chooser.file, JSON.stringify(chooser));
+ok('…and it says you can paste or drop one too', !!chooser && /paste/i.test(chooser.hint), JSON.stringify(chooser&&chooser.hint));
+await pg.evaluate(()=>{const m=document.querySelector('.modal-backdrop .picture-add');
+  [...m.querySelectorAll('button')].find(b=>/cancel/i.test(b.textContent)).click();});
+await pg.waitForTimeout(300);
 // hand it a picture that is plainly two halves: red on the left, blue on the right
 await pg.evaluate(async ()=>{
   const c=document.createElement('canvas'); c.width=800; c.height=400; const g=c.getContext('2d');
