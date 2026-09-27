@@ -5161,19 +5161,14 @@
       const doc = { id: uid(), title, docType, url, capturedAt: todayStr(), kind, content };
       if (scrapedText) doc.text = scrapedText;   // durable, searchable copy of a photo/PDF's text
 
-      // Make the node picture from the image BEFORE we externalise the file (we
-      // need the pixels here; the stored record is downscaled separately).
-      // Obituaries only — a scan of an article/award shouldn't become someone's face.
-      let setPic = false;
-      // Only for someone with NO picture at all — an externalised picture is
-      // still a picture (p.photoRef), and missing that is how obituaries came to
-      // overwrite faces. And only from an actual photo: page one of a PDF
-      // obituary is a page of text, not a portrait. The "Use photo from
-      // obituary" button is still there for when it genuinely is one.
-      if (docType === "obituary" && !person.photo && !person.photoRef) {
-        const picSrc = kind === "image" ? content : fetchedImage;
-        if (picSrc) { const photo = await imageDataToPhoto(picSrc); if (photo) { person.photo = photo; setPic = true; scheduleSweep(); } }
-      }
+      /* An uploaded obituary never becomes somebody's face. It used to, for
+         anyone who had no picture yet, on the hopeful assumption that an
+         obituary image is a portrait — but a newspaper obituary is usually a
+         column of type, and what you got was a square of unreadable newsprint
+         where a person should be. When an obituary genuinely does carry a
+         portrait, "Use photo from obituary" is still there and still works;
+         that's a decision to make on the day, looking at it, not a guess to
+         make on upload.                                                     */
 
       // Store the PDF/photo as its own repo file so the tree stays small and
       // scales to any number of uploads. Images are downscaled first. If the repo
@@ -5221,7 +5216,6 @@
       const what = docType === "record" ? "Record" : "Obituary";
       const extras = [];
       if (scrapedText) extras.push("text scraped");
-      if (setPic) extras.push("set as their picture");
       if (gotDates) extras.push("birth & death dates filled in");
       toast(what + " saved" + (extras.length ? " — " + extras.join(", ") : ""));
       if (triedDates && !gotDates) toast("Couldn’t read exact dates from this one — you can set them in the profile");
@@ -5238,20 +5232,6 @@
       img.src = dataUrl;
     });
   }
-  // Retroactively give people a picture from any image obituary already attached
-  // (runs once per browser; new uploads set the picture at attach time).
-  async function migratePhotosFromObits() {
-    let changed = false;
-    for (const p of state.persons) {
-      if (p.photo || p.photoRef || !Array.isArray(p.docs)) continue;
-      const imgDoc = p.docs.find((d) => isObitDoc(d) && d.kind === "image" && (docSrc(d) || d.ref));   // a photo, never a PDF page
-      if (!imgDoc) continue;
-      const photo = await imageDataToPhoto(await docSrcAsync(imgDoc));
-      if (photo) { p.photo = photo; changed = true; }
-    }
-    return changed;
-  }
-
   // Find a picture for one person from their obituary: use an uploaded photo
   // obituary if there is one, otherwise fetch the portrait from a linked
   // obituary page. Used by the "Use photo from obituary" button, so it works
@@ -8021,11 +8001,6 @@
     if (!readonly) setTimeout(() => sweepEmbeddedMedia(true), 8000);   // storage diet: externalise anything still embedded
     if (!readonly) setTimeout(() => healMissingMedia(), 12000);        // re-upload any photo the cloud lost but this device still has
     if (!readonly) { setCloudStatus(CLOUD_ON() ? "on" : "off"); setBackupStatus(BACKUP_ON() ? "on" : "off"); }
-    // One-time: turn any already-attached obituary photos into node pictures.
-    if (!readonly && !state.photoMigrated) {
-      state.photoMigrated = true; save();
-      migratePhotosFromObits().then((changed) => { if (changed) { save(); render(); } });
-    }
     // Open centred on the chosen people (e.g. Peter & Alicen) if the tree names
     // any that are visible; otherwise fit the whole tree to the screen.
     const focus = (state.focus || []).filter((id) => personById(id) && !isHidden(id));
