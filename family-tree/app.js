@@ -4113,7 +4113,7 @@
     openPhotoAdjust(full, (photo, cut) => {
       pendingPhoto = photo; pendingPhotoFull = full; pendingFrame = cut;
       photoDirty = true; photoReplaced = true; updatePhotoPreview();
-    });
+    }, null, formSex);
   }
   // …and straight onto the person when their profile (not the form) is showing.
   async function takeProfilePhoto(file) {
@@ -4124,7 +4124,7 @@
       const kept = await setTreePicture(p, sq, full, null, true, cut);
       renderPersonHead(personById(p.id) || p); renderGalleryPanel(personById(p.id) || p);
       toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated");
-    });
+    }, null, p.sex);
   }
   async function takeGalleryPhoto(file) {
     const p = personById($("#personId").value);
@@ -4182,7 +4182,7 @@
     }
     openPhotoAdjust(src || pendingPhoto, (photo, cut) => {
       pendingPhoto = photo; pendingFrame = cut; photoDirty = true; updatePhotoPreview();
-    }, frame);
+    }, frame, formSex);
   };
   // Load a photo from a pasted image link (or any page with a portrait) into the
   // form's staged photo. The fetch runs server-side (Vercel), so it works on
@@ -4202,7 +4202,7 @@
         openPhotoAdjust(data.image, (photo, cut) => {
           pendingPhoto = photo; pendingPhotoFull = data.image; pendingFrame = cut;
           photoDirty = true; photoReplaced = true; updatePhotoPreview(); toast("Photo loaded — click Save to keep it");
-        });
+        }, null, formSex);
         return;
       }
       toast("No image found at that link");
@@ -4234,7 +4234,29 @@
      than to the copy it was first framed from. onDone gets the square AND
      the frame it was cut at, so the next Adjust can start where this left
      off instead of jumping back to the middle.                             */
-  function openPhotoAdjust(src, onDone, frame) {
+  /* The outline you position a photo inside is the shape that person will be
+     on the tree — a circle for a woman, a rounded square for a man, a diamond
+     where it isn't known — so what you frame is what you get. Drawn as one
+     small SVG: the surround dimmed through a mask, and the same shape again
+     as a bright outline on top.                                             */
+  // Drawn a hair inside the edge, so a man's square — which fills the whole
+  // frame — is a visible outline rather than a line hidden under the border.
+  function guideShape(sex) {
+    if (sex === "female") return '<circle cx="50" cy="50" r="49"/>';
+    if (sex === "male") return '<rect x="1" y="1" width="98" height="98" rx="7.4"/>';
+    return '<polygon points="50,1 99,50 50,99 1,50"/>';
+  }
+  function guideSvg(sex) {
+    const shape = guideShape(sex);
+    const line = (w, color) => shape.replace("/>", ' fill="none" stroke="' + color + '" stroke-width="' + w + '" vector-effect="non-scaling-stroke"/>');
+    return `<svg class="pa-guide" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      <defs><mask id="paGuideMask"><rect width="100" height="100" fill="#fff"/>${shape.replace("/>", ' fill="#000"/>')}</mask></defs>
+      <rect width="100" height="100" fill="rgba(0,0,0,.42)" mask="url(#paGuideMask)"/>
+      ${line(4, "rgba(0,0,0,.45)")}${line(2, "rgba(255,255,255,.95)")}
+    </svg>`;
+  }
+  const guideWord = (sex) => (sex === "female" ? "circle" : sex === "male" ? "square" : "diamond");
+  function openPhotoAdjust(src, onDone, frame, sex) {
     if (photoAdjusting) return;
     if (!src) return;
     photoAdjusting = true;
@@ -4255,8 +4277,8 @@
       const back = document.createElement("div");
       back.className = "modal-backdrop";
       back.innerHTML = `<div class="modal photo-adjust"><h2>Adjust photo</h2>
-        <div class="hint">Drag to move, and pinch or use the slider to zoom. The circle shows what fills a round profile.</div>
-        <div class="pa-stage" id="paStage"><canvas id="paCanvas" width="${V}" height="${V}"></canvas><div class="pa-guide"></div></div>
+        <div class="hint">Drag to move, and pinch or use the slider to zoom. The ${guideWord(sex)} is how they'll show on the tree.</div>
+        <div class="pa-stage" id="paStage"><canvas id="paCanvas" width="${V}" height="${V}"></canvas>${guideSvg(sex)}</div>
         <div class="pa-zoom"><span>−</span><input type="range" id="paZoom" min="1" max="4" step="0.01" value="1"><span>+</span></div>
         <div class="btn-row"><button class="btn" data-cancel>Cancel</button><button class="btn primary" id="paOk">Use photo</button></div></div>`;
       document.body.appendChild(back);
@@ -5611,7 +5633,7 @@
           openPhotoAdjust(full, async (sq, cut) => {
             const kept = await setTreePicture(p, sq, g.ref ? null : full, g.ref || null, true, cut);
             toast(kept ? "Tree picture updated — the old one is in their gallery" : "Tree picture updated"); if (onChange) onChange();
-          });
+          }, null, p.sex);
         };
         const del = document.createElement("button"); del.type = "button"; del.className = "gal-act gal-del"; del.textContent = "✕";
         del.title = "Remove this photo";
@@ -5774,12 +5796,12 @@
       const src = await photoSourceFor(p);
       if (!src) return toast("That picture is still loading — try again in a moment");
       openPhotoAdjust(src.url, async (sq, cut) => { await setTreePicture(p, sq, null, p.photoSrcRef || null, false, cut); after("Picture repositioned"); },
-        frameOf(p, src.of));
+        frameOf(p, src.of), p.sex);
     });
     if (gal.length) opt("🖼 Choose from their photos", () => { close(); openGalleryPick(p, onChange); });
     const takeNew = (full) => {
       if (!full) return;
-      openPhotoAdjust(full, async (sq, cut) => { const kept = await setTreePicture(p, sq, full, null, true, cut); after(kept ? "Picture updated — the old one is in their gallery" : "Picture updated"); });
+      openPhotoAdjust(full, async (sq, cut) => { const kept = await setTreePicture(p, sq, full, null, true, cut); after(kept ? "Picture updated — the old one is in their gallery" : "Picture updated"); }, null, p.sex);
     };
     const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*,.heic,.heif,application/pdf,.pdf"; fileInput.style.display = "none";
     fileInput.onchange = async () => {
@@ -5814,7 +5836,7 @@
         const kept = await setTreePicture(p, sq, full, null, true, cut);
         toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated");
         if (onChange) onChange();
-      });
+      }, null, p.sex);
     };
     const onPaste = (e) => {
       const items = (e.clipboardData && e.clipboardData.items) || [];
@@ -5879,7 +5901,7 @@
       const kept = await setTreePicture(p, sq, got.image, null, true, cut);
       toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated");
       if (onChange) onChange();
-    });
+    }, null, p.sex);
   }
   // "Add photos" opens this rather than jumping straight to a file box: a
   // picture arrives as often from a link or the clipboard as from a file, and
@@ -6051,7 +6073,7 @@
         openPhotoAdjust(full, async (sq, cut) => {
           const kept = await setTreePicture(p, sq, g.ref ? null : full, g.ref || null, true, cut);
           toast(kept ? "Picture updated — the old one is in their gallery" : "Picture updated"); if (onChange) onChange();
-        });
+        }, null, p.sex);
       };
       grid.appendChild(cell);
     });
