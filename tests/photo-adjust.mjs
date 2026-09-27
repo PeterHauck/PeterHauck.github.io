@@ -14,8 +14,9 @@ const server=http.createServer((q,r)=>{const u=new URL(q.url,'http://x');
   let f=u.pathname;if(f==='/')f='/index.html';const fp=path.join(ROOT,f.split('?')[0]);if(!fs.existsSync(fp)){r.writeHead(404);return r.end();}
   r.writeHead(200,{'content-type':types[path.extname(fp)]||'text/plain'});r.end(fs.readFileSync(fp));});
 await new Promise(x=>server.listen(0,x)); const base=`http://127.0.0.1:${server.address().port}/`;
-const persons=[{id:'a',name:'Ada Test',first:'Ada',last:'Test',middle:'',nickname:'',maiden:'',suffix:'',sex:'female',birth:1900,docs:[]}];
-const seed={title:'T',version:9,photoMigrated:true,namesSplit:true,persons,unions:[],links:[],manual:{a:{x:0,y:0}},hidden:{},manualHidden:{},focus:[]};
+const kin=(id,first,sex)=>({id,name:first+' Test',first,last:'Test',middle:'',nickname:'',maiden:'',suffix:'',sex,birth:1900,docs:[]});
+const persons=[kin('a','Ada','female'),kin('b','Bert','male'),kin('c','Chris','unknown')];
+const seed={title:'T',version:9,photoMigrated:true,namesSplit:true,persons,unions:[],links:[],manual:{a:{x:0,y:0},b:{x:220,y:0},c:{x:440,y:0}},hidden:{},manualHidden:{},focus:[]};
 const browser=await chromium.launch(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{});
 const pg=await browser.newPage({viewport:{width:1280,height:900}});
 const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
@@ -105,5 +106,38 @@ await pg.waitForTimeout(900);
 const after=await pg.evaluate(()=>{const st=JSON.parse(localStorage.getItem('familyTree.v1'));
   const p=st.persons.find(x=>x.id==='a'); return p.photoFrame||null;});
 ok('the new framing is remembered too', !!after && after.z<1.5, JSON.stringify(after));
+// --- the outline you frame inside is the shape they are on the tree
+const guideFor=async(id)=>{
+  await pg.evaluate(()=>{const b=document.getElementById('personCancel'); if(b&&!b.hidden) b.click();});
+  await pg.waitForTimeout(300);
+  await pg.click('g.person[data-id="'+id+'"]'); await pg.waitForTimeout(400);
+  await pg.evaluate(()=>document.getElementById('personEditBtn').click()); await pg.waitForTimeout(400);
+  await pg.evaluate(()=>document.getElementById('photoDrop').click());
+  await pg.waitForTimeout(400);
+  await pg.evaluate(async ()=>{
+    const c=document.createElement('canvas'); c.width=400; c.height=400; const g=c.getContext('2d');
+    g.fillStyle='#888'; g.fillRect(0,0,400,400);
+    const blob=await new Promise(r=>c.toBlob(r,'image/png'));
+    const dt=new DataTransfer(); dt.items.add(new File([blob],'t.png',{type:'image/png'}));
+    const m=document.querySelector('.modal-backdrop .picture-add');
+    const inp=m.querySelector('input[type=file]'); inp.files=dt.files;
+    inp.dispatchEvent(new Event('change',{bubbles:true}));});
+  await pg.waitForSelector('.photo-adjust',{timeout:8000}); await pg.waitForTimeout(300);
+  const out=await pg.evaluate(()=>{const g=document.querySelector('.pa-guide');
+    const hint=document.querySelector('.photo-adjust .hint').textContent;
+    return {circle:!!g.querySelector('circle'), rect:!!g.querySelector('rect[rx]'),
+            diamond:!!g.querySelector('polygon'), hint};});
+  await pg.evaluate(()=>{const b=document.querySelector('.photo-adjust [data-cancel]'); if(b) b.click();});
+  await pg.waitForTimeout(300);
+  return out;
+};
+const gAda=await guideFor('a');
+ok('a woman is framed inside a circle', gAda.circle && !gAda.rect && !gAda.diamond, JSON.stringify(gAda));
+ok('…and it says so', /circle/.test(gAda.hint), gAda.hint);
+const gBert=await guideFor('b');
+ok('a man is framed inside a rounded square', gBert.rect && !gBert.circle && !gBert.diamond, JSON.stringify(gBert));
+ok('…and it says so', /square/.test(gBert.hint), gBert.hint);
+const gChris=await guideFor('c');
+ok('somebody of unknown sex is framed inside a diamond', gChris.diamond && !gChris.circle, JSON.stringify(gChris));
 ok('no page errors', errs.length===0, JSON.stringify(errs.slice(0,3)));
 await browser.close(); server.close(); console.log('DONE'); process.exit(0);

@@ -490,16 +490,9 @@ body.in-hidden-scope #hiddenChip { display: none; }
 }
 .pa-stage:active { cursor: grabbing; }
 .pa-stage canvas { display: block; width: 100%; height: 100%; }
-/* circular "safe area" guide so the face gets centred */
-.pa-stage .pa-guide {
-  position: absolute; inset: 0; pointer-events: none;
-  box-shadow: 0 0 0 9999px rgba(0,0,0,.28) inset;
-  border-radius: 50%;
-}
-.pa-stage .pa-guide::after {
-  content: ""; position: absolute; inset: 0; border-radius: 50%;
-  box-shadow: 0 0 0 2px rgba(255,255,255,.7);
-}
+/* "safe area" guide, in the shape this person is on the tree: the outline is
+   drawn in the SVG itself so a circle, a square and a diamond all work */
+.pa-stage .pa-guide { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .pa-zoom { display: flex; align-items: center; gap: 10px; margin: 0 0 4px; }
 .pa-zoom input[type=range] { flex: 1; }
 .pa-zoom span { font-size: 18px; color: var(--muted); }
