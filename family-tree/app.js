@@ -206,9 +206,20 @@
   // by the next sync. Every deliberate removal leaves a mark with the time, and
   // a merge honours marks from either side.
   const tombs = () => state.removed || (state.removed = {});
-  const tombKey = { person: (id) => "p:" + id, union: (id) => "u:" + id, link: (u, c) => "l:" + u + ">" + c };
+  /* Deletions are remembered, not just done: the copy on the site still has
+     the thing you deleted, and without a note saying "this was deleted on
+     purpose" the next sync helpfully hands it back. That's true of a photo or
+     a record just as much as of a person — deleting the same photo three
+     times and watching it return each time is what happens otherwise. A photo
+     is noted by what identifies it in the store; a picture, by whose it was. */
+  const picKey = (g) => (g && (g.ref || String(g.data || "").slice(0, 64))) || "";
+  const tombKey = { person: (id) => "p:" + id, union: (id) => "u:" + id, link: (u, c) => "l:" + u + ">" + c,
+                    pic: (pid, k) => "g:" + pid + ">" + k, doc: (id) => "d:" + id, face: (pid) => "f:" + pid };
   const isRemoved = (key, map) => !!(map || state.removed || {})[key];
   function markRemoved(key) { tombs()[key] = Date.now(); }
+  // …and putting something back forgets that it was ever removed, so adding a
+  // picture again after deleting one isn't undone by this device's own note.
+  function unmarkRemoved(key) { const t = state.removed; if (t) delete t[key]; }
   function deletePerson(pid) {
     markRemoved(tombKey.person(pid));
     state.persons = state.persons.filter((p) => p.id !== pid);
@@ -3500,7 +3511,7 @@
         <button data-view>View</button><button class="rm" data-rm>✕</button>`;
       li.querySelector("[data-view]").onclick = () => openDocViewer(doc, p.id);
       li.querySelector("[data-rm]").onclick = () => {
-        if (confirm("Remove this record?")) { p.docs = docs.filter((x) => x.id !== doc.id); save(); render(); renderDocsForm(p); }
+        if (confirm("Remove this record?")) { markRemoved(tombKey.doc(doc.id)); p.docs = docs.filter((x) => x.id !== doc.id); save(); render(); renderDocsForm(p); }
       };
       list.appendChild(li);
     });
@@ -3953,6 +3964,7 @@
         // a different picture taking over: the old one joins their gallery
         if (pendingPhoto && photoReplaced) archiveTreePicture(p);
         if (pendingPhoto) {
+          unmarkRemoved(tombKey.face(p.id));
           p.photo = pendingPhoto; delete p.photoRef; scheduleSweep();
           delete p.photoFrame;
           if (pendingPhotoFull) {
@@ -3972,6 +3984,7 @@
             if (f) p.photoFrame = f;
           }
         } else {
+          markRemoved(tombKey.face(p.id));
           delete p.photo; delete p.photoRef; delete p.photoSrcRef; delete p.photoFrame;
         }
       }
@@ -4741,9 +4754,13 @@
         const vr = await fetch("api/store?action=getMedia&id=" + encodeURIComponent(id) + "&ts=" + Date.now());
         if (!vr.ok) throw new Error("verify fetch failed");
         if ((await mediaDecrypt((await vr.json()).payload)) !== dataUrl) throw new Error("verify mismatch");
-        if (j.kind === "photo") { j.p.photoRef = id; delete j.p.photo; }
-        else if (j.kind === "gal") { j.g.ref = id; delete j.g.data; }
-        else { j.d.ref = id; delete j.d.content; delete j.d.path; }
+        // Uploading takes a moment, and in that moment the picture may have
+        // been deleted. Writing the new reference back regardless is how a
+        // deleted photo reappeared: only write it back if what was uploaded is
+        // still what's there.
+        if (j.kind === "photo") { if (j.p.photo !== dataUrl) continue; j.p.photoRef = id; delete j.p.photo; }
+        else if (j.kind === "gal") { if (j.g.data !== dataUrl) continue; j.g.ref = id; delete j.g.data; }
+        else { if (j.d.content && j.d.content !== dataUrl) continue; j.d.ref = id; delete j.d.content; delete j.d.path; }
         moved++;
         if (moved % 5 === 0) { save(); if (firstRun) toast("Slimming storage… " + moved + "/" + jobs.length); }
       } catch (e) { failed++; }
@@ -5685,6 +5702,7 @@
       if (!Array.isArray(p.gallery)) p.gallery = [];
       try { p.gallery.push({ ref: await mediaUpload(full) }); }
       catch (e) { p.gallery.push({ data: full }); }   // offline: keep it here for now
+      rememberGalleryAdd(p, p.gallery[p.gallery.length - 1]);
       added++;
     }
     if (added) { save(); try { cloudSaveTree(false); } catch (e) {} scheduleSweep(); }
@@ -5692,6 +5710,7 @@
   }
   // A picture already in hand (fetched from a link, say) straight into the
   // gallery — the same route as a picked file, minus the reading.
+  const rememberGalleryAdd = (p, g) => { unmarkRemoved(tombKey.pic(p.id, picKey(g))); };
   async function galleryAddImage(p, dataUrl) {
     if (!dataUrl) return 0;
     const full = await new Promise((res) => { const im = new Image(); im.onload = () => { try { res(downscale(im, 1400)); } catch (e) { res(dataUrl); } }; im.onerror = () => res(null); im.src = dataUrl; });
@@ -5699,6 +5718,7 @@
     if (!Array.isArray(p.gallery)) p.gallery = [];
     try { p.gallery.push({ ref: await mediaUpload(full) }); }
     catch (e) { p.gallery.push({ data: full }); }
+    rememberGalleryAdd(p, p.gallery[p.gallery.length - 1]);
     save(); try { cloudSaveTree(false); } catch (e) {} scheduleSweep();
     return 1;
   }
@@ -5765,6 +5785,8 @@
           ev.stopPropagation();
           if (!confirm("Remove this photo?")) return;
           pushUndo();
+          markRemoved(tombKey.pic(p.id, picKey(g)));
+          if (g.srcRef) markRemoved(tombKey.pic(p.id, g.srcRef));
           p.gallery = galleryOf(p).filter((x) => x !== g);
           save(); try { cloudSaveTree(false); } catch (e) {}
           toast("Photo removed"); if (onChange) onChange();
@@ -5871,6 +5893,7 @@
     if (mine && gal.some((g) => g && (g.data || (g.ref && mediaMem.get(g.ref))) === mine)) return false;
     if (!Array.isArray(p.gallery)) p.gallery = [];
     p.gallery.push(ref ? { ref } : { data });
+    rememberGalleryAdd(p, p.gallery[p.gallery.length - 1]);   // deliberately back: forget it was ever removed
     return true;
   }
   // keepPrevious: true when this is a DIFFERENT picture taking over, false when
@@ -5878,6 +5901,7 @@
   // near-identical crops).
   async function setTreePicture(p, square, full, fullRef, keepPrevious, frame) {
     pushUndo();
+    unmarkRemoved(tombKey.face(p.id));
     const kept = keepPrevious ? archiveTreePicture(p) : false;
     try { p.photoRef = await mediaUpload(square); delete p.photo; }
     catch (e) { p.photo = square; delete p.photoRef; }   // offline: the sweep externalises it later
@@ -5954,7 +5978,12 @@
     if (has) opt("🗑 Remove this picture", () => {
       if (!confirm("Remove their tree picture? Any photos in their gallery stay.")) return;
       close(); pushUndo();
-      delete p.photo; delete p.photoRef; delete p.photoSrcRef; delete p.photoMobile;
+      // A sync swaps every person for a fresh object, so the one this menu was
+      // built from can be a ghost by the time you click: deleting from it
+      // changes nothing and the picture appears to survive. Take the live one.
+      const q = personById(p.id) || p;
+      markRemoved(tombKey.face(q.id));
+      delete q.photo; delete q.photoRef; delete q.photoSrcRef; delete q.photoMobile; delete q.photoFrame;
       save(); try { cloudSaveTree(false); } catch (e) {}
       render(); after("Picture removed");
     }, "danger");
@@ -6706,7 +6735,12 @@
     localData = obj;
     const json = JSON.stringify(obj);
     idbSet(IDB.key, obj).catch((e) => console.warn("idb save failed", e));   // primary (roomy)
-    try { localStorage.setItem(STORE_KEY, json); } catch (e) {}              // best-effort mirror (small trees)
+    // Best-effort mirror for small trees. Once the tree outgrows the quota this
+    // throws, and a mirror left behind is worse than none: it's an old copy
+    // that would be loaded as gospel if IndexedDB were ever cleared. So a
+    // mirror that can't be kept up to date is thrown away.
+    try { localStorage.setItem(STORE_KEY, json); }
+    catch (e) { try { localStorage.removeItem(STORE_KEY); } catch (e2) {} }
     try { localStorage.setItem("familyTree.cloudDirty", "1"); localStorage.setItem("familyTree.dirtyAt", String(Date.now())); } catch (e) {}  // local has edits not yet in the cloud
     scheduleCloudSave();   // durable copy to your site (Vercel Blob)
     scheduleBackup();      // optional legacy GitHub backup (only if turned on)
@@ -7088,7 +7122,7 @@
       const sum = mine ? mergeTreeFrom(mine) : null;
       try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}
       try { localStorage.setItem(STORE_KEY, JSON.stringify(localData)); } catch (e) {}
-      autoLayout(); render();
+      autoLayout(); render(); refreshOpenProfile();
       if (sum && sum.total) {
         // this device had something the site didn't — send the reconciled copy up
         save();
@@ -7145,9 +7179,18 @@
       try { localStorage.setItem("familyTree.cloudSavedAt", String(cp.savedAt || info.savedAt)); } catch (e) {}
       setBaseVersion(cp.savedAt || info.savedAt);
       try { localData = exportObject(); await idbSet(IDB.key, localData); } catch (e) {}   // persist so it survives the next visit
-      autoLayout(); render();
+      autoLayout(); render(); refreshOpenProfile();
       toast("Updated to the latest");
     } catch (e) {} finally { refreshingBg = false; }
+  }
+  /* A sync redraws the tree, but the profile open beside it was built from the
+     old copy and just sits there — so a photo that has gone, or arrived, on
+     another device doesn't show until you click away and back. Redraw it. */
+  function refreshOpenProfile() {
+    if (!selectedId) return;
+    const q = personById(selectedId);
+    if (!q) return;
+    try { renderPersonHead(q); renderGalleryPanel(q); } catch (e) {}
   }
   // The live encrypted tree from the cloud (Vercel Blob) — where edits are saved —
   // with its server write time. Null if the cloud isn't set up/reachable.
@@ -7260,21 +7303,20 @@
     let n = 0;
     state.persons.forEach((p) => {
       const o = by[p.id]; if (!o) return;
-      if (!p.photo && !p.photoRef && (o.photo || o.photoRef)) {
+      if (!p.photo && !p.photoRef && (o.photo || o.photoRef) && !isRemoved(tombKey.face(p.id))) {
         if (o.photoRef) p.photoRef = o.photoRef; else p.photo = o.photo;
         if (o.photoSrcRef) p.photoSrcRef = o.photoSrcRef;
         if (o.photoMobile) p.photoMobile = true;
         n++;
       }
       if (Array.isArray(o.gallery) && o.gallery.length) {
-        const key = (g) => (g && (g.ref || (g.data || "").slice(0, 64))) || "";
-        const have = new Set((p.gallery || []).map(key));
-        const extra = o.gallery.filter((g) => g && !have.has(key(g)));
+        const have = new Set((p.gallery || []).map(picKey));
+        const extra = o.gallery.filter((g) => g && !have.has(picKey(g)) && !isRemoved(tombKey.pic(p.id, picKey(g))));
         if (extra.length) { p.gallery = (p.gallery || []).concat(extra); n += extra.length; }
       }
       if (Array.isArray(o.docs) && o.docs.length) {
         const have = new Set((p.docs || []).map((d) => d && d.id));
-        const extra = o.docs.filter((d) => d && !have.has(d.id));
+        const extra = o.docs.filter((d) => d && !have.has(d.id) && !isRemoved(tombKey.doc(d.id)));
         if (extra.length) { p.docs = (p.docs || []).concat(extra); n += extra.length; }
       }
     });
@@ -7305,6 +7347,28 @@
         state.links = state.links.filter((l) => !(l.union === uu && l.child === cc));
         if (state.links.length !== before) n++;
       }
+      else if (k.startsWith("g:")) {
+        const i = k.indexOf(">"); const pid = k.slice(2, i), gk = k.slice(i + 1);
+        const q = personById(pid);
+        if (q && Array.isArray(q.gallery)) {
+          const before = q.gallery.length;
+          q.gallery = q.gallery.filter((g) => picKey(g) !== gk);
+          if (q.gallery.length !== before) n++;
+        }
+      }
+      else if (k.startsWith("d:")) {
+        const id = k.slice(2);
+        state.persons.forEach((q) => {
+          if (!Array.isArray(q.docs)) return;
+          const before = q.docs.length;
+          q.docs = q.docs.filter((d) => !d || d.id !== id);
+          if (q.docs.length !== before) n++;
+        });
+      }
+      else if (k.startsWith("f:")) {
+        const q = personById(k.slice(2));
+        if (q && (q.photo || q.photoRef)) { delete q.photo; delete q.photoRef; delete q.photoSrcRef; delete q.photoFrame; n++; }
+      }
     });
     return n;
   }
@@ -7312,8 +7376,12 @@
   function adoptTree(obj) {
     const keep = Object.assign({}, state.removed || {});
     loadObject(obj);
-    state.removed = Object.assign({}, state.removed || {}, keep);
-    return applyRemovals(keep);
+    // Both sets of deletions apply: the ones this device made, and the ones
+    // that came with the copy — a device that pulls a tree carrying "this was
+    // deleted" should act on it, not just file it away.
+    const all = Object.assign({}, state.removed || {}, keep);
+    state.removed = all;
+    return applyRemovals(all);
   }
   function mergeTreeFrom(other) {
     if (!other || !Array.isArray(other.persons)) return null;
@@ -7332,8 +7400,14 @@
       if (!p) { state.persons.push(JSON.parse(JSON.stringify(o))); mine[o.id] = o; sum.people++; return; }
       // shared person: fill in anything we're missing, never overwrite
       const blank = (v) => v === undefined || v === null || v === "";
+      // …except a picture that was deliberately taken off. "Fill in what's
+      // missing" would otherwise put it straight back from whichever copy
+      // still has it, which is how a removed picture kept returning.
+      const faceGone = !!gone[tombKey.face(o.id)];
+      const FACE = ["photo", "photoRef", "photoSrcRef", "photoMobile", "photoFrame"];
       Object.keys(o).forEach((k) => {
         if (k === "id" || k === "gallery" || k === "docs") return;
+        if (faceGone && FACE.indexOf(k) >= 0) return;
         if (blank(p[k]) && !blank(o[k])) { p[k] = o[k]; sum.fields++; }
       });
     });
