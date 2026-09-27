@@ -4339,6 +4339,119 @@
     probe.src = src;
   }
 
+  /* ---- trimming a photo ----------------------------------------------------
+     The profile picture's editor crops to a fixed shape, because the tree
+     draws a fixed shape. A photo in somebody's gallery has no such rule: a
+     group photo you want one person out of, or a scan with an inch of table
+     round it, needs a rectangle you can drag to any size. So this is a
+     separate thing — the whole picture on screen, a box over it, and corners
+     to pull. The box comes back as fractions of the picture, so the same trim
+     means the same thing if it's ever re-cropped from the original.        */
+  function openPhotoCrop(src, onDone, frame) {
+    if (photoAdjusting) return;
+    if (!src) return;
+    photoAdjusting = true;
+    const probe = new Image();
+    probe.onerror = () => { photoAdjusting = false; toast("Couldn’t read that image."); };
+    probe.onload = () => {
+      const natW = probe.naturalWidth, natH = probe.naturalHeight;
+      const maxW = Math.max(220, Math.min(560, window.innerWidth - 90));
+      const maxH = Math.max(200, Math.min(440, window.innerHeight - 280));
+      const k = Math.min(maxW / natW, maxH / natH);
+      const w = Math.round(natW * k), h = Math.round(natH * k);
+      const back = document.createElement("div");
+      back.className = "modal-backdrop";
+      back.innerHTML = `<div class="modal photo-crop"><h2>Trim photo</h2>
+        <div class="hint">Drag the box, or pull a corner. What's inside it is what's kept.</div>
+        <div class="pc-stage" id="pcStage" style="width:${w}px;height:${h}px">
+          <img id="pcImg" alt="" draggable="false" />
+          <div class="pc-rect" id="pcRect">
+            <i data-h="nw"></i><i data-h="ne"></i><i data-h="se"></i><i data-h="sw"></i>
+          </div>
+        </div>
+        <div class="btn-row"><button class="btn" data-cancel>Cancel</button>
+          <button class="btn" id="pcAll">Whole photo</button>
+          <button class="btn primary" id="pcOk">Trim</button></div></div>`;
+      document.body.appendChild(back);
+      const close = () => { photoAdjusting = false; back.remove(); };
+      back.querySelector("[data-cancel]").onclick = close;
+      back.addEventListener("click", (e) => { if (e.target === back) close(); });
+      back.querySelector("#pcImg").src = src;
+      const stage = back.querySelector("#pcStage"), box = back.querySelector("#pcRect");
+      // The dialog may be narrower than the room we asked for, so the picture
+      // is sized from the width the stage actually got — otherwise it's drawn
+      // squashed and the box you drag doesn't mean what it looks like.
+      const fit = () => {
+        const wide = Math.min(stage.getBoundingClientRect().width || w, w);
+        stage.style.width = wide + "px";
+        stage.style.height = Math.round(wide * natH / natW) + "px";
+        return { w: wide, h: Math.round(wide * natH / natW) };
+      };
+      let size = fit();
+      const MIN = 24;
+      let r = { x: 0.08, y: 0.08, w: 0.84, h: 0.84 };
+      if (frame && frame.w > 0 && frame.h > 0) r = { x: frame.x, y: frame.y, w: frame.w, h: frame.h };
+      const clampRect = () => {
+        const minW = MIN / size.w, minH = MIN / size.h;
+        r.w = Math.max(minW, Math.min(1, r.w)); r.h = Math.max(minH, Math.min(1, r.h));
+        r.x = Math.max(0, Math.min(1 - r.w, r.x)); r.y = Math.max(0, Math.min(1 - r.h, r.y));
+      };
+      const paint = () => {
+        clampRect();
+        box.style.left = (r.x * size.w) + "px"; box.style.top = (r.y * size.h) + "px";
+        box.style.width = (r.w * size.w) + "px"; box.style.height = (r.h * size.h) + "px";
+      };
+      paint();
+      window.addEventListener("resize", () => { size = fit(); paint(); });
+      back.querySelector("#pcAll").onclick = () => { r = { x: 0, y: 0, w: 1, h: 1 }; paint(); };
+      // drag the box, or pull a corner
+      let grab = null;
+      const at = (e) => { const b = stage.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; };
+      stage.addEventListener("pointerdown", (e) => {
+        const corner = e.target && e.target.dataset ? e.target.dataset.h : null;
+        const p0 = at(e);
+        const px = { x: r.x * size.w, y: r.y * size.h, w: r.w * size.w, h: r.h * size.h };
+        const inside = p0.x >= px.x && p0.x <= px.x + px.w && p0.y >= px.y && p0.y <= px.y + px.h;
+        if (!corner && !inside) return;
+        e.preventDefault();
+        try { stage.setPointerCapture(e.pointerId); } catch (err) {}
+        grab = { corner, p0, r0: Object.assign({}, r) };
+      });
+      stage.addEventListener("pointermove", (e) => {
+        if (!grab) return;
+        const p1 = at(e), o = grab.r0;
+        const dx = (p1.x - grab.p0.x) / size.w, dy = (p1.y - grab.p0.y) / size.h;
+        const minW = MIN / size.w, minH = MIN / size.h;
+        if (!grab.corner) { r.x = o.x + dx; r.y = o.y + dy; }
+        else {
+          const west = grab.corner[1] === "w", north = grab.corner[0] === "n";
+          const right = o.x + o.w, bottom = o.y + o.h;
+          if (west) { r.x = Math.min(right - minW, o.x + dx); r.w = right - r.x; }
+          else { r.w = Math.max(minW, o.w + dx); }
+          if (north) { r.y = Math.min(bottom - minH, o.y + dy); r.h = bottom - r.y; }
+          else { r.h = Math.max(minH, o.h + dy); }
+        }
+        paint();
+      });
+      const drop = () => { grab = null; };
+      stage.addEventListener("pointerup", drop);
+      stage.addEventListener("pointercancel", drop);
+      back.querySelector("#pcOk").onclick = () => {
+        const cut = { x: r.x, y: r.y, w: r.w, h: r.h };
+        const sx = cut.x * natW, sy = cut.y * natH, sw = cut.w * natW, sh = cut.h * natH;
+        // keep the trimmed picture at its own resolution, within the same
+        // ceiling every other picture here gets
+        const cap = 1400, scale = Math.min(1, cap / Math.max(sw, sh));
+        const out = document.createElement("canvas");
+        out.width = Math.max(1, Math.round(sw * scale)); out.height = Math.max(1, Math.round(sh * scale));
+        out.getContext("2d").drawImage(probe, sx, sy, sw, sh, 0, 0, out.width, out.height);
+        close();
+        onDone(out.toDataURL("image/jpeg", 0.85), cut);
+      };
+    };
+    probe.src = src;
+  }
+
   /* ============================================================ MODALS */
   // A long list of people is no use as a plain dropdown once the tree runs to
   // hundreds: this turns one into a type-to-search box. The <select> stays put
@@ -4577,7 +4690,7 @@
       const r = await fetch("api/store?action=listMedia"); if (!r.ok) return;
       const have = new Set(((await r.json()).ids) || []);
       const wanted = new Set();
-      state.persons.forEach((p) => { if (p.photoRef) wanted.add(p.photoRef); if (p.photoSrcRef) wanted.add(p.photoSrcRef); (p.docs || []).forEach((d) => { if (d.ref) wanted.add(d.ref); }); (p.gallery || []).forEach((g) => { if (g.ref) wanted.add(g.ref); }); });
+      state.persons.forEach((p) => { if (p.photoRef) wanted.add(p.photoRef); if (p.photoSrcRef) wanted.add(p.photoSrcRef); (p.docs || []).forEach((d) => { if (d.ref) wanted.add(d.ref); }); (p.gallery || []).forEach((g) => { if (g.ref) wanted.add(g.ref); if (g.srcRef) wanted.add(g.srcRef); }); });
       const missing = [...wanted].filter((id) => !have.has(id));
       if (!missing.length) return;
       const items = [];
@@ -4651,7 +4764,9 @@
         if (d && d.ref) { try { const u = await mediaGet(d.ref); if (u) { d.content = u; delete d.ref; } } catch (e) {} }
       }
       for (const g of (p.gallery || [])) {
-        if (g && g.ref) { try { const u = await mediaGet(g.ref); if (u) { g.data = u; delete g.ref; } } catch (e) {} }
+        if (!g) continue;
+        delete g.srcRef;   // as with a tree picture, the untrimmed original isn't part of a backup
+        if (g.ref) { try { const u = await mediaGet(g.ref); if (u) { g.data = u; delete g.ref; } } catch (e) {} }
       }
     }
     delete obj.mediaKey;
@@ -5608,6 +5723,32 @@
     return 1;
   }
   const galleryPicSrc = (g) => (g.data || (g.ref && mediaMem.get(g.ref)) || null);
+  /* Trimming a photo keeps the untrimmed one behind it, so a trim can be
+     pulled back out again later — the same bargain the tree picture makes.
+     The second trim is taken from the original, never from the first trim. */
+  async function trimGalleryPhoto(p, g, onChange) {
+    if (readonly || !isOwner()) return;
+    const from = g.srcRef ? await mediaGet(g.srcRef).catch(() => null) : null;
+    const src = from || galleryPicSrc(g) || (g.ref ? await mediaGet(g.ref).catch(() => null) : null);
+    if (!src) return toast("That photo is still loading — try again in a moment");
+    openPhotoCrop(src, async (trimmed, box) => {
+      pushUndo();
+      const keepRef = g.srcRef || (from ? g.srcRef : null);
+      try { g.ref = await mediaUpload(trimmed); delete g.data; }
+      catch (e) { g.data = trimmed; delete g.ref; }
+      if (keepRef) g.srcRef = keepRef;
+      else {
+        // first trim: park the picture as it came in, so this is undoable
+        // later as well as right now
+        try { g.srcRef = await mediaUpload(src); } catch (e) {}
+      }
+      g.trim = box;
+      save(); try { cloudSaveTree(false); } catch (e) {}
+      scheduleSweep(); render();
+      toast("Photo trimmed");
+      if (onChange) onChange();
+    }, g.trim);
+  }
   // A strip of thumbnails: tap to enlarge, ★ to make it the tree picture, ✕ to remove.
   function renderGallery(host, p, onChange) {
     host.textContent = "";
@@ -5635,6 +5776,9 @@
             toast(kept ? "Tree picture updated — the old one is in their gallery" : "Tree picture updated"); if (onChange) onChange();
           }, null, p.sex);
         };
+        const cut = document.createElement("button"); cut.type = "button"; cut.className = "gal-act gal-cut"; cut.textContent = "✂";
+        cut.title = "Trim this photo";
+        cut.onclick = (ev) => { ev.stopPropagation(); trimGalleryPhoto(p, g, onChange); };
         const del = document.createElement("button"); del.type = "button"; del.className = "gal-act gal-del"; del.textContent = "✕";
         del.title = "Remove this photo";
         del.onclick = (ev) => {
@@ -5645,7 +5789,7 @@
           save(); try { cloudSaveTree(false); } catch (e) {}
           toast("Photo removed"); if (onChange) onChange();
         };
-        cell.appendChild(star); cell.appendChild(del);
+        cell.appendChild(star); cell.appendChild(cut); cell.appendChild(del);
       }
       strip.appendChild(cell);
     });
@@ -5672,6 +5816,19 @@
       prev.onclick = (e) => { e.stopPropagation(); nav(-1); };
       next.onclick = (e) => { e.stopPropagation(); nav(1); };
       back.appendChild(prev); back.appendChild(next);
+    }
+    // Looking at a photo full size is when you notice it wants trimming, so
+    // the scissors are here too, not only on the thumbnail.
+    if (!readonly && isOwner()) {
+      const trim = document.createElement("button");
+      trim.className = "lightbox-trim"; trim.type = "button"; trim.textContent = "✂ Trim";
+      trim.onclick = (e) => {
+        e.stopPropagation();
+        const g = gal[i];
+        back.remove();
+        trimGalleryPhoto(p, g, () => { renderGalleryPanel(personById(p.id) || p); });
+      };
+      back.appendChild(trim);
     }
     back.onclick = () => back.remove();
     document.body.appendChild(back);
