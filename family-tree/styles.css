@@ -493,6 +493,31 @@ body.in-hidden-scope #hiddenChip { display: none; }
 /* "safe area" guide, in the shape this person is on the tree: the outline is
    drawn in the SVG itself so a circle, a square and a diamond all work */
 .pa-stage .pa-guide { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+/* trimming a gallery photo: the whole picture, with a box you can pull about */
+.pc-stage {
+  position: relative; margin: 6px auto 12px; background: #111; overflow: hidden;
+  border-radius: 10px; touch-action: none; user-select: none; max-width: 100%;
+}
+.pc-stage img { display: block; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
+.pc-rect {
+  position: absolute; box-sizing: border-box; cursor: move;
+  border: 2px solid rgba(255, 255, 255, .95);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, .45), 0 0 0 1px rgba(0, 0, 0, .5) inset;
+}
+.pc-rect i {
+  position: absolute; width: 22px; height: 22px; background: transparent;
+}
+.pc-rect i::after {
+  content: ""; position: absolute; inset: 6px; background: #fff; border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .45);
+}
+/* the grips sit INSIDE the box: pulled out to the frame's edge they'd be
+   half outside it, and half of a grip is a grip you can't grab */
+.pc-rect i[data-h="nw"] { left: 0; top: 0; cursor: nwse-resize; }
+.pc-rect i[data-h="ne"] { right: 0; top: 0; cursor: nesw-resize; }
+.pc-rect i[data-h="se"] { right: 0; bottom: 0; cursor: nwse-resize; }
+.pc-rect i[data-h="sw"] { left: 0; bottom: 0; cursor: nesw-resize; }
+
 .pa-zoom { display: flex; align-items: center; gap: 10px; margin: 0 0 4px; }
 .pa-zoom input[type=range] { flex: 1; }
 .pa-zoom span { font-size: 18px; color: var(--muted); }
@@ -905,11 +930,14 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
   background: rgba(0,0,0,.55); color: #fff; font-size: 12px; line-height: 22px; padding: 0; opacity: 0; transition: opacity .12s; }
 .gal-cell:hover .gal-act, .gal-cell:focus-within .gal-act { opacity: 1; }
 .gal-star { left: 3px; bottom: 3px; }
+.gal-cut { right: 3px; bottom: 3px; }
 .gal-del { right: 3px; top: 3px; }
 @media (hover: none) { .gal-act { opacity: 1; } }
 .lightbox-back { position: fixed; inset: 0; background: rgba(0,0,0,.88); z-index: 90; display: flex;
   flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 20px; }
 .lightbox-img { max-width: 96vw; max-height: 82vh; object-fit: contain; border-radius: 8px; }
+.lightbox-trim { position: absolute; top: 16px; left: 16px; z-index: 1; border: none; cursor: pointer;
+  background: rgba(255,255,255,.92); color: #222; border-radius: 999px; padding: 8px 14px; font: inherit; font-size: 14px; }
 .lightbox-cap { color: #eee; font-size: 13px; }
 .lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,.14);
   color: #fff; border: none; font-size: 34px; width: 52px; height: 72px; cursor: pointer; border-radius: 8px; }
