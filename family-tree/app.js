@@ -4769,6 +4769,138 @@
     if (firstRun) toast(failed ? "Moved " + moved + " files ✓ — " + failed + " will retry next time" : "Storage slimmed ✓ — every save is now far lighter");
     sweepRunning = false;
   }
+  /* ---- GEDCOM, for Ancestry and every other genealogy program --------------
+     The backup file above is this app's own shape and means nothing to anyone
+     else. GEDCOM 5.5.1 is the format the rest of the world reads, so this
+     writes one: names, dates, families, and the text of obituaries. Nothing
+     else — no private notes, no photos, no colours, nothing this app keeps for
+     its own purposes.
+
+     Two things worth knowing about how names come out. Genealogy records a
+     woman under the name she was born with, so a maiden name becomes her
+     main name and every married name follows as an alternate — which is what
+     Ancestry expects and how it will match her to other trees. And a date
+     that's only a year, or only a month and a year, stays that way rather
+     than being invented into a full one.                                   */
+  const GED_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  function gedDate(iso, year) {
+    const t = String(iso || "").trim();
+    let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+    if (m) return String(+m[3]) + " " + GED_MONTHS[+m[2] - 1] + " " + m[1];
+    m = /^(\d{4})-(\d{2})$/.exec(t);
+    if (m) return GED_MONTHS[+m[2] - 1] + " " + m[1];
+    m = /^(\d{4})$/.exec(t);
+    if (m) return m[1];
+    return year ? String(year) : "";
+  }
+  // GEDCOM lines have a length limit and no way to hold a newline, so long text
+  // is broken across CONC (same line, continued) and CONT (a new line).
+  function gedText(level, tag, text) {
+    const out = [];
+    const paras = String(text || "").replace(/\r/g, "").split("\n");
+    paras.forEach((para, i) => {
+      const t = i === 0 ? tag : "CONT";
+      let rest = para;
+      if (rest === "") { out.push(level + " " + t); return; }
+      let first = true;
+      while (rest.length) {
+        const chunk = rest.slice(0, 200);
+        rest = rest.slice(200);
+        out.push(level + " " + (first ? t : "CONC") + " " + chunk);
+        first = false;
+      }
+    });
+    return out;
+  }
+  // Every obituary's words, in the order they were attached.
+  function obituaryText(p) {
+    return (p.docs || [])
+      .filter((d) => d && isObitDoc(d))
+      .map((d) => (d.text || (d.kind === "text" ? d.content : "") || "").trim())
+      .filter(Boolean)
+      .join("\n\n");
+  }
+  function toGedcom() {
+    const L = [];
+    const people = state.persons.filter((p) => p && p.id);
+    const idOf = {}; people.forEach((p, i) => (idOf[p.id] = "@I" + (i + 1) + "@"));
+    // a family for every union, and one more for each set of siblings whose
+    // parents aren't recorded — a child has to hang off something
+    const fams = state.unions.filter((u) => u && u.id);
+    const famOf = {}; fams.forEach((u, i) => (famOf[u.id] = "@F" + (i + 1) + "@"));
+    const stamp = new Date();
+    L.push("0 HEAD");
+    L.push("1 SOUR " + ((state.title || "Family Tree").slice(0, 60)));
+    L.push("2 NAME " + (state.title || "Family Tree"));
+    L.push("1 DATE " + stamp.getDate() + " " + GED_MONTHS[stamp.getMonth()] + " " + stamp.getFullYear());
+    L.push("1 GEDC"); L.push("2 VERS 5.5.1"); L.push("2 FORM LINEAGE-LINKED");
+    L.push("1 CHAR UTF-8");
+    people.forEach((p) => {
+      L.push("0 " + idOf[p.id] + " INDI");
+      // her birth name first, if it's known; his or hers as recorded otherwise
+      const given = [p.first, p.middle].filter(Boolean).join(" ").trim();
+      const names = [];
+      const birthSurname = (p.sex === "female" && p.maiden) ? p.maiden : (p.last || "");
+      names.push({ sur: birthSurname, type: "" });
+      if (p.sex === "female" && p.maiden) {
+        priorList(p.priorNames).forEach((n) => names.push({ sur: n, type: "married" }));
+        if (p.last && p.last !== p.maiden) names.push({ sur: p.last, type: "married" });
+      }
+      names.forEach((n, i) => {
+        L.push("1 NAME " + (given + " /" + (n.sur || "") + "/").trim() + (p.suffix ? " " + p.suffix : ""));
+        if (given) L.push("2 GIVN " + given);
+        if (n.sur) L.push("2 SURN " + n.sur);
+        if (p.suffix) L.push("2 NSFX " + p.suffix);
+        if (i === 0 && p.nickname) L.push("2 NICK " + p.nickname);
+        if (n.type) L.push("2 TYPE " + n.type);
+      });
+      if (p.sex === "male") L.push("1 SEX M");
+      else if (p.sex === "female") L.push("1 SEX F");
+      const born = gedDate(p.birthDate, p.birth);
+      if (born) { L.push("1 BIRT"); L.push("2 DATE " + born); }
+      const died = gedDate(p.deathDate, p.death);
+      if (died) { L.push("1 DEAT"); L.push("2 DATE " + died); }
+      else if (isDeceased(p)) L.push("1 DEAT Y");     // known to have died, date unknown
+      const obit = obituaryText(p);
+      if (obit) gedText(1, "NOTE", obit).forEach((x) => L.push(x));
+      // the families they belong to
+      state.unions.forEach((u) => { if (u.a === p.id || u.b === p.id) L.push("1 FAMS " + famOf[u.id]); });
+      state.links.forEach((l) => {
+        if (l.child !== p.id || !famOf[l.union]) return;
+        L.push("1 FAMC " + famOf[l.union]);
+        if (l.type === "adopted") L.push("2 PEDI adopted");
+      });
+    });
+    fams.forEach((u) => {
+      L.push("0 " + famOf[u.id] + " FAM");
+      const a = u.a && idOf[u.a], b = u.b && idOf[u.b];
+      const sexOf = (id) => (personById(id) || {}).sex;
+      // GEDCOM wants husband and wife named as such; where it isn't known,
+      // whoever was recorded first takes the first seat.
+      let husb = null, wife = null;
+      [u.a, u.b].filter(Boolean).forEach((id) => {
+        if (sexOf(id) === "female" && !wife) wife = idOf[id];
+        else if (sexOf(id) === "male" && !husb) husb = idOf[id];
+        else if (!husb) husb = idOf[id]; else if (!wife) wife = idOf[id];
+      });
+      if (husb) L.push("1 HUSB " + husb);
+      if (wife) L.push("1 WIFE " + wife);
+      state.links.forEach((l) => { if (l.union === u.id && idOf[l.child]) L.push("1 CHIL " + idOf[l.child]); });
+      if (u.status === "married" || u.status === "divorced") {
+        const md = gedDate(u.marriage, null);
+        if (md) { L.push("1 MARR"); L.push("2 DATE " + md); }
+        else if (a && b) L.push("1 MARR Y");
+      }
+      if (u.status === "divorced") {
+        const dd = gedDate(u.divorce, null);
+        if (dd) { L.push("1 DIV"); L.push("2 DATE " + dd); }
+        else L.push("1 DIV Y");
+      }
+    });
+    L.push("0 TRLR");
+    return L.join("\r\n") + "\r\n";   // GEDCOM line endings
+  }
+
   // A self-contained copy with every photo/document folded back in — used for
   // manual exports and the downloadable published file, so backups never depend
   // on the online media store.
@@ -7835,6 +7967,12 @@
     downloadFile((state.title || "family-tree").replace(/\s+/g, "-").toLowerCase() + ".json", JSON.stringify(obj, null, 2));
     toast("Exported — the file is self-contained");
   };
+  { const b = $("#gedcomBtn"); if (b) b.onclick = () => {
+      const ged = toGedcom();
+      const who = state.persons.length;
+      downloadFile((state.title || "family-tree").replace(/\s+/g, "-").toLowerCase() + ".ged", ged, "text/plain;charset=utf-8");
+      toast(who + " people exported — upload the .ged file to Ancestry");
+    }; }
   $("#importBtn").onclick = () => $("#importInput").click();
   $("#importInput").addEventListener("change", (e) => {
     const f = e.target.files[0]; if (!f) return;
