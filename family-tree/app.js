@@ -4783,6 +4783,16 @@
      that's only a year, or only a month and a year, stays that way rather
      than being invented into a full one.                                   */
   const GED_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  /* A cause of death goes into the file, except where it was suicide. That
+     stays in the family's own tree and doesn't go up to Ancestry, where it
+     would be copied into other people's trees for good and shown to
+     strangers. The death itself and its date still go — only the cause is
+     held back. Erring towards holding one back: a cause wrongly kept private
+     can be added by hand, a cause wrongly published can't be taken back.
+     (Obituary text is passed through as written — it isn't searched for this,
+     because a half-redacted obituary is worse than either choice.)         */
+  const SUICIDE = /\b(suicid\w*|self[-\s]?inflict\w*)\b|\b(took|ended)\s+(his|her|their|own)\b[^.]*\bown\s+life\b|\bby\s+(his|her|their)\s+own\s+hand\b|\bhang(ed|ing)\s+(him|her|them)self\b/i;
+  const holdBackCause = (cause) => SUICIDE.test(String(cause || ""));
   function gedDate(iso, year) {
     const t = String(iso || "").trim();
     let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
@@ -4859,8 +4869,18 @@
       const born = gedDate(p.birthDate, p.birth);
       if (born) { L.push("1 BIRT"); L.push("2 DATE " + born); }
       const died = gedDate(p.deathDate, p.death);
-      if (died) { L.push("1 DEAT"); L.push("2 DATE " + died); }
-      else if (isDeceased(p)) L.push("1 DEAT Y");     // known to have died, date unknown
+      const cause = String(p.causeOfDeath || "").trim();
+      const tellCause = cause && !holdBackCause(cause);
+      if (died) { L.push("1 DEAT"); L.push("2 DATE " + died); if (tellCause) gedText(2, "CAUS", cause).forEach((x) => L.push(x)); }
+      else if (isDeceased(p)) { L.push("1 DEAT Y"); if (tellCause) gedText(2, "CAUS", cause).forEach((x) => L.push(x)); }
+      const mil = p.military;
+      if (mil && (mil.branch || mil.rank || mil.notes)) {
+        const what = [mil.rank, mil.branch].map((x) => String(x || "").trim()).filter(Boolean).join(", ");
+        L.push("1 EVEN" + (what ? " " + what : ""));
+        L.push("2 TYPE Military Service");
+        const extra = String(mil.notes || "").trim();
+        if (extra) gedText(2, "NOTE", extra).forEach((x) => L.push(x));
+      }
       const obit = obituaryText(p);
       if (obit) gedText(1, "NOTE", obit).forEach((x) => L.push(x));
       // the families they belong to
@@ -4898,7 +4918,8 @@
       }
     });
     L.push("0 TRLR");
-    return L.join("\r\n") + "\r\n";   // GEDCOM line endings
+    const held = people.filter((p) => holdBackCause(p.causeOfDeath)).length;
+    return { text: L.join("\r\n") + "\r\n", people: people.length, held };   // GEDCOM line endings
   }
 
   // A self-contained copy with every photo/document folded back in — used for
@@ -7969,9 +7990,9 @@
   };
   { const b = $("#gedcomBtn"); if (b) b.onclick = () => {
       const ged = toGedcom();
-      const who = state.persons.length;
-      downloadFile((state.title || "family-tree").replace(/\s+/g, "-").toLowerCase() + ".ged", ged, "text/plain;charset=utf-8");
-      toast(who + " people exported — upload the .ged file to Ancestry");
+      downloadFile((state.title || "family-tree").replace(/\s+/g, "-").toLowerCase() + ".ged", ged.text, "text/plain;charset=utf-8");
+      toast(ged.people + " people exported — upload the .ged file to Ancestry"
+        + (ged.held ? " · " + ged.held + (ged.held === 1 ? " cause of death was" : " causes of death were") + " held back" : ""));
     }; }
   $("#importBtn").onclick = () => $("#importInput").click();
   $("#importInput").addEventListener("change", (e) => {
