@@ -31,7 +31,7 @@ const seed={title:'Test Tree',version:9,namesSplit:true,
   unions:[{id:'u1',a:'d',b:'v',status:'married',marriage:'1949-09-23'},
           {id:'u2',a:'v',b:'n',status:'divorced',divorce:'2001-03-04'}],
   links:[{id:'l1',union:'u1',child:'k',type:'bio'},{id:'l2',union:'u1',child:'a',type:'adopted'}],
-  manual:{d:{x:0,y:0},v:{x:180,y:0},k:{x:0,y:250},a:{x:180,y:250},n:{x:400,y:0},s:{x:600,y:0},t:{x:780,y:0}},hidden:{},manualHidden:{},focus:[]};
+  manual:{d:{x:0,y:0},v:{x:180,y:0},k:{x:0,y:250},a:{x:180,y:250},n:{x:400,y:0},s:{x:600,y:0},t:{x:780,y:0}},hidden:{},manualHidden:{},focus:['k']};
 const browser=await chromium.launch(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{});
 const pg=await browser.newPage({viewport:{width:1280,height:900}});
 const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
@@ -53,7 +53,7 @@ const lines=raw.split('\r\n').filter(Boolean);
 ok('it starts with a header and ends with a trailer', lines[0]==='0 HEAD' && lines[lines.length-1]==='0 TRLR');
 ok('it says which GEDCOM it is', raw.includes('2 VERS 5.5.1') && raw.includes('1 CHAR UTF-8'));
 let jump=null, prev=-1, ids=new Set(), fams=new Set(), ptr=[];
-lines.forEach((l,i)=>{const m=/^(\d+) (?:(@[^@]+@) )?([A-Z][A-Z0-9_]*)(?: (.*))?$/.exec(l);
+lines.forEach((l,i)=>{const m=/^(\d+) (?:(@[^@]+@) )?([A-Z_][A-Z0-9_]*)(?: (.*))?$/.exec(l);
   if(!m){ jump=jump||('unreadable line '+(i+1)); return; }
   const lvl=+m[1]; if(lvl>prev+1) jump=jump||('level jump at line '+(i+1)); prev=lvl;
   if(m[2]) (m[3]==='INDI'?ids:fams).add(m[2]);
@@ -86,6 +86,11 @@ ok('a suicide is NOT given as a cause', !/Suicide/i.test(raw), (raw.match(/.*[Ss
 ok('…nor one described in words', !raw.includes('Took his own life'));
 ok('…but the death itself is still recorded', raw.includes('2 DATE 14 FEB 1979') && raw.includes('2 DATE 1 MAR 1980'));
 ok('…and those people are still in the file', /1 NAME Sam \/Quiet\//.test(raw) && /1 NAME Tom \/Quiet\//.test(raw));
+// whoever the tree is about comes first, because that's who the other
+// program will open the tree on
+ok('the person the tree is focused on is the first record',
+   /0 @I1@ INDI\r\n1 NAME Kay \/Boyd\//.test(raw), (raw.split('\r\n')[lines.indexOf('0 @I1@ INDI')+1]||''));
+ok('…and the header names them as the home person', raw.includes('1 _ROOT @I1@'));
 ok('private notes are NOT there', !raw.includes('PRIVATE: do not share'));
 ok('colours are not there', !raw.includes('#ff8800'));
 ok('no page errors', errs.length===0, JSON.stringify(errs.slice(0,3)));

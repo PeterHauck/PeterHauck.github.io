@@ -4841,7 +4841,16 @@
   }
   function toGedcom() {
     const L = [];
-    const people = state.persons.filter((p) => p && p.id);
+    /* Whoever comes first in the file is the person Ancestry opens the tree
+       on, and it was whoever happened to be added to this tree first — which
+       is why an import could look like "it only brought in his branch" when
+       everybody was there all along. The tree already knows who it's about,
+       so they go first, and the header says so too for the programs that
+       read it.                                                             */
+    const people = [];
+    const taken = new Set();
+    (state.focus || []).forEach((id) => { const q = personById(id); if (q && !taken.has(q.id)) { people.push(q); taken.add(q.id); } });
+    state.persons.forEach((q) => { if (q && q.id && !taken.has(q.id)) { people.push(q); taken.add(q.id); } });
     const idOf = {}; people.forEach((p, i) => (idOf[p.id] = "@I" + (i + 1) + "@"));
     // a family for every union, and one more for each set of siblings whose
     // parents aren't recorded — a child has to hang off something
@@ -4854,6 +4863,7 @@
     L.push("1 DATE " + stamp.getDate() + " " + GED_MONTHS[stamp.getMonth()] + " " + stamp.getFullYear());
     L.push("1 GEDC"); L.push("2 VERS 5.5.1"); L.push("2 FORM LINEAGE-LINKED");
     L.push("1 CHAR UTF-8");
+    if (people.length) L.push("1 _ROOT @I1@");   // the home person, for programs that read it
     people.forEach((p) => {
       L.push("0 " + idOf[p.id] + " INDI");
       // her birth name first, if it's known; his or hers as recorded otherwise
