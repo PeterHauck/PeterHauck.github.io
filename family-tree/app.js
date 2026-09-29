@@ -3316,7 +3316,16 @@
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeGridMenu(); });
 
-  stage.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY); }, { passive: false });
+  /* The wheel zooms the board — but the panels that float over it are children
+     of the board, so a wheel over the list of people bubbled down here and
+     zoomed the tree instead of scrolling the list, leaving the bottom of it
+     unreachable. A wheel that starts inside one of them belongs to it.     */
+  stage.addEventListener("wheel", (e) => {
+    const t = e.target;
+    if (t && t.closest && t.closest(".floating, .modal-backdrop, #panel")) return;
+    e.preventDefault();
+    zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
+  }, { passive: false });
 
   /* ============================================================ FORMS */
   function selectPerson(id) {
