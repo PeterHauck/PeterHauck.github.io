@@ -304,6 +304,7 @@ button.btn.danger { color: var(--divorce); }
 .pv-dates { font-size:13px; color:var(--muted); margin-top:3px; }
 .pv-age { font-size:13px; margin-top:2px; }
 .pv-sub { font-size:12.5px; color:var(--muted); margin-top:2px; }
+.pv-place { color: var(--muted); }
 #personView #notesSection { margin-top: 0; }
 #personView #pvPhotos { margin:4px 0 12px; }
 
@@ -407,6 +408,19 @@ button.btn.danger { color: var(--divorce); }
 }
 .sweep-map .sweep-map-now { border: 2px solid var(--accent); background: rgba(127, 127, 127, .14); }
 .sweep-map .sweep-map-next { border: 2px dashed var(--accent); opacity: .5; }
+
+/* bringing a GEDCOM in: everything it would change, to tick or not */
+.ged-review { width: min(680px, 94vw); display: flex; flex-direction: column; max-height: 88vh; }
+.ged-body { overflow-y: auto; min-height: 0; margin: 6px 0 10px; }
+.ged-sec { margin: 14px 0 6px; }
+.ged-sec h3 { margin: 0 0 2px; font-size: 13px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+.ged-row { display: flex; align-items: baseline; gap: 8px; padding: 5px 2px; border-bottom: 1px solid var(--panel-border); cursor: pointer; }
+.ged-row:hover { background: rgba(127, 127, 127, .07); }
+.ged-row input { width: auto; flex: none; }
+.ged-label { flex: 1; min-width: 0; font-size: 13.5px; }
+.ged-sub { color: var(--muted); font-size: 12px; text-align: right; flex: none; max-width: 48%; }
+.ged-bulk { display: flex; gap: 6px; margin-top: 6px; }
+.ged-bulk .btn { padding: 3px 10px; font-size: 12px; }
 
 /* right-click menu on the bare grid: add space, or add somebody */
 .ctx-menu {

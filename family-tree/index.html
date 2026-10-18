@@ -139,8 +139,10 @@
           </div>
           <div class="btn-row" style="margin-top:6px">
             <button class="btn wide" id="gedcomBtn">🌳 Export for Ancestry (GEDCOM)</button>
+            <button class="btn wide" id="gedcomInBtn">🌲 Bring in a GEDCOM</button>
+            <input type="file" id="gedcomInput" accept=".ged,.zip,application/zip" hidden />
           </div>
-          <p class="hint" style="margin-top:6px">Names, dates, families and obituary text — the format Ancestry, FamilySearch and MyHeritage all read. Your private notes and photos stay here.</p>
+          <p class="hint" style="margin-top:6px">Names, dates, families and obituary text — the format Ancestry, FamilySearch and MyHeritage all read. Your private notes and photos stay here. Bringing one in shows you everything it would change before anything happens.</p>
 
           <details class="advanced" style="margin-top:14px">
             <summary>Advanced: publish &amp; GitHub</summary>
@@ -233,7 +235,12 @@
               <label class="field"><span>Born</span><input type="text" id="pBirth" placeholder="1912" autocomplete="off" /><span class="date-echo" id="pBirthEcho"></span></label>
               <label class="field"><span>Died (if applicable)</span><input type="text" id="pDeath" placeholder="—" autocomplete="off" /><span class="date-echo" id="pDeathEcho"></span></label>
             </div>
-            <p class="hint" style="margin:-6px 0 12px">As much of the date as you know: <b>1912</b>, <b>6/1912</b> or <b>6/14/1912</b>. Only the year shows on the tree.</p>
+            <p class="hint" style="margin:-6px 0 8px">As much of the date as you know: <b>1912</b>, <b>6/1912</b> or <b>6/14/1912</b>. Only the year shows on the tree.</p>
+            <div class="row2">
+              <label class="field"><span>Born in</span><input type="text" id="pBirthPlace" placeholder="Lennox, Lincoln, South Dakota" autocomplete="off" /></label>
+              <label class="field"><span>Died in</span><input type="text" id="pDeathPlace" placeholder="—" autocomplete="off" /></label>
+            </div>
+            <p class="hint" style="margin:-6px 0 12px">Where it happened, if you know — the places are what make records findable later.</p>
             <label class="field" style="display:flex;align-items:center;gap:8px;margin:-2px 0 10px">
               <input type="checkbox" id="pDeceased" style="width:auto" />
               <span style="margin:0">Deceased (if the year is unknown)</span>
