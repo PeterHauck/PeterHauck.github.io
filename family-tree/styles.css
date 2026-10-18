@@ -476,6 +476,12 @@ button.btn.danger { color: var(--divorce); }
 .gp-preview { margin: 6px 0 12px; padding: 8px 10px; border-radius: 8px; background: rgba(127,127,127,.12); font-size: 15px; font-weight: 600; }
 .gp-badbox { min-height: 0; margin: -4px 0 6px; }
 .gp-badbox.bad { color: var(--divorce); }
+.ged-start { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; font-size: 13px; cursor: pointer; }
+.ged-start input { width: auto; flex: none; margin: 0; }
+.ged-resume { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: rgba(127,127,127,.12); font-size: 12.5px; }
+.ged-review .btn:disabled { opacity: .45; cursor: default; }
+.ged-prow:disabled { opacity: .55; cursor: default; }
+.ged-prow:disabled .ged-pstate { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
 .gp-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--panel-border); background: var(--panel); }
 
 /* "they're already in my tree" — find who */

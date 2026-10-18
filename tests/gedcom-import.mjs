@@ -68,6 +68,21 @@ await pg.setInputFiles('#gedcomInput', tmp);
 await pg.waitForSelector('.ged-review',{timeout:15000}); await pg.waitForTimeout(700);
 ok('it opens a review instead of just doing it', true);
 ok('nothing has changed yet', (await state()).persons.length===7, (await state()).persons.length);
+ok('nobody is chosen until you choose them', await pg.evaluate(()=>/^0 to bring in/.test(document.querySelector('.ged-tally').textContent)),
+   await pg.evaluate(()=>document.querySelector('.ged-tally').textContent));
+ok('…and it says so on the button', await pg.evaluate(()=>{
+  const b=[...document.querySelectorAll('.ged-review .btn-row button')].find(x=>x.classList.contains('primary'));
+  return b.disabled && /nothing chosen/i.test(b.textContent);}));
+ok('…with a switch to have the obvious ones chosen for you', await pg.evaluate(()=>{
+  const c=document.querySelector('.ged-start input'); if(!c||!c.checked) return false;
+  c.click(); const t=document.querySelector('.ged-tally').textContent;
+  const b=[...document.querySelectorAll('.ged-review .btn-row button')].find(x=>x.classList.contains('primary'));
+  const on=/^5 to bring in/.test(t) && !b.disabled;
+  c.click(); return on && /^0 to bring in/.test(document.querySelector('.ged-tally').textContent);}));
+// take the certain ones as a batch, the way you would
+await pg.evaluate(()=>{const s=[...document.querySelectorAll('.ged-sec')].find(x=>/Matched for certain/.test(x.querySelector('h3').textContent));
+  [...s.querySelectorAll('.ged-bulk button')].find(x=>/accept all/i.test(x.textContent)).click();});
+await pg.waitForTimeout(300);
 const sections=await pg.evaluate(()=>[...document.querySelectorAll('.ged-sec h3')].map(h=>h.textContent));
 ok('it groups them by how sure it is', /New people \(2\)/.test(sections.join('|')) && /Same person\? \(3\)/.test(sections.join('|')),
    JSON.stringify(sections));
