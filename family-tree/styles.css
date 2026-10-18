@@ -466,6 +466,16 @@ button.btn.danger { color: var(--divorce); }
 .gp-relpanel .gp-link { margin-bottom: 8px; }
 .gp-relfoot { display: flex; gap: 6px; justify-content: flex-end; padding: 8px 14px 2px; }
 .gp-diff.same { background: none; color: var(--muted); padding-left: 0; font-style: italic; }
+.gp-diff.edited { background: rgba(176,122,43,.22); color: var(--ink); }
+.gp-editbtn { margin: 0 14px 10px; width: calc(100% - 28px); }
+.ged-pname.edited::after { content: " ✎"; color: var(--muted); font-size: 11px; }
+
+/* correcting the file before any of it lands */
+.gp-edit { width: min(540px, 94vw); max-height: 88vh; overflow-y: auto; }
+.gp-edit select { width: 100%; }
+.gp-preview { margin: 6px 0 12px; padding: 8px 10px; border-radius: 8px; background: rgba(127,127,127,.12); font-size: 15px; font-weight: 600; }
+.gp-badbox { min-height: 0; margin: -4px 0 6px; }
+.gp-badbox.bad { color: var(--divorce); }
 .gp-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--panel-border); background: var(--panel); }
 
 /* "they're already in my tree" — find who */
