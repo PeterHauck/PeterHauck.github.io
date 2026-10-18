@@ -22,8 +22,10 @@ const seed={title:'T',version:9,namesSplit:true,
     P({id:'g',name:'Gail Arlene Harris',first:'Gail',middle:'Arlene',last:'Harris',sex:'female'}),
     P({id:'b',name:'Barbara (Kaiser) Hauck',first:'Barbara',last:'Hauck',maiden:'Kaiser',sex:'female',birth:1894}),
     P({id:'e',name:'Ed Hokenstad',first:'Ed',last:'Hokenstad',sex:'male'}),
+    P({id:'a',name:'Alice Hokenstad',first:'Alice',last:'Hokenstad',sex:'female'}),
+    P({id:'v',name:'Verlyn E. (Taylor) Boyd',first:'Verlyn',middle:'E',last:'Boyd',maiden:'Taylor',sex:'female',birth:1930}),
   ],
-  unions:[],links:[],manual:{k:{x:0,y:0},j:{x:200,y:0},g:{x:400,y:0},b:{x:600,y:0},e:{x:800,y:0}},hidden:{},manualHidden:{},focus:[]};
+  unions:[],links:[],manual:{k:{x:0,y:0},j:{x:200,y:0},g:{x:400,y:0},b:{x:600,y:0},e:{x:800,y:0},a:{x:1000,y:0},v:{x:1200,y:0}},hidden:{},manualHidden:{},focus:[]};
 // what the other program hands back
 const ged=['0 HEAD','1 GEDC','2 VERS 5.5.1','2 FORM LINEAGE-LINKED','1 CHAR UTF-8',
   // same man, spelled the other way, with a place the app hasn't got
@@ -39,8 +41,11 @@ const ged=['0 HEAD','1 GEDC','2 VERS 5.5.1','2 FORM LINEAGE-LINKED','1 CHAR UTF-
   '0 @I5@ INDI','1 NAME Ruth Octavia /Hokenstad/','2 GIVN Ruth Octavia','2 SURN Hokenstad','1 SEX F',
   '1 BIRT','2 DATE 3 JUL 1900','2 PLAC Sioux Falls, Minnehaha, South Dakota, USA','1 DEAT','2 DATE 1961',
   '0 @I6@ INDI','1 NAME Edmond Theo /Hokenstad/','2 GIVN Edmond Theo','2 SURN Hokenstad','1 SEX M','1 BIRT','2 DATE 1901',
+  '0 @I7@ INDI','1 NAME Alice May /Hokenstad/','2 GIVN Alice May','2 SURN Hokenstad','1 SEX F','1 BIRT','2 DATE 1931',
+  // a married woman, filed the other program's way: under her maiden name
+  '0 @I8@ INDI','1 NAME Verlyn Elaine /Taylor/','2 GIVN Verlyn Elaine','2 SURN Taylor','1 SEX F','1 BIRT','2 DATE 1930',
   // a family joining the two new people
-  '0 @F1@ FAM','1 HUSB @I6@','1 WIFE @I5@','1 MARR','2 DATE 14 JUN 1925','2 PLAC Sioux Falls, South Dakota','1 CHIL @I1@',
+  '0 @F1@ FAM','1 HUSB @I6@','1 WIFE @I5@','1 MARR','2 DATE 14 JUN 1925','2 PLAC Sioux Falls, South Dakota','1 CHIL @I1@','1 CHIL @I7@',
   '0 TRLR'].join('\r\n')+'\r\n';
 const tmp=path.join(os.tmpdir(),'in-'+Date.now()+'.ged'); fs.writeFileSync(tmp,ged);
 const browser=await chromium.launch(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{});
@@ -56,15 +61,15 @@ const state=()=>pg.evaluate(async ()=>{
       const t=db.transaction('kv','readonly').objectStore('kv').get('tree.v1');
       t.onsuccess=()=>res(t.result||null); t.onerror=()=>res(null);}; q.onerror=()=>res(null);});
   return idb || JSON.parse(localStorage.getItem('familyTree.v1')||'{}');});
-ok('the app starts with five people', (await state()).persons.length===5, (await state()).persons.length);
+ok('the app starts with seven people', (await state()).persons.length===7, (await state()).persons.length);
 await pg.evaluate(()=>{const m=document.getElementById('tbMenu'); if(m) m.click();});
 await pg.waitForTimeout(500);
 await pg.setInputFiles('#gedcomInput', tmp);
 await pg.waitForSelector('.ged-review',{timeout:15000}); await pg.waitForTimeout(700);
 ok('it opens a review instead of just doing it', true);
-ok('nothing has changed yet', (await state()).persons.length===5, (await state()).persons.length);
+ok('nothing has changed yet', (await state()).persons.length===7, (await state()).persons.length);
 const sections=await pg.evaluate(()=>[...document.querySelectorAll('.ged-sec h3')].map(h=>h.textContent));
-ok('it groups them by how sure it is', /New people \(2\)/.test(sections.join('|')) && /Same person\? \(2\)/.test(sections.join('|')),
+ok('it groups them by how sure it is', /New people \(2\)/.test(sections.join('|')) && /Same person\? \(3\)/.test(sections.join('|')),
    JSON.stringify(sections));
 const groupOf=(name)=>pg.evaluate((n)=>{const secs=[...document.querySelectorAll('.ged-sec')];
   for(const s of secs){ if([...s.querySelectorAll('.ged-pname')].some(x=>x.textContent.includes(n)))
@@ -91,6 +96,68 @@ ok('…and offers Ignore, Later and Accept', card.buttons.join('|')==='Ignore|La
 ok('a year that disagrees is NOT ticked', await pg.evaluate(()=>{
   const row=[...document.querySelectorAll('.gp-cell.them')].find(c=>/^Born/.test(c.textContent.trim())&&/Different/.test(c.textContent));
   const box=row&&row.querySelector('input'); return !!box && !box.checked;}));
+const nameRow=()=>pg.evaluate(()=>{
+  const c=[...document.querySelectorAll('.gp-cell.them')].find(x=>/^Name/.test(x.textContent.trim()));
+  return c&&{text:c.textContent.replace(/\s+/g,' ').trim(), tick:!!c.querySelector('input'),
+             ticked:!!(c.querySelector('input')&&c.querySelector('input').checked)};});
+const bn=await nameRow();
+ok('her name written the file\'s shorter way is not called a disagreement', /written shorter/i.test(bn.text), JSON.stringify(bn));
+ok('…and it is not offered as something to take', bn.tick===false, JSON.stringify(bn));
+await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-foot button')].find(x=>/accept/i.test(x.textContent)); b.click();});
+await pg.waitForTimeout(400);
+
+// --- a name that really is different: offered, never assumed
+await openRow('Verlyn');
+const vn=await nameRow();
+ok('a name the file spells differently IS offered', vn.tick===true, JSON.stringify(vn));
+ok('…but is never ticked for you', vn.ticked===false, JSON.stringify(vn));
+await pg.evaluate(()=>{const c=[...document.querySelectorAll('.gp-cell.them')].find(x=>/^Name/.test(x.textContent.trim()));
+  const i=c.querySelector('input'); i.click();});
+await pg.waitForTimeout(200);
+await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-foot button')].find(x=>/accept/i.test(x.textContent)); b.click();});
+await pg.waitForTimeout(400);
+
+// --- the fold-out: comb through a whole household from one card
+await openRow('Ruth');
+const rels=await pg.evaluate(()=>[...document.querySelectorAll('.ged-person .gp-relbox')].map(b=>({
+  name:b.querySelector('.gp-relname').textContent,
+  role:b.querySelector('.gp-relrole').textContent.replace(/\s+/g,' ').trim(),
+  count:(b.querySelector('.gp-relcount')||{}).textContent||null,
+  opener:!!b.querySelector('.gp-relopen')})));
+ok('the card lists the family the file puts her in', rels.length>=3, JSON.stringify(rels.map(r=>r.name)));
+ok('…each one with a way to open it', rels.every(r=>r.opener), JSON.stringify(rels));
+const alice=rels.find(r=>/Alice/.test(r.name));
+ok('…and a count of what that person could bring', alice&&alice.count==='2', JSON.stringify(alice));
+ok('nothing is expanded to begin with', await pg.evaluate(()=>!document.querySelector('.gp-relpanel')));
+await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-relbox')].find(x=>/Alice/.test(x.textContent));
+  b.querySelector('.gp-relopen').click();});
+await pg.waitForTimeout(400);
+const panel=await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-relbox')].find(x=>/Alice/.test(x.textContent));
+  const pn=b.querySelector('.gp-relpanel'); if(!pn) return null;
+  return {heads:[...pn.querySelectorAll('.gp-th')].map(h=>h.textContent),
+    file:[...pn.querySelectorAll('.gp-cell.them')].map(c=>c.textContent.replace(/\s+/g,' ').trim()),
+    mine:[...pn.querySelectorAll('.gp-cell.mine')].map(c=>c.textContent.replace(/\s+/g,' ').trim()),
+    ticks:pn.querySelectorAll('input.gp-take').length,
+    pills:[...pn.querySelectorAll('.gp-relfoot button')].map(x=>x.textContent)};});
+ok('opening a relative shows the same side-by-side', panel && panel.heads.join('|')==='In the file|In your tree', JSON.stringify(panel&&panel.heads));
+ok('…with her details from the file and from your tree', panel && /Alice May/.test(panel.file.join(' ')) && /Alice Hokenstad/.test(panel.mine.join(' ')),
+   JSON.stringify(panel&&{f:panel.file,m:panel.mine}));
+ok('…her own ticks', panel && panel.ticks===2, panel&&panel.ticks);
+ok('…and what to do with her', panel && panel.pills.join('|')==='Bring in|Skip|Later', JSON.stringify(panel&&panel.pills));
+ok('she is not spoken for yet', await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-relbox')].find(x=>/Alice/.test(x.textContent));
+  return ![...b.querySelectorAll('.gp-relfoot button')].some(x=>x.classList.contains('primary'));}));
+await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-relbox')].find(x=>/Alice/.test(x.textContent));
+  const c=[...b.querySelectorAll('.gp-relpanel .gp-cell.them')].find(x=>/^Name/.test(x.textContent.trim()));
+  c.querySelector('input').click();});
+await pg.waitForTimeout(400);
+ok('ticking one of her details marks her to be brought in', await pg.evaluate(()=>{
+  const b=[...document.querySelectorAll('.gp-relbox')].find(x=>/Alice/.test(x.textContent));
+  const on=[...b.querySelectorAll('.gp-relfoot button')].find(x=>x.classList.contains('primary'));
+  return !!on && /bring in/i.test(on.textContent);}));
+ok('…and the fold stays open while you work', await pg.evaluate(()=>{
+  const b=[...document.querySelectorAll('.gp-relbox')].find(x=>/Alice/.test(x.textContent));
+  const c=[...b.querySelectorAll('.gp-relpanel .gp-cell.them')].find(x=>/^Name/.test(x.textContent.trim()));
+  return !!c && c.querySelector('input').checked;}));
 await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-foot button')].find(x=>/accept/i.test(x.textContent)); b.click();});
 await pg.waitForTimeout(400);
 
@@ -127,7 +194,7 @@ await pg.evaluate(()=>{const b=[...document.querySelectorAll('.ged-review .btn-r
 await pg.waitForTimeout(2500);
 const after=await state();
 const by=(n)=>after.persons.find(p=>new RegExp(n,'i').test(p.name||''));
-ok('only the one still-new person was added', after.persons.length===6, after.persons.length);
+ok('only the one still-new person was added', after.persons.length===8, after.persons.length);
 ok('…and nobody was duplicated', after.persons.filter(p=>/hauck/i.test(p.name)).length===2,
    after.persons.filter(p=>/hauck/i.test(p.name)).map(p=>p.name).join(', '));
 ok('Konrad keeps his spelling', !!by('Konrad') && !by('Conrad'), (by('Konrad')||{}).name);
@@ -145,6 +212,11 @@ const u=(after.unions||[]).find(x=>[x.a,x.b].includes(ruth&&ruth.id)&&[x.a,x.b].
 ok('the family in the file is recorded as a couple', !!u, JSON.stringify(u||null));
 ok('…with its marriage date and place', !!u && u.marriage==='1925-06-14' && /Sioux Falls/.test(u.marriagePlace||''), JSON.stringify(u&&{m:u.marriage,p:u.marriagePlace}));
 ok('…and their child linked to them', !!u && (after.links||[]).some(l=>l.union===u.id && l.child===(by('Konrad')||{}).id));
+ok('the married woman keeps the surname she goes by', /Boyd/.test((by('Verlyn')||{}).name||''), (by('Verlyn')||{}).name);
+ok('…and the file\'s surname becomes her maiden name, not a replacement',
+   (by('Verlyn')||{}).name==='Verlyn Elaine (Taylor) Boyd', (by('Verlyn')||{}).name);
+ok('a detail ticked inside a fold-out is brought in', (by('Alice')||{}).name==='Alice May Hokenstad', (by('Alice')||{}).name);
+ok('…along with what was already ticked for her', (by('Alice')||{}).birth===1931, (by('Alice')||{}).birth);
 ok('no page errors', errs.length===0, JSON.stringify(errs.slice(0,3)));
 fs.unlinkSync(tmp);
 await browser.close(); server.close(); console.log('DONE'); process.exit(0);
