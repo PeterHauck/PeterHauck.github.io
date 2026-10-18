@@ -480,6 +480,15 @@ button.btn.danger { color: var(--divorce); }
 .ged-start input { width: auto; flex: none; margin: 0; }
 .ged-resume { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: rgba(127,127,127,.12); font-size: 12.5px; }
 .ged-review .btn:disabled { opacity: .45; cursor: default; }
+.ged-prowwrap { display: flex; align-items: center; gap: 10px; }
+.ged-prowwrap .ged-prow { flex: 1; min-width: 0; }
+input.ged-pick { width: auto; flex: none; margin: 0; }
+.ged-pickall { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); margin-right: 2px; }
+.ged-pickall input { width: auto; flex: none; margin: 0; }
+.ged-batch { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 8px; padding: 8px 10px; border-radius: 10px; background: rgba(127,127,127,.14); }
+.ged-batch[hidden] { display: none; }
+.ged-batchn { font-size: 12.5px; font-weight: 600; margin-right: auto; }
+.gp-step { margin-left: auto; font-size: 12px; color: var(--muted); }
 .ged-prow:disabled { opacity: .55; cursor: default; }
 .ged-prow:disabled .ged-pstate { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
 .gp-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--panel-border); background: var(--panel); }
@@ -986,6 +995,8 @@ button, .btn, .swatch, .sex-toggle button, .people-list li, #toolbar button, #pa
 .vs-row.active { background: var(--accent); color: #fff; }
 #viewSwitchSec { border-bottom: 1px solid var(--panel-border); padding-bottom: 6px; margin-bottom: 6px; }
 .vsheet .vs-row { font-size: 15px; padding: 12px 12px; }
+.vs-head:first-child { margin-top: 2px; }
+.vs-head { margin: 14px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
 /* find-someone sheet (phones): type a name, tap to fly there */
 .find-box { width: 100%; padding: 12px; font-size: 16px; margin-bottom: 8px; }
 .find-list { list-style: none; margin: 0; padding: 0; }

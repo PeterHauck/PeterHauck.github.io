@@ -140,7 +140,6 @@
           <div class="btn-row" style="margin-top:6px">
             <button class="btn wide" id="gedcomBtn">🌳 Export for Ancestry (GEDCOM)</button>
             <button class="btn wide" id="gedcomInBtn">🌲 Bring in a GEDCOM</button>
-            <input type="file" id="gedcomInput" accept=".ged,.zip,application/zip" hidden />
           </div>
           <p class="hint" style="margin-top:6px">Names, dates, families and obituary text — the format Ancestry, FamilySearch and MyHeritage all read. Your private notes and photos stay here. Bringing one in shows you everything it would change before anything happens.</p>
 
@@ -352,6 +351,10 @@
   </div>
 
   <div id="toast" class="toast"></div>
+
+  <!-- kept outside the side panel, which is hidden on phones, so the file
+       picker can still be opened from the ☰ sheet there -->
+  <input type="file" id="gedcomInput" accept=".ged,.zip,application/zip" hidden />
 
   <!-- Load the scripts with a per-load cache-buster (in order) so the newest
        code always wins over anything the browser cached. The multi-megabyte
