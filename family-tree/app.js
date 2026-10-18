@@ -5170,10 +5170,145 @@
     { key: "deathPlace", label: "Died in", file: (g) => g.deathPlace || "", here: (p) => p.deathPlace || "" },
   ];
 
+  // Ancestry files a married woman under her maiden name; this tree writes her
+  // under both — "Mary Esther (Eide) Boyd". When every word of the file's name
+  // is already in ours, that's the same name told the shorter way, not a
+  // disagreement to settle.
+  function nameWrittenShorter(g, p) {
+    if (!p) return false;
+    const mine = norml(p.name).replace(/[()"]/g, " ").split(/\s+/).filter(Boolean);
+    const file = norml(g.full).replace(/[()"]/g, " ").split(/\s+/).filter(Boolean);
+    if (!file.length || !mine.length) return false;
+    if (file.join(" ") === mine.join(" ")) return false;
+    return file.every((w) => mine.includes(w));
+  }
+
+  // Taking a name from the file without losing our way of writing it: the
+  // given names are replaced, but a surname that disagrees with a woman's
+  // becomes her maiden name rather than replacing her married one.
+  function takeGedName(q, g) {
+    const given = String(g.given || "").trim().split(/\s+/).filter(Boolean);
+    if (given.length) { q.first = given[0]; q.middle = middleAsTyped(given.slice(1).join(" ")); }
+    const surn = String(g.surn || "").trim();
+    if (surn) {
+      if (!q.last) q.last = surn;
+      else if (norml(q.last) !== norml(surn)) {
+        if (q.sex === "female") { if (!q.maiden) q.maiden = surn; }
+        else q.last = surn;
+      }
+    }
+    q.name = composeName(q) || q.name;
+  }
+
+  // What a card offers to take for one person: a field the file has that we
+  // either don't, or spell differently.
+  function gedOffers(ent) {
+    return GED_FIELDS.filter((f) => {
+      const a = String(f.file(ent.g) || "").trim();
+      if (!a) return false;
+      const b = ent.p ? String(f.here(ent.p) || "").trim() : "";
+      if (!ent.p) return false;
+      if (f.key === "name" && nameWrittenShorter(ent.g, ent.p)) return false;
+      return !b || a.toLowerCase() !== b.toLowerCase();
+    }).map((f) => f.key);
+  }
+
+  // The two-column comparison — the file's version of somebody beside ours,
+  // field by field, each line the file could give us carrying its own tick.
+  // The same block serves the card itself and every relative opened inside it.
+  function gedCompare(ent, onTick) {
+    const grid = document.createElement("div"); grid.className = "gp-grid";
+    const th = (txt, cls) => { const d = document.createElement("div"); d.className = "gp-th " + cls; d.textContent = txt; grid.appendChild(d); };
+    th("In the file", "them"); th("In your tree", "mine");
+    const offered = gedOffers(ent);
+    GED_FIELDS.forEach((f) => {
+      const a = String(f.file(ent.g) || "").trim();
+      const b = ent.p ? String(f.here(ent.p) || "").trim() : "";
+      if (!a && !b) return;
+      const shorter = f.key === "name" && nameWrittenShorter(ent.g, ent.p);
+      const differs = !!a && !!b && a.toLowerCase() !== b.toLowerCase();
+      const theirs = document.createElement("div"); theirs.className = "gp-cell them" + (differs && !shorter ? " differs" : "");
+      const mineC = document.createElement("div"); mineC.className = "gp-cell mine";
+      if (offered.includes(f.key)) {
+        const c = document.createElement("input"); c.type = "checkbox"; c.className = "gp-take";
+        c.checked = ent.take.has(f.key);
+        c.onchange = () => {
+          if (c.checked) ent.take.add(f.key); else ent.take.delete(f.key);
+          if (onTick) onTick(ent, c.checked);
+        };
+        theirs.appendChild(c);
+      }
+      const wrap = document.createElement("div"); wrap.className = "gp-vals";
+      const lab = document.createElement("div"); lab.className = "gp-flabel"; lab.textContent = f.label;
+      const val = document.createElement("div"); val.className = "gp-fval"; val.textContent = a || "—";
+      wrap.appendChild(lab); wrap.appendChild(val);
+      if (shorter) { const tag = document.createElement("span"); tag.className = "gp-diff same"; tag.textContent = "Same name, written shorter"; wrap.appendChild(tag); }
+      else if (differs) { const tag = document.createElement("span"); tag.className = "gp-diff"; tag.textContent = "Different"; wrap.appendChild(tag); }
+      theirs.appendChild(wrap);
+      const l2 = document.createElement("div"); l2.className = "gp-flabel"; l2.textContent = f.label;
+      const v2 = document.createElement("div"); v2.className = "gp-fval"; v2.textContent = b || (ent.p ? "—" : "");
+      mineC.appendChild(l2); mineC.appendChild(v2);
+      grid.appendChild(theirs); grid.appendChild(mineC);
+    });
+    return grid;
+  }
+
+  // "They're already here" — choose who, and whatever card you're looking at
+  // turns into a comparison against that person.
+  function gedPickExisting(ent, all, after) {
+    const sheet = document.createElement("div"); sheet.className = "modal-backdrop";
+    const box = document.createElement("div"); box.className = "modal gp-pick";
+    const h = document.createElement("h2"); h.textContent = "Who are they already?"; box.appendChild(h);
+    const hint = document.createElement("div"); hint.className = "hint";
+    hint.textContent = "Pick the person in your tree that " + (ent.g.full || "this person") + " is. Nothing is added — the file's details are offered against them instead.";
+    box.appendChild(hint);
+    const inp = document.createElement("input"); inp.type = "search"; inp.className = "gp-search"; inp.placeholder = "Search your tree…";
+    box.appendChild(inp);
+    const list = document.createElement("div"); list.className = "gp-picklist"; box.appendChild(list);
+    // Everybody is offered, including people the file already matched to
+    // somebody else — it says so, and choosing them hands them over rather
+    // than hiding them and leaving you wondering where they went.
+    const spoken = new Map();
+    all.list.forEach((x) => { if (x !== ent && x.p) spoken.set(x.p.id, x); });
+    const render = () => {
+      const q = norml(inp.value);
+      list.textContent = "";
+      state.persons
+        .filter((p) => !q || norml(p.name).includes(q))
+        .slice(0, 60)
+        .forEach((p) => {
+          const b = document.createElement("button"); b.type = "button"; b.className = "gp-pickrow";
+          const n = document.createElement("span"); n.className = "gp-pickname"; n.textContent = p.name;
+          const d = document.createElement("span"); d.className = "gp-pickdate";
+          const other = spoken.get(p.id);
+          d.textContent = other ? "already matched to " + (other.g.full || "someone in the file") : (personDatesLine(p) || "");
+          if (other) b.classList.add("gp-spoken");
+          b.appendChild(n); b.appendChild(d);
+          b.onclick = () => {
+            if (other) { other.p = null; other.kind = "new"; other.take = new Set(); }
+            ent.p = p; ent.kind = "linked"; ent.decision = "accept";
+            ent.take = new Set(gedGains(ent.g, p).map((f) => f.field));
+            sheet.remove(); if (after) after();
+          };
+          list.appendChild(b);
+        });
+      if (!list.children.length) { const n = document.createElement("div"); n.className = "hint"; n.textContent = "Nobody by that name."; list.appendChild(n); }
+    };
+    inp.addEventListener("input", render); render();
+    const row = document.createElement("div"); row.className = "btn-row";
+    const c = document.createElement("button"); c.type = "button"; c.className = "btn"; c.textContent = "Cancel";
+    c.onclick = () => sheet.remove();
+    row.appendChild(c); box.appendChild(row);
+    sheet.appendChild(box); document.body.appendChild(sheet);
+    sheet.addEventListener("click", (ev) => { if (ev.target === sheet) sheet.remove(); });
+    setTimeout(() => { try { inp.focus(); } catch (err) {} }, 0);
+  }
+
   function openPersonReview(e, all, onClose) {
     const back = document.createElement("div"); back.className = "modal-backdrop ged-person-back";
     const m = document.createElement("div"); m.className = "modal ged-person";
     const close = (decided) => { back.remove(); if (onClose) onClose(decided); };
+    const open = {};   // which relatives are folded open, kept across redraws
     const draw = () => {
       m.textContent = "";
       const head = document.createElement("div"); head.className = "gp-head";
@@ -5192,51 +5327,26 @@
         m.appendChild(n);
         const link = document.createElement("button"); link.type = "button"; link.className = "btn wide gp-link";
         link.textContent = "🔗 This isn't new — they're already in my tree";
-        link.onclick = () => pickExisting();
+        link.onclick = () => gedPickExisting(e, all, draw);
         m.appendChild(link);
       }
-      const grid = document.createElement("div"); grid.className = "gp-grid";
-      const th = (txt, cls) => { const d = document.createElement("div"); d.className = "gp-th " + cls; d.textContent = txt; grid.appendChild(d); };
-      th("In the file", "them"); th("In your tree", "mine");
-      GED_FIELDS.forEach((f) => {
-        const a = String(f.file(e.g) || "").trim();
-        const b = e.p ? String(f.here(e.p) || "").trim() : "";
-        if (!a && !b) return;
-        const differs = !!a && !!b && a.toLowerCase() !== b.toLowerCase();
-        const theirs = document.createElement("div"); theirs.className = "gp-cell them" + (differs ? " differs" : "");
-        const mineC = document.createElement("div"); mineC.className = "gp-cell mine";
-        const takeable = !!a && (!b || differs);
-        if (takeable && f.key !== "name") {
-          const c = document.createElement("input"); c.type = "checkbox"; c.className = "gp-take";
-          c.checked = e.take.has(f.key);
-          c.onchange = () => { if (c.checked) e.take.add(f.key); else e.take.delete(f.key); };
-          theirs.appendChild(c);
-        }
-        const wrap = document.createElement("div"); wrap.className = "gp-vals";
-        const lab = document.createElement("div"); lab.className = "gp-flabel"; lab.textContent = f.label;
-        const val = document.createElement("div"); val.className = "gp-fval"; val.textContent = a || "—";
-        wrap.appendChild(lab); wrap.appendChild(val);
-        if (differs) { const tag = document.createElement("span"); tag.className = "gp-diff"; tag.textContent = "Different"; wrap.appendChild(tag); }
-        theirs.appendChild(wrap);
-        const l2 = document.createElement("div"); l2.className = "gp-flabel"; l2.textContent = f.label;
-        const v2 = document.createElement("div"); v2.className = "gp-fval"; v2.textContent = b || (e.p ? "—" : "");
-        mineC.appendChild(l2); mineC.appendChild(v2);
-        grid.appendChild(theirs); grid.appendChild(mineC);
-      });
-      m.appendChild(grid);
-      // the family the file puts them in
+      m.appendChild(gedCompare(e));
+      // the family the file puts them in — each one opens out into the same
+      // comparison, so a whole household can be gone through without leaving
+      // this card
       if (e.ties && e.ties.length) {
         const fh = document.createElement("div"); fh.className = "gp-subhead";
         fh.textContent = (e.g.given || e.g.full || "Their") + "’s family, as the file has it";
         m.appendChild(fh);
         const seen = new Set();
-        e.ties.forEach((tie, i) => {
+        e.ties.forEach((tie) => {
           const o = all.byGid[tie.other];
           const key = tie.role + ":" + tie.other;
           if (!o || seen.has(key)) return; seen.add(key);
-          const r = document.createElement("label"); r.className = "gp-rel";
-          const c = document.createElement("input"); c.type = "checkbox"; c.checked = e.family.has(key) || true;
           if (!e.family.has(key)) e.family.add(key);
+          const box = document.createElement("div"); box.className = "gp-relbox" + (open[key] ? " on" : "");
+          const r = document.createElement("div"); r.className = "gp-rel";
+          const c = document.createElement("input"); c.type = "checkbox"; c.className = "gp-relbox-tick"; c.checked = e.family.has(key);
           c.onchange = () => { if (c.checked) e.family.add(key); else e.family.delete(key); };
           const txt = document.createElement("div"); txt.className = "gp-reltext";
           const n2 = document.createElement("div"); n2.className = "gp-relname"; n2.textContent = o.g.full || "Unnamed";
@@ -5246,7 +5356,16 @@
             + (o.p ? "  ·  already in your tree" : "  ·  would be added");
           txt.appendChild(n2); txt.appendChild(s2);
           r.appendChild(c); r.appendChild(txt);
-          m.appendChild(r);
+          const offers = gedOffers(o).length;
+          if (offers) { const b = document.createElement("span"); b.className = "gp-relcount"; b.textContent = String(offers); r.appendChild(b); }
+          const arrow = document.createElement("button"); arrow.type = "button"; arrow.className = "gp-relopen";
+          arrow.textContent = open[key] ? "⌃" : "⌄";
+          arrow.title = open[key] ? "Close" : "Match their details";
+          arrow.onclick = () => { open[key] = !open[key]; draw(); };
+          r.appendChild(arrow);
+          box.appendChild(r);
+          if (open[key]) box.appendChild(gedRelPanel(o, all, draw));
+          m.appendChild(box);
         });
       }
       const foot = document.createElement("div"); foot.className = "gp-foot";
@@ -5256,54 +5375,30 @@
       mk("Accept", "primary", () => { e.decision = "accept"; close(true); });
       m.appendChild(foot);
     };
-    // "they're already here" — choose who, and the card becomes a comparison
-    const pickExisting = () => {
-      const sheet = document.createElement("div"); sheet.className = "modal-backdrop";
-      const box = document.createElement("div"); box.className = "modal gp-pick";
-      const h = document.createElement("h2"); h.textContent = "Who are they already?"; box.appendChild(h);
-      const hint = document.createElement("div"); hint.className = "hint";
-      hint.textContent = "Pick the person in your tree that " + (e.g.full || "this person") + " is. Nothing is added — the file's details are offered against them instead.";
-      box.appendChild(hint);
-      const inp = document.createElement("input"); inp.type = "search"; inp.className = "gp-search"; inp.placeholder = "Search your tree…";
-      box.appendChild(inp);
-      const list = document.createElement("div"); list.className = "gp-picklist"; box.appendChild(list);
-      // Everybody is offered, including people the file already matched to
-      // somebody else — it says so, and choosing them hands them over rather
-      // than hiding them and leaving you wondering where they went.
-      const spoken = new Map();
-      all.list.forEach((x) => { if (x !== e && x.p) spoken.set(x.p.id, x); });
-      const render = () => {
-        const q = norml(inp.value);
-        list.textContent = "";
-        state.persons
-          .filter((p) => !q || norml(p.name).includes(q))
-          .slice(0, 60)
-          .forEach((p) => {
-            const b = document.createElement("button"); b.type = "button"; b.className = "gp-pickrow";
-            const n = document.createElement("span"); n.className = "gp-pickname"; n.textContent = p.name;
-            const d = document.createElement("span"); d.className = "gp-pickdate";
-            const other = spoken.get(p.id);
-            d.textContent = other ? "already matched to " + (other.g.full || "someone in the file") : (personDatesLine(p) || "");
-            if (other) b.classList.add("gp-spoken");
-            b.appendChild(n); b.appendChild(d);
-            b.onclick = () => {
-              if (other) { other.p = null; other.kind = "new"; other.take = new Set(); }
-              e.p = p; e.kind = "linked"; e.decision = "accept";
-              e.take = new Set(gedGains(e.g, p).map((f) => f.field));
-              sheet.remove(); draw();
-            };
-            list.appendChild(b);
-          });
-        if (!list.children.length) { const n = document.createElement("div"); n.className = "hint"; n.textContent = "Nobody by that name."; list.appendChild(n); }
-      };
-      inp.addEventListener("input", render); render();
-      const row = document.createElement("div"); row.className = "btn-row";
-      const c = document.createElement("button"); c.type = "button"; c.className = "btn"; c.textContent = "Cancel";
-      c.onclick = () => sheet.remove();
-      row.appendChild(c); box.appendChild(row);
-      sheet.appendChild(box); document.body.appendChild(sheet);
-      sheet.addEventListener("click", (ev) => { if (ev.target === sheet) sheet.remove(); });
-      setTimeout(() => { try { inp.focus(); } catch (err) {} }, 0);
+    // A relative, opened out: their side-by-side, and what happens to them.
+    const gedRelPanel = (o, all2, redraw) => {
+      const panel = document.createElement("div"); panel.className = "gp-relpanel";
+      if (!o.p) {
+        const n = document.createElement("div"); n.className = "gp-newnote";
+        n.textContent = "Not found in your tree — would be added as a new person.";
+        panel.appendChild(n);
+        const link = document.createElement("button"); link.type = "button"; link.className = "btn wide gp-link";
+        link.textContent = "🔗 They're already in my tree";
+        link.onclick = () => gedPickExisting(o, all2, redraw);
+        panel.appendChild(link);
+      }
+      // ticking a detail here is a decision about that person, so say so
+      panel.appendChild(gedCompare(o, (ent, on) => { if (on) { ent.decision = "accept"; redraw(); } }));
+      const row = document.createElement("div"); row.className = "gp-relfoot";
+      [["Bring in", "accept"], ["Skip", "ignore"], ["Later", "later"]].forEach(([label, d]) => {
+        const b = document.createElement("button"); b.type = "button";
+        b.className = "btn small" + (o.decision === d ? " primary" : "");
+        b.textContent = label;
+        b.onclick = () => { o.decision = d; redraw(); };
+        row.appendChild(b);
+      });
+      panel.appendChild(row);
+      return panel;
     };
     draw();
     back.appendChild(m); document.body.appendChild(back);
@@ -5407,7 +5502,8 @@
       let did = false;
       e.take.forEach((field) => {
         const g = e.g;
-        if (field === "birthDate" && g.birthDate) { q.birthDate = g.birthDate; q.birth = g.birth || q.birth; did = true; }
+        if (field === "name" && g.full) { takeGedName(q, g); did = true; }
+        else if (field === "birthDate" && g.birthDate) { q.birthDate = g.birthDate; q.birth = g.birth || q.birth; did = true; }
         else if (field === "deathDate" && g.deathDate) { q.deathDate = g.deathDate; q.death = g.death || q.death; q.deceased = true; did = true; }
         else if (field === "birthPlace" && g.birthPlace) { q.birthPlace = g.birthPlace; did = true; }
         else if (field === "deathPlace" && g.deathPlace) { q.deathPlace = g.deathPlace; did = true; }

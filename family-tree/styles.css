@@ -452,10 +452,20 @@ button.btn.danger { color: var(--divorce); }
 .gp-fval { white-space: pre-wrap; word-break: break-word; }
 .gp-diff { display: inline-block; margin-top: 4px; padding: 1px 7px; border-radius: 4px; font-size: 11px; background: rgba(127,127,127,.28); color: var(--ink); }
 .gp-subhead { padding: 12px 14px 4px; font-weight: 700; font-size: 13.5px; }
-.gp-rel { display: flex; gap: 10px; align-items: flex-start; padding: 8px 14px; border-top: 1px solid var(--panel-border); cursor: pointer; }
+.gp-rel { display: flex; gap: 10px; align-items: flex-start; padding: 8px 14px; border-top: 1px solid var(--panel-border); }
 .gp-rel input { width: auto; flex: none; margin-top: 3px; }
+.gp-reltext { flex: 1; min-width: 0; }
 .gp-relname { font-size: 13.5px; }
 .gp-relrole { color: var(--muted); font-size: 12px; }
+.gp-relcount { flex: none; min-width: 20px; height: 20px; border-radius: 10px; background: var(--adopt); color: #fff; font-size: 11.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; padding: 0 6px; margin-top: 2px; }
+.gp-relopen { flex: none; border: none; background: none; color: var(--ink); font-size: 15px; width: 28px; height: 26px; cursor: pointer; opacity: .75; }
+.gp-relopen:hover { opacity: 1; }
+.gp-relbox.on { background: rgba(127,127,127,.07); }
+.gp-relpanel { padding-bottom: 6px; }
+.gp-relpanel .gp-grid { overflow: visible; }
+.gp-relpanel .gp-link { margin-bottom: 8px; }
+.gp-relfoot { display: flex; gap: 6px; justify-content: flex-end; padding: 8px 14px 2px; }
+.gp-diff.same { background: none; color: var(--muted); padding-left: 0; font-style: italic; }
 .gp-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--panel-border); background: var(--panel); }
 
 /* "they're already in my tree" — find who */
