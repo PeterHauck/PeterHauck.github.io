@@ -5503,7 +5503,7 @@
     setTimeout(() => { try { inp.focus(); } catch (err) {} }, 0);
   }
 
-  function openPersonReview(e, all, onClose) {
+  function openPersonReview(e, all, onClose, step) {
     const back = document.createElement("div"); back.className = "modal-backdrop ged-person-back";
     const m = document.createElement("div"); m.className = "modal ged-person";
     const close = (decided) => { back.remove(); if (onClose) onClose(decided); };
@@ -5514,7 +5514,9 @@
       const x = document.createElement("button"); x.type = "button"; x.className = "gp-x"; x.textContent = "✕";
       x.onclick = () => close(false);
       const t = document.createElement("div"); t.className = "gp-title"; t.textContent = "Review person";
-      head.appendChild(x); head.appendChild(t); m.appendChild(head);
+      head.appendChild(x); head.appendChild(t);
+      if (step) { const c = document.createElement("div"); c.className = "gp-step"; c.textContent = step.at + " of " + step.of; head.appendChild(c); }
+      m.appendChild(head);
       const gv = gedView(e);
       const who = document.createElement("div"); who.className = "gp-who";
       const nm = document.createElement("div"); nm.className = "gp-name"; nm.textContent = gv.full || "Unnamed";
@@ -5633,7 +5635,20 @@
       done: all.list.filter((e) => e.done).length,
       undecided: all.list.filter((e) => !e.decision).length,
     });
-    let body, tally, go;
+    let body, tally, go, batch;
+    const picked = new Set();
+    // Tick a few, then go through them one after another: each decision moves
+    // straight on to the next, so a run of likely matches can be settled in
+    // one sitting instead of one trip back to the list per person.
+    const walkThrough = (queue, i) => {
+      if (i >= queue.length) { picked.clear(); drawList(); return; }
+      const e = queue[i];
+      openPersonReview(e, all, (decided) => {
+        if (!decided) { drawList(); return; }        // closed without deciding: stop here
+        picked.delete(e);
+        walkThrough(queue, i + 1);
+      }, { at: i + 1, of: queue.length });
+    };
     const left = (kind) => all.list.filter((e) => !e.done && e.kind === kind);
     const groupsOf = () => [
       { key: "likely", title: "Same person?", note: "A likely match the file and your tree don't agree on enough to be sure about. Open one to compare them side by side.", items: left("likely") },
@@ -5650,6 +5665,12 @@
         const n = document.createElement("div"); n.className = "hint"; n.textContent = grp.note; sec.appendChild(n);
         if (!grp.quiet) {
           const bulk = document.createElement("div"); bulk.className = "ged-bulk";
+          const allOn = grp.items.every((e) => picked.has(e));
+          const pickAll = document.createElement("label"); pickAll.className = "ged-pickall";
+          const pa = document.createElement("input"); pa.type = "checkbox"; pa.checked = allOn;
+          pa.onchange = () => { grp.items.forEach((e) => { if (pa.checked) picked.add(e); else picked.delete(e); }); drawList(); };
+          const pl = document.createElement("span"); pl.textContent = "Select";
+          pickAll.appendChild(pa); pickAll.appendChild(pl); bulk.appendChild(pickAll);
           [["Accept all", "accept"], ["Ignore all", "ignore"]].forEach(([label, d]) => {
             const b = document.createElement("button"); b.type = "button"; b.className = "btn small"; b.textContent = label;
             b.onclick = () => { grp.items.forEach((e) => { e.decision = d; e.touched = true; }); drawList(); };
@@ -5667,9 +5688,15 @@
           const st = document.createElement("span"); st.className = "ged-pstate";
           st.textContent = e.done ? "done" : e.decision === "accept" ? "✓" : e.decision === "ignore" ? "✕" : e.decision === "later" ? "…" : "›";
           r.appendChild(nm); r.appendChild(sub); r.appendChild(st);
-          if (e.done) r.disabled = true;
-          else r.onclick = () => openPersonReview(e, all, () => drawList());
-          sec.appendChild(r);
+          if (e.done) { r.disabled = true; sec.appendChild(r); return; }
+          r.onclick = () => openPersonReview(e, all, () => drawList());
+          const wrap = document.createElement("div"); wrap.className = "ged-prowwrap";
+          const tick = document.createElement("input"); tick.type = "checkbox"; tick.className = "ged-pick";
+          tick.checked = picked.has(e);
+          tick.title = "Pick for a run-through";
+          tick.onchange = () => { if (tick.checked) picked.add(e); else picked.delete(e); drawBatch(); };
+          wrap.appendChild(tick); wrap.appendChild(r);
+          sec.appendChild(wrap);
         });
         body.appendChild(sec);
       });
@@ -5678,7 +5705,24 @@
         + (c.undecided ? " · " + c.undecided + " not looked at yet" : "")
         + (c.done ? " · " + c.done + " already brought in" : "");
       if (go) { go.disabled = !c.accept; go.textContent = c.accept ? "Bring these in" : "Nothing chosen yet"; }
+      drawBatch();
       gedRemember(all);
+    };
+    // the bar that appears once anybody is ticked
+    const drawBatch = () => {
+      if (!batch) return;
+      const queue = all.list.filter((e) => picked.has(e));
+      batch.hidden = !queue.length;
+      if (!queue.length) return;
+      batch.textContent = "";
+      const n = document.createElement("span"); n.className = "ged-batchn";
+      n.textContent = queue.length + (queue.length === 1 ? " picked" : " picked");
+      batch.appendChild(n);
+      const mk = (label, cls, fn) => { const b = document.createElement("button"); b.type = "button"; b.className = "btn small " + cls; b.textContent = label; b.onclick = fn; batch.appendChild(b); return b; };
+      mk("Go through them", "primary", () => walkThrough(queue, 0));
+      mk("Accept", "", () => { queue.forEach((e) => { e.decision = "accept"; e.touched = true; }); picked.clear(); drawList(); });
+      mk("Ignore", "", () => { queue.forEach((e) => { e.decision = "ignore"; e.touched = true; }); picked.clear(); drawList(); });
+      mk("Clear", "", () => { picked.clear(); drawList(); });
     };
     const h = document.createElement("h2"); h.textContent = "Bring in a GEDCOM"; m.appendChild(h);
     const hint = document.createElement("div"); hint.className = "hint";
@@ -5713,6 +5757,7 @@
     }
     tally = document.createElement("div"); tally.className = "ged-tally"; m.appendChild(tally);
     body = document.createElement("div"); body.className = "ged-body"; m.appendChild(body);
+    batch = document.createElement("div"); batch.className = "ged-batch"; batch.hidden = true; m.appendChild(batch);
     const btns = document.createElement("div"); btns.className = "btn-row";
     const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "Close";
     cancel.onclick = close;
@@ -9610,11 +9655,26 @@
     const back = document.createElement("div"); back.className = "pcard-back"; back.id = "viewSheetBack";
     const card = document.createElement("div"); card.className = "pcard vsheet"; back.appendChild(card);
     const head = document.createElement("div"); head.className = "pcard-head";
-    const h = document.createElement("h2"); h.textContent = "Views"; h.style.margin = "0"; head.appendChild(h);
+    const h = document.createElement("h2"); h.textContent = "Menu"; h.style.margin = "0"; head.appendChild(h);
     const x = document.createElement("button"); x.className = "pcard-x"; x.textContent = "✕"; x.onclick = () => back.remove(); head.appendChild(x);
     card.appendChild(head);
     const list = document.createElement("div"); list.className = "pcard-body"; card.appendChild(list);
-    buildViewSwitchList(list, () => back.remove());
+    const h1 = document.createElement("h3"); h1.className = "vs-head"; h1.textContent = "Views"; list.appendChild(h1);
+    const views = document.createElement("div"); list.appendChild(views);
+    buildViewSwitchList(views, () => back.remove());
+    // The side panel is desktop-only, so the things that live in it would
+    // otherwise be out of reach on a phone. The ones worth having here are.
+    if (!readonly) {
+      const h2 = document.createElement("h3"); h2.className = "vs-head"; h2.textContent = "Ancestry files";
+      list.appendChild(h2);
+      const act = (label, fn) => {
+        const b = document.createElement("button"); b.type = "button"; b.className = "vs-row";
+        b.textContent = label; b.onclick = () => { back.remove(); fn(); };
+        list.appendChild(b);
+      };
+      act("🌲 Bring in a GEDCOM", () => { const i = $("#gedcomInput"); if (i) i.click(); });
+      act("🌳 Export for Ancestry (GEDCOM)", () => { const b = $("#gedcomBtn"); if (b) b.click(); });
+    }
     back.addEventListener("click", (e) => { if (e.target === back) back.remove(); });
     document.body.appendChild(back);
   }

@@ -92,6 +92,57 @@ const groupOf=(name)=>pg.evaluate((n)=>{const secs=[...document.querySelectorAll
 ok('Conrad is matched to Konrad, not treated as new', /Matched for certain/.test(await groupOf('Conrad')||''), await groupOf('Conrad'));
 ok('Jeffery is matched to Jeffrey', /Matched for certain/.test(await groupOf('Jeffery')||''), await groupOf('Jeffery'));
 
+// --- ticking a few and going through them one after another
+const likelySec=()=>pg.evaluate(()=>{const s=[...document.querySelectorAll('.ged-sec')]
+  .find(x=>/Same person/.test(x.querySelector('h3').textContent));
+  return s?[...s.querySelectorAll('.ged-pname')].map(x=>x.textContent):null;});
+ok('the likely matches each have a tick box', await pg.evaluate(()=>{const s=[...document.querySelectorAll('.ged-sec')]
+  .find(x=>/Same person/.test(x.querySelector('h3').textContent));
+  return s.querySelectorAll('input.ged-pick').length===3;}),
+  await pg.evaluate(()=>{const s=[...document.querySelectorAll('.ged-sec')]
+    .find(x=>/Same person/.test(x.querySelector('h3').textContent)); return s.querySelectorAll('input.ged-pick').length;}));
+ok('nothing is offered until you tick somebody', await pg.evaluate(()=>document.querySelector('.ged-batch').hidden));
+await pg.evaluate(()=>{const s=[...document.querySelectorAll('.ged-sec')]
+  .find(x=>/Same person/.test(x.querySelector('h3').textContent));
+  [...s.querySelectorAll('input.ged-pick')].slice(0,2).forEach(c=>c.click());});
+await pg.waitForTimeout(300);
+ok('ticking people offers to work through them', await pg.evaluate(()=>{
+  const b=document.querySelector('.ged-batch');
+  return !b.hidden && /2 picked/.test(b.textContent) && /go through them/i.test(b.textContent);}),
+  await pg.evaluate(()=>document.querySelector('.ged-batch').textContent));
+const picked=(await likelySec()).slice(0,2);
+await pg.evaluate(()=>{const b=[...document.querySelectorAll('.ged-batch button')].find(x=>/go through them/i.test(x.textContent)); b.click();});
+await pg.waitForSelector('.ged-person',{timeout:8000}); await pg.waitForTimeout(400);
+ok('…which opens the first of them with their place in the run', await pg.evaluate(()=>{
+  const m=document.querySelector('.ged-person');
+  return {who:m.querySelector('.gp-name').textContent, step:(m.querySelector('.gp-step')||{}).textContent};})
+  .then(r=>r.who===picked[0] && r.step==='1 of 2'),
+  JSON.stringify(await pg.evaluate(()=>({who:document.querySelector('.gp-name').textContent,
+    step:(document.querySelector('.gp-step')||{}).textContent}))));
+await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-foot button')].find(x=>/accept/i.test(x.textContent)); b.click();});
+await pg.waitForTimeout(600);
+ok('…deciding moves straight on to the next', await pg.evaluate(()=>{
+  const m=document.querySelector('.ged-person'); if(!m) return null;
+  return {who:m.querySelector('.gp-name').textContent, step:(m.querySelector('.gp-step')||{}).textContent};})
+  .then(r=>!!r && r.who===picked[1] && r.step==='2 of 2'),
+  JSON.stringify(await pg.evaluate(()=>document.querySelector('.ged-person')?
+    {who:document.querySelector('.gp-name').textContent,step:(document.querySelector('.gp-step')||{}).textContent}:null)));
+await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-foot button')].find(x=>/ignore/i.test(x.textContent)); b.click();});
+await pg.waitForTimeout(600);
+ok('…and the run ends back at the list', await pg.evaluate(()=>!document.querySelector('.ged-person') && !!document.querySelector('.ged-review')));
+// three certain matches were already taken in a batch above, so one more
+ok('…with both of them settled', /4 to bring in · 1 ignored/.test(await pg.evaluate(()=>document.querySelector('.ged-tally').textContent)),
+   await pg.evaluate(()=>document.querySelector('.ged-tally').textContent));
+ok('…and the ticks cleared', await pg.evaluate(()=>document.querySelector('.ged-batch').hidden
+   && ![...document.querySelectorAll('input.ged-pick')].some(c=>c.checked)));
+// put them back to undecided so the rest of the test reads as it did
+await pg.evaluate(()=>{const s=[...document.querySelectorAll('.ged-sec')]
+  .find(x=>/Same person/.test(x.querySelector('h3').textContent));
+  [...s.querySelectorAll('input.ged-pick')].slice(0,2).forEach(c=>c.click());});
+await pg.waitForTimeout(200);
+await pg.evaluate(()=>{const b=[...document.querySelectorAll('.ged-batch button')].find(x=>/^ignore$/i.test(x.textContent.trim())); b.click();});
+await pg.waitForTimeout(300);
+
 // --- the per-person card, the way Ancestry shows one
 const openRow=async(name)=>{ await pg.evaluate((n)=>{const r=[...document.querySelectorAll('.ged-prow')]
     .find(x=>x.querySelector('.ged-pname').textContent.includes(n)); if(r) r.click();},name);
