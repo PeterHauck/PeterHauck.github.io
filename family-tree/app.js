@@ -5133,11 +5133,58 @@
      ignore, or leave for later. Somebody the file thinks is new can be told
      they aren't: pick who they already are here, and the card turns into the
      same comparison as any other match.                                    */
-  function gedEntries({ people, fams, sure, likely, fresh }) {
+  /* Sorting a big file is work, and work should survive closing the lid. What
+     has been accepted, ignored, left for later, linked by hand or corrected is
+     kept against the file it came from, so the same file picked again carries
+     on where it stopped instead of starting the sorting over. Only the
+     sorting is kept — the tree itself is only ever changed by Bring these in. */
+  const GED_WORK = "familyTree.gedWork";
+  const GED_BLANK = "familyTree.gedBlankStart";
+  // Nobody is chosen until you choose them, unless you say otherwise.
+  const gedBlankStart = () => localStorage.getItem(GED_BLANK) !== "0";
+  const setGedBlankStart = (on) => { try { localStorage.setItem(GED_BLANK, on ? "1" : "0"); } catch (e) {} };
+  function gedFileKey(name, text) {
+    let h = 2166136261;
+    for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return String(name || "ged").replace(/[^a-z0-9]+/gi, "-").slice(0, 40) + "-" + (h >>> 0).toString(36);
+  }
+  const gedWorkBook = () => { try { return JSON.parse(localStorage.getItem(GED_WORK) || "{}") || {}; } catch (e) { return {}; } };
+  const gedSaved = (key) => { const b = gedWorkBook()[key]; return b && b.entries ? b.entries : null; };
+  function gedRemember(all) {
+    if (!all || !all.key) return;
+    const entries = {};
+    all.list.forEach((e) => {
+      if (!(e.done || e.touched || e.edit || e.kind === "linked" || e.decision)) return;
+      entries[e.g.gid] = { decision: e.decision || null, take: [...e.take], touched: !!e.touched,
+        done: !!e.done, edit: e.edit || null, pid: e.kind === "linked" && e.p ? e.p.id : null,
+        madeId: e.madeId || null };
+    });
+    const book = gedWorkBook();
+    book[all.key] = { name: all.name || "", at: Date.now(), entries };
+    Object.keys(book).sort((a, b) => (book[b].at || 0) - (book[a].at || 0)).slice(5).forEach((k) => delete book[k]);
+    try { localStorage.setItem(GED_WORK, JSON.stringify(book)); } catch (e) {}
+  }
+  function gedForget(key) {
+    const book = gedWorkBook(); delete book[key];
+    try { localStorage.setItem(GED_WORK, JSON.stringify(book)); } catch (e) {}
+  }
+
+  function gedEntries({ people, fams, sure, likely, fresh, key, name }, saved, blank) {
     const byGid = {};
     const mk = (g, p, kind) => {
-      const e = { g, p, kind, decision: kind === "new" || kind === "sure" ? "accept" : null, take: new Set(), family: new Set() };
+      const first = blank ? null : (kind === "new" || kind === "sure" ? "accept" : null);
+      const e = { g, p, kind, decision: first, take: new Set(), family: new Set() };
       if (p) gedGains(g, p).forEach((f) => e.take.add(f.field));
+      const s = saved && saved[g.gid];
+      if (s) {
+        if (s.pid) { const q = personById(s.pid); if (q) { e.p = q; e.kind = "linked"; } }
+        if (s.take) e.take = new Set(s.take);
+        if (s.edit) e.edit = s.edit;
+        e.decision = s.decision || null;
+        e.touched = !!s.touched;
+        if (s.madeId && personById(s.madeId)) e.madeId = s.madeId;
+        if (s.done) { e.done = true; e.decision = "done"; }
+      }
       byGid[g.gid] = e;
       return e;
     };
@@ -5157,7 +5204,14 @@
       f.chil.forEach((c) => { note(f.husb, "child", c); note(f.wife, "child", c); });
     });
     list.forEach((e) => { e.ties = (famOf[e.g.gid] || []).filter((t) => t.other); });
-    return { list, byGid, fams, people };
+    // A link you made by hand wins: if the matcher also put somebody else on
+    // the same person, that one goes back to being nobody in particular.
+    const claimed = new Map();
+    list.forEach((e) => { if (e.kind === "linked" && e.p) claimed.set(e.p.id, e); });
+    list.forEach((e) => {
+      if (e.kind !== "linked" && e.p && claimed.has(e.p.id)) { e.p = null; e.kind = "new"; e.take = new Set(); }
+    });
+    return { list, byGid, fams, people, key, name };
   }
 
   const gedWhen = (d, y) => (d ? fmtDate(d) : y ? String(y) : "");
@@ -5431,7 +5485,7 @@
           b.appendChild(n); b.appendChild(d);
           b.onclick = () => {
             if (other) { other.p = null; other.kind = "new"; other.take = new Set(); }
-            ent.p = p; ent.kind = "linked"; ent.decision = "accept";
+            ent.p = p; ent.kind = "linked"; ent.decision = "accept"; ent.touched = true;
             ent.take = new Set(gedGains(ent.g, p).map((f) => f.field));
             sheet.remove(); if (after) after();
           };
@@ -5521,9 +5575,9 @@
       }
       const foot = document.createElement("div"); foot.className = "gp-foot";
       const mk = (label, cls, fn) => { const b = document.createElement("button"); b.type = "button"; b.className = "btn " + cls; b.textContent = label; b.onclick = fn; foot.appendChild(b); return b; };
-      mk("Ignore", "", () => { e.decision = "ignore"; close(true); });
-      mk("Later", "", () => { e.decision = "later"; close(true); });
-      mk("Accept", "primary", () => { e.decision = "accept"; close(true); });
+      mk("Ignore", "", () => { e.decision = "ignore"; e.touched = true; close(true); });
+      mk("Later", "", () => { e.decision = "later"; e.touched = true; close(true); });
+      mk("Accept", "primary", () => { e.decision = "accept"; e.touched = true; close(true); });
       m.appendChild(foot);
     };
     // A relative, opened out: their side-by-side, and what happens to them.
@@ -5540,16 +5594,16 @@
       }
       const ed = document.createElement("button"); ed.type = "button"; ed.className = "btn wide gp-editbtn";
       ed.textContent = o.edit ? "✎ Edit what comes in (edited)" : "✎ Edit what comes in";
-      ed.onclick = () => openGedEdit(o, (took) => { if (took) o.decision = "accept"; redraw(); });
+      ed.onclick = () => openGedEdit(o, (took) => { if (took) { o.decision = "accept"; o.touched = true; } redraw(); });
       panel.appendChild(ed);
       // ticking a detail here is a decision about that person, so say so
-      panel.appendChild(gedCompare(o, (ent, on) => { if (on) { ent.decision = "accept"; redraw(); } }));
+      panel.appendChild(gedCompare(o, (ent, on) => { if (on) { ent.decision = "accept"; ent.touched = true; redraw(); } }));
       const row = document.createElement("div"); row.className = "gp-relfoot";
       [["Bring in", "accept"], ["Skip", "ignore"], ["Later", "later"]].forEach(([label, d]) => {
         const b = document.createElement("button"); b.type = "button";
         b.className = "btn small" + (o.decision === d ? " primary" : "");
         b.textContent = label;
-        b.onclick = () => { o.decision = d; redraw(); };
+        b.onclick = () => { o.decision = d; o.touched = true; redraw(); };
         row.appendChild(b);
       });
       panel.appendChild(row);
@@ -5567,22 +5621,26 @@
      taken in a batch — 107 new people is not a thing to click through one at
      a time — and anything uncertain waits for you.                         */
   function openGedReview(parsed) {
-    const all = gedEntries(parsed);
+    const saved = parsed.key ? gedSaved(parsed.key) : null;
+    let all = gedEntries(parsed, saved, gedBlankStart());
     const back = document.createElement("div"); back.className = "modal-backdrop";
     const m = document.createElement("div"); m.className = "modal ged-review";
-    const close = () => back.remove();
+    const close = () => { gedRemember(all); back.remove(); };
     const counts = () => ({
       accept: all.list.filter((e) => e.decision === "accept").length,
       ignore: all.list.filter((e) => e.decision === "ignore").length,
       later: all.list.filter((e) => e.decision === "later").length,
+      done: all.list.filter((e) => e.done).length,
       undecided: all.list.filter((e) => !e.decision).length,
     });
-    let body, tally;
+    let body, tally, go;
+    const left = (kind) => all.list.filter((e) => !e.done && e.kind === kind);
     const groupsOf = () => [
-      { key: "likely", title: "Same person?", note: "A likely match the file and your tree don't agree on enough to be sure about. Open one to compare them side by side.", items: all.list.filter((e) => e.kind === "likely") },
-      { key: "new", title: "New people", note: "Not found anywhere in your tree. Open one if you think they're somebody you already have.", items: all.list.filter((e) => e.kind === "new") },
-      { key: "linked", title: "Linked by you", note: "You said these are people already in your tree.", items: all.list.filter((e) => e.kind === "linked") },
-      { key: "sure", title: "Matched for certain", note: "Same name, same dates. Their details will be filled in where yours are blank.", items: all.list.filter((e) => e.kind === "sure") },
+      { key: "likely", title: "Same person?", note: "A likely match the file and your tree don't agree on enough to be sure about. Open one to compare them side by side.", items: left("likely") },
+      { key: "new", title: "New people", note: "Not found anywhere in your tree. Open one if you think they're somebody you already have.", items: left("new") },
+      { key: "linked", title: "Linked by you", note: "You said these are people already in your tree.", items: left("linked") },
+      { key: "sure", title: "Matched for certain", note: "Same name, same dates. Their details will be filled in where yours are blank.", items: left("sure") },
+      { key: "done", title: "Already brought in", note: "These came in on an earlier go. They're left alone now.", items: all.list.filter((e) => e.done), quiet: true },
     ].filter((g) => g.items.length);
     const drawList = () => {
       body.textContent = "";
@@ -5590,13 +5648,15 @@
         const sec = document.createElement("div"); sec.className = "ged-sec";
         const h = document.createElement("h3"); h.textContent = grp.title + " (" + grp.items.length + ")"; sec.appendChild(h);
         const n = document.createElement("div"); n.className = "hint"; n.textContent = grp.note; sec.appendChild(n);
-        const bulk = document.createElement("div"); bulk.className = "ged-bulk";
-        [["Accept all", "accept"], ["Ignore all", "ignore"]].forEach(([label, d]) => {
-          const b = document.createElement("button"); b.type = "button"; b.className = "btn small"; b.textContent = label;
-          b.onclick = () => { grp.items.forEach((e) => (e.decision = d)); drawList(); };
-          bulk.appendChild(b);
-        });
-        sec.appendChild(bulk);
+        if (!grp.quiet) {
+          const bulk = document.createElement("div"); bulk.className = "ged-bulk";
+          [["Accept all", "accept"], ["Ignore all", "ignore"]].forEach(([label, d]) => {
+            const b = document.createElement("button"); b.type = "button"; b.className = "btn small"; b.textContent = label;
+            b.onclick = () => { grp.items.forEach((e) => { e.decision = d; e.touched = true; }); drawList(); };
+            bulk.appendChild(b);
+          });
+          sec.appendChild(bulk);
+        }
         grp.items.slice(0, 400).forEach((e) => {
           const r = document.createElement("button"); r.type = "button"; r.className = "ged-prow d-" + (e.decision || "none");
           const gv = gedView(e);
@@ -5605,29 +5665,60 @@
           const sub = document.createElement("span"); sub.className = "ged-psub";
           sub.textContent = e.p ? ("↔ " + e.p.name) : [gv.birth ? "b. " + gv.birth : "", gv.birthPlace || ""].filter(Boolean).join("  ·  ");
           const st = document.createElement("span"); st.className = "ged-pstate";
-          st.textContent = e.decision === "accept" ? "✓" : e.decision === "ignore" ? "✕" : e.decision === "later" ? "…" : "›";
+          st.textContent = e.done ? "done" : e.decision === "accept" ? "✓" : e.decision === "ignore" ? "✕" : e.decision === "later" ? "…" : "›";
           r.appendChild(nm); r.appendChild(sub); r.appendChild(st);
-          r.onclick = () => openPersonReview(e, all, () => drawList());
+          if (e.done) r.disabled = true;
+          else r.onclick = () => openPersonReview(e, all, () => drawList());
           sec.appendChild(r);
         });
         body.appendChild(sec);
       });
       const c = counts();
       tally.textContent = c.accept + " to bring in · " + c.ignore + " ignored · " + c.later + " left for later"
-        + (c.undecided ? " · " + c.undecided + " not looked at yet" : "");
+        + (c.undecided ? " · " + c.undecided + " not looked at yet" : "")
+        + (c.done ? " · " + c.done + " already brought in" : "");
+      if (go) { go.disabled = !c.accept; go.textContent = c.accept ? "Bring these in" : "Nothing chosen yet"; }
+      gedRemember(all);
     };
     const h = document.createElement("h2"); h.textContent = "Bring in a GEDCOM"; m.appendChild(h);
     const hint = document.createElement("div"); hint.className = "hint";
-    hint.textContent = parsed.people.length + " people in the file. Open any of them to see the file's version beside yours. Nothing changes until you press Bring these in.";
+    hint.textContent = parsed.people.length + " people in the file. Open any of them to see the file's version beside yours. "
+      + "Bring in as few as you like — whatever you don't choose is left untouched, and this file remembers where you got to.";
     m.appendChild(hint);
+    // Pick them yourself, or let the obvious ones come pre-chosen.
+    const startRow = document.createElement("label"); startRow.className = "ged-start";
+    const startBox = document.createElement("input"); startBox.type = "checkbox"; startBox.checked = gedBlankStart();
+    const startTxt = document.createElement("span"); startTxt.textContent = "Start with nothing chosen — I'll pick who comes in";
+    startBox.onchange = () => {
+      setGedBlankStart(startBox.checked);
+      all.list.forEach((e) => {
+        if (e.done || e.touched) return;
+        e.decision = startBox.checked ? null : (e.kind === "new" || e.kind === "sure" ? "accept" : null);
+      });
+      drawList();
+    };
+    startRow.appendChild(startBox); startRow.appendChild(startTxt); m.appendChild(startRow);
+    if (saved && Object.keys(saved).length) {
+      const row = document.createElement("div"); row.className = "ged-resume";
+      const t = document.createElement("span");
+      t.textContent = "Picking up where you left off — " + Object.keys(saved).length + " already sorted.";
+      const b = document.createElement("button"); b.type = "button"; b.className = "btn small"; b.textContent = "Start over";
+      b.onclick = () => {
+        if (!confirm("Forget how you sorted this file and start the review again? Nothing already brought into your tree is removed.")) return;
+        gedForget(parsed.key);
+        all = gedEntries(parsed, null, gedBlankStart());
+        row.remove(); drawList();
+      };
+      row.appendChild(t); row.appendChild(b); m.appendChild(row);
+    }
     tally = document.createElement("div"); tally.className = "ged-tally"; m.appendChild(tally);
     body = document.createElement("div"); body.className = "ged-body"; m.appendChild(body);
-    drawList();
     const btns = document.createElement("div"); btns.className = "btn-row";
-    const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "Cancel";
+    const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "Close";
     cancel.onclick = close;
-    const go = document.createElement("button"); go.type = "button"; go.className = "btn primary"; go.textContent = "Bring these in";
+    go = document.createElement("button"); go.type = "button"; go.className = "btn primary"; go.textContent = "Bring these in";
     go.onclick = () => { close(); applyGed(all); };
+    drawList();
     btns.appendChild(cancel); btns.appendChild(go); m.appendChild(btns);
     back.appendChild(m); document.body.appendChild(back);
     back.addEventListener("click", (e) => { if (e.target === back) close(); });
@@ -5640,7 +5731,13 @@
     pushUndo();
     const taking = all.list.filter((e) => e.decision === "accept");
     const byGid = {};
-    all.list.forEach((e) => { if (e.p) byGid[e.g.gid] = e.p.id; });   // matched, whether accepted or not
+    // matched, whether accepted or not — and anyone an earlier go already
+    // added, so a parent brought in last week still joins up with a child
+    // brought in today
+    all.list.forEach((e) => {
+      if (e.p) byGid[e.g.gid] = e.p.id;
+      else if (e.madeId && personById(e.madeId)) byGid[e.g.gid] = e.madeId;
+    });
     let added = 0;
     taking.forEach((e) => {
       if (e.p) return;
@@ -5654,7 +5751,7 @@
         nickname: np.nickname, suffix: np.suffix, priorNames: np.priorNames,
         sex: g.sex, birth: g.birth, death: g.death, birthDate: g.birthDate, deathDate: g.deathDate,
         birthPlace: g.birthPlace, deathPlace: g.deathPlace, deceased: g.deceased });
-      byGid[e.g.gid] = p.id; added++;
+      byGid[e.g.gid] = p.id; e.madeId = p.id; added++;
     });
     let filled = 0;
     taking.forEach((e) => {
@@ -5697,6 +5794,10 @@
     dedupeParentUnions();
     autoLayout(); render(); save();
     try { cloudSaveTree(false); } catch (e) {}
+    // Remember what has landed, so picking this file up again offers only
+    // what's left rather than everything over again.
+    taking.forEach((e) => { e.done = true; e.decision = "done"; });
+    gedRemember(all);
     const later = all.list.filter((e) => e.decision === "later").length;
     toast("Brought in: " + added + (added === 1 ? " person" : " people")
       + (filled ? ", " + filled + " filled in" : "")
@@ -8826,7 +8927,7 @@
       const people = gedPeople(recs), fams = gedFamilies(recs);
       if (!people.length) { toast("No people found in that file"); return; }
       const { sure, likely, fresh } = matchGed(people);
-      openGedReview({ people, fams, sure, likely, fresh });
+      openGedReview({ people, fams, sure, likely, fresh, key: gedFileKey(f.name, text), name: f.name });
     }); }
   $("#importBtn").onclick = () => $("#importInput").click();
   $("#importInput").addEventListener("change", (e) => {
