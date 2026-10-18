@@ -161,6 +161,75 @@ ok('…and the fold stays open while you work', await pg.evaluate(()=>{
 await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-foot button')].find(x=>/accept/i.test(x.textContent)); b.click();});
 await pg.waitForTimeout(400);
 
+// --- fixing what the file says before any of it lands
+await openRow('Ruth');
+ok('a card offers to edit what comes in', await pg.evaluate(()=>!!document.querySelector('.ged-person .gp-editbtn')));
+await pg.evaluate(()=>document.querySelector('.ged-person .gp-editbtn').click());
+await pg.waitForSelector('.gp-edit',{timeout:8000}); await pg.waitForTimeout(400);
+const form=await pg.evaluate(()=>({
+  labels:[...document.querySelectorAll('.gp-edit label.field span')].map(x=>x.textContent),
+  preview:document.querySelector('.gp-preview').textContent,
+  values:[...document.querySelectorAll('.gp-edit label.field')].map(l=>[l.querySelector('span').textContent,(l.querySelector('input')||{}).value])}));
+ok('…with a box for each part of the name', ['First name','Middle name','Nickname','Maiden name','Earlier married names','Last name','Suffix'].every(x=>form.labels.includes(x)),
+   JSON.stringify(form.labels));
+ok('…and for the dates and places too', ['Born','Died (if applicable)','Born in','Died in'].every(x=>form.labels.includes(x)), JSON.stringify(form.labels));
+ok('…filled in from the file', (form.values.find(v=>v[0]==='First name')||[])[1]==='Ruth'
+   && (form.values.find(v=>v[0]==='Last name')||[])[1]==='Hokenstad', JSON.stringify(form.values));
+ok('…and a date box you can read', (form.values.find(v=>v[0]==='Born')||[])[1]==='July 3, 1900', JSON.stringify(form.values.find(v=>v[0]==='Born')));
+// move the surname into the maiden box, give her the married one, fix a date
+const setField=(label,value)=>pg.evaluate(([l,v])=>{const f=[...document.querySelectorAll('.gp-edit label.field')]
+  .find(x=>x.querySelector('span').textContent===l); const i=f.querySelector('input');
+  i.value=v; i.dispatchEvent(new Event('input',{bubbles:true}));},[label,value]);
+await setField('Maiden name','Hokenstad');
+await setField('Last name','Boyd');
+await setField('Middle name','Octavia');
+await pg.waitForTimeout(200);
+ok('the name reads back as you type it', await pg.evaluate(()=>document.querySelector('.gp-preview').textContent)==='Ruth Octavia (Hokenstad) Boyd',
+   await pg.evaluate(()=>document.querySelector('.gp-preview').textContent));
+await setField('Born','nonsense');
+await pg.waitForTimeout(200);
+ok('a date it cannot read says so', await pg.evaluate(()=>/can't read/i.test(document.querySelector('.gp-badbox').textContent)));
+ok('…and will not be used', await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-edit .btn-row button')].find(x=>/use these/i.test(x.textContent));
+  b.click(); return !!document.querySelector('.gp-edit');}));
+await setField('Born','July 3, 1900');
+await setField('Died in','Sioux Falls, South Dakota');
+await pg.waitForTimeout(200);
+await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-edit .btn-row button')].find(x=>/use these/i.test(x.textContent)); b.click();});
+await pg.waitForTimeout(500);
+ok('the card then shows your version, not the file\'s', await pg.evaluate(()=>
+  document.querySelector('.ged-person .gp-name').textContent==='Ruth Octavia (Hokenstad) Boyd'),
+  await pg.evaluate(()=>document.querySelector('.ged-person .gp-name').textContent));
+ok('…and says where it departs from the file', await pg.evaluate(()=>{
+  const t=[...document.querySelectorAll('.ged-person .gp-diff.edited')].map(x=>x.textContent);
+  return t.some(x=>/file says Ruth Octavia Hokenstad/.test(x));}),
+  await pg.evaluate(()=>[...document.querySelectorAll('.ged-person .gp-diff.edited')].map(x=>x.textContent).join(' | ')));
+ok('…under a heading that admits it is no longer just the file', await pg.evaluate(()=>
+  document.querySelector('.ged-person .gp-th.them').textContent==='Coming in'));
+await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-foot button')].find(x=>/accept/i.test(x.textContent)); b.click();});
+await pg.waitForTimeout(400);
+ok('the list shows her corrected name', await pg.evaluate(()=>
+  [...document.querySelectorAll('.ged-pname')].some(x=>x.textContent==='Ruth Octavia (Hokenstad) Boyd')));
+
+// editing somebody already in the tree ticks the change so it is not lost
+await openRow('Gail');
+await pg.evaluate(()=>document.querySelector('.ged-person .gp-editbtn').click());
+await pg.waitForSelector('.gp-edit',{timeout:8000}); await pg.waitForTimeout(300);
+await setField('Middle name','Arleen');
+await setField('Born','6/14/1946');
+await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-edit .btn-row button')].find(x=>/use these/i.test(x.textContent)); b.click();});
+await pg.waitForTimeout(500);
+ok('correcting a matched person ticks the correction', await pg.evaluate(()=>{
+  const c=[...document.querySelectorAll('.ged-person .gp-cell.them')].find(x=>/^Name/.test(x.textContent.trim()));
+  const i=c&&c.querySelector('input'); return !!i && i.checked;}));
+ok('…and it can be put back to the file\'s version', await pg.evaluate(()=>{
+  document.querySelector('.ged-person .gp-editbtn').click(); return true;}) &&
+  await pg.waitForSelector('.gp-edit',{timeout:8000}).then(()=>pg.evaluate(()=>
+    [...document.querySelectorAll('.gp-edit .btn-row button')].some(x=>/back to the file/i.test(x.textContent)))));
+await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-edit .btn-row button')].find(x=>/cancel/i.test(x.textContent)); b.click();});
+await pg.waitForTimeout(200);
+await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-foot button')].find(x=>/accept/i.test(x.textContent)); b.click();});
+await pg.waitForTimeout(400);
+
 // --- telling it somebody "new" is really somebody you already have
 await openRow('Edmond');
 ok('a new person offers to be linked to somebody already here',
@@ -205,6 +274,13 @@ ok('…and Edmond was not added as a second person', after.persons.filter(p=>/ed
    after.persons.map(p=>p.name).join(', '));
 ok('Barbara keeps HER year, not the file\'s', (by('Barbara')||{}).birth===1894, (by('Barbara')||{}).birth);
 ok('a new woman is not given the same surname twice', !/\(Hokenstad\) Hokenstad/.test((by('Ruth')||{}).name||''), (by('Ruth')||{}).name);
+ok('a person edited before import comes in the way you wrote her', (by('Ruth')||{}).name==='Ruth Octavia (Hokenstad) Boyd', (by('Ruth')||{}).name);
+ok('…with the name split into the boxes you put it in',
+   (by('Ruth')||{}).maiden==='Hokenstad' && (by('Ruth')||{}).last==='Boyd' && (by('Ruth')||{}).middle==='Octavia',
+   JSON.stringify(by('Ruth')&&{m:by('Ruth').maiden,l:by('Ruth').last,mi:by('Ruth').middle}));
+ok('…and a place you typed yourself', /Sioux Falls/.test((by('Ruth')||{}).deathPlace||''), (by('Ruth')||{}).deathPlace);
+ok('a correction to somebody already here is kept', (by('Gail')||{}).middle==='Arleen', (by('Gail')||{}).middle);
+ok('…including a date you sharpened yourself', (by('Gail')||{}).birthDate==='1946-06-14', (by('Gail')||{}).birthDate);
 ok('a new person brought her dates and place with her',
    (by('Ruth')||{}).birthDate==='1900-07-03' && /Sioux Falls/.test((by('Ruth')||{}).birthPlace||''), JSON.stringify(by('Ruth')&&{b:by('Ruth').birthDate,p:by('Ruth').birthPlace}));
 const ruth=by('Ruth'), ed=by('Ed Hokenstad');   // Edmond was linked to Ed, so the couple is Ruth + Ed

@@ -5200,15 +5200,157 @@
     q.name = composeName(q) || q.name;
   }
 
+  /* The file's version of somebody as the reviewer now reads it: the record
+     itself, with any corrections made here laid over the top. Everything
+     downstream — the comparison, what gets ticked, what is finally brought
+     in — reads this, never the raw record, so a correction made once holds
+     everywhere.                                                           */
+  function gedView(ent) {
+    const e = ent.edit;
+    if (!e) return ent.g;
+    return Object.assign({}, ent.g, e, {
+      given: [e.first, e.middle].filter(Boolean).join(" "),
+      surn: e.last || e.maiden || "",
+      full: e.full || composeName(e) || ent.g.full,
+    });
+  }
+  // What this person would bring in as things stand — the starting point for
+  // correcting them. For somebody already in the tree that means the name
+  // this tree would end up with, maiden and married parts and all, so those
+  // are the parts on show to fix.
+  function gedIncoming(ent) {
+    if (ent.edit) return JSON.parse(JSON.stringify(ent.edit));
+    const g = ent.g;
+    const given = String(g.given || "").trim().split(/\s+/).filter(Boolean);
+    const out = {
+      first: given[0] || "", middle: middleAsTyped(given.slice(1).join(" ")),
+      nickname: "", maiden: "", last: String(g.surn || "").trim(), suffix: "", priorNames: [],
+      sex: g.sex || "unknown", birth: g.birth || null, death: g.death || null,
+      birthDate: g.birthDate || null, deathDate: g.deathDate || null,
+      birthPlace: g.birthPlace || "", deathPlace: g.deathPlace || "", deceased: !!g.deceased,
+    };
+    const p = ent.p;
+    if (p) {
+      const q = { first: p.first || "", middle: p.middle || "", nickname: p.nickname || "",
+        maiden: p.maiden || "", last: p.last || "", suffix: p.suffix || "",
+        priorNames: priorList(p.priorNames), sex: p.sex };
+      takeGedName(q, g);
+      ["first", "middle", "nickname", "maiden", "last", "suffix", "priorNames"].forEach((k) => { out[k] = q[k]; });
+    }
+    out.full = composeName(out) || g.full || "";
+    return out;
+  }
+
+  /* Correcting the file before any of it lands. The other program's idea of
+     which name goes in which box is its own; this is where a surname moves
+     into the maiden box, a married name gets added, or a spelling is put
+     right. It edits what comes in, never the file.                        */
+  function openGedEdit(ent, onSave) {
+    const was = gedIncoming(ent);
+    const v = JSON.parse(JSON.stringify(was));
+    const sheet = document.createElement("div"); sheet.className = "modal-backdrop";
+    const box = document.createElement("div"); box.className = "modal gp-edit";
+    const h = document.createElement("h2"); h.textContent = "Edit what comes in"; box.appendChild(h);
+    const hint = document.createElement("div"); hint.className = "hint";
+    hint.textContent = "The file stays as it is — this is what this person brings into your tree.";
+    box.appendChild(hint);
+    const prev = document.createElement("div"); prev.className = "gp-preview"; box.appendChild(prev);
+    const boxes = {};
+    const field = (key, label, placeholder, value) => {
+      const l = document.createElement("label"); l.className = "field";
+      const sp = document.createElement("span"); sp.textContent = label;
+      const i = document.createElement("input"); i.type = "text"; i.value = value || "";
+      if (placeholder) i.placeholder = placeholder;
+      i.addEventListener("input", sync);
+      l.appendChild(sp); l.appendChild(i); boxes[key] = i; return l;
+    };
+    const pair = (a, b) => { const d = document.createElement("div"); d.className = "row2"; d.appendChild(a); d.appendChild(b); return d; };
+    box.appendChild(pair(field("first", "First name", "Verlyn", v.first), field("last", "Last name", "Boyd", v.last)));
+    box.appendChild(pair(field("middle", "Middle name", "Elaine", v.middle), field("suffix", "Suffix", "Jr., III, …", v.suffix)));
+    box.appendChild(pair(field("nickname", "Nickname", "shown in “quotes”", v.nickname), field("maiden", "Maiden name", "shown in (parens)", v.maiden)));
+    box.appendChild(field("prior", "Earlier married names", "an earlier husband's surname — separate several with commas", priorList(v.priorNames).join(", ")));
+    const sexL = document.createElement("label"); sexL.className = "field";
+    const sexS = document.createElement("span"); sexS.textContent = "Sex";
+    const sel = document.createElement("select");
+    [["female", "Female"], ["male", "Male"], ["unknown", "Not known"]].forEach(([k, lab]) => {
+      const o = document.createElement("option"); o.value = k; o.textContent = lab; if (v.sex === k) o.selected = true; sel.appendChild(o);
+    });
+    sexL.appendChild(sexS); sexL.appendChild(sel); box.appendChild(sexL);
+    box.appendChild(pair(field("birth", "Born", "1912", dateBoxText(v.birthDate, v.birth)),
+                         field("death", "Died (if applicable)", "—", dateBoxText(v.deathDate, v.death))));
+    const dh = document.createElement("p"); dh.className = "hint"; dh.style.margin = "-6px 0 8px";
+    dh.textContent = "As much of the date as you know: 1912, 6/1912 or 6/14/1912.";
+    box.appendChild(dh);
+    box.appendChild(pair(field("birthPlace", "Born in", "Lennox, Lincoln, South Dakota", v.birthPlace),
+                         field("deathPlace", "Died in", "—", v.deathPlace)));
+    const bad = document.createElement("div"); bad.className = "hint gp-badbox"; box.appendChild(bad);
+    function sync() {
+      prev.textContent = composeName({
+        first: boxes.first.value.trim(), middle: boxes.middle.value.trim(), nickname: boxes.nickname.value.trim(),
+        maiden: boxes.maiden.value.trim(), priorNames: priorList(boxes.prior.value), last: boxes.last.value.trim(),
+        suffix: boxes.suffix.value.trim(),
+      }) || "Unnamed";
+      const wrong = ["birth", "death"].filter((k) => boxes[k].value.trim() && !parseLooseDate(boxes[k].value));
+      bad.textContent = wrong.length ? "Can't read that date — try 1912, 6/1912 or 6/14/1912." : "";
+      bad.classList.toggle("bad", !!wrong.length);
+      return !wrong.length;
+    }
+    sync();
+    const row = document.createElement("div"); row.className = "btn-row";
+    if (ent.edit) {
+      const undo = document.createElement("button"); undo.type = "button"; undo.className = "btn"; undo.textContent = "Back to the file's version";
+      undo.onclick = () => { ent.edit = null; sheet.remove(); if (onSave) onSave(); };
+      row.appendChild(undo);
+    }
+    const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "Cancel";
+    cancel.onclick = () => sheet.remove();
+    const use = document.createElement("button"); use.type = "button"; use.className = "btn primary"; use.textContent = "Use these";
+    use.onclick = () => {
+      if (!sync()) return;
+      const next = {
+        first: boxes.first.value.trim(), middle: middleAsTyped(boxes.middle.value), nickname: boxes.nickname.value.trim(),
+        maiden: boxes.maiden.value.trim(), last: boxes.last.value.trim(), suffix: boxes.suffix.value.trim(),
+        priorNames: priorList(boxes.prior.value), sex: sel.value,
+        birthPlace: boxes.birthPlace.value.trim(), deathPlace: boxes.deathPlace.value.trim(),
+        deceased: v.deceased,
+      };
+      const when = (raw) => { const iso = parseLooseDate(raw); return { date: iso, year: dateYear(iso) }; };
+      const b = when(boxes.birth.value), d = when(boxes.death.value);
+      next.birthDate = b.date; next.birth = b.year;
+      next.deathDate = d.date; next.death = d.year;
+      if (d.year != null) next.deceased = true;
+      next.full = composeName(next) || "";
+      ent.edit = next;
+      // Correcting a detail says you want it: anything you changed that your
+      // tree doesn't already say gets ticked, so the edit isn't made and then
+      // quietly dropped.
+      const moved = new Set();
+      if (was.full !== next.full) moved.add("name");
+      if (was.birth !== next.birth || was.birthDate !== next.birthDate) moved.add("birthDate");
+      if (was.death !== next.death || was.deathDate !== next.deathDate) moved.add("deathDate");
+      if (was.birthPlace !== next.birthPlace) moved.add("birthPlace");
+      if (was.deathPlace !== next.deathPlace) moved.add("deathPlace");
+      const offers = gedOffers(ent);
+      moved.forEach((k) => { if (offers.includes(k)) ent.take.add(k); });
+      sheet.remove(); if (onSave) onSave(moved.size > 0);
+    };
+    row.appendChild(cancel); row.appendChild(use); box.appendChild(row);
+    sheet.appendChild(box); document.body.appendChild(sheet);
+    sheet.addEventListener("click", (ev) => { if (ev.target === sheet) sheet.remove(); });
+    setTimeout(() => { try { boxes.first.focus(); } catch (err) {} }, 0);
+    return sheet;
+  }
+
   // What a card offers to take for one person: a field the file has that we
   // either don't, or spell differently.
   function gedOffers(ent) {
+    const g = gedView(ent);
     return GED_FIELDS.filter((f) => {
-      const a = String(f.file(ent.g) || "").trim();
+      const a = String(f.file(g) || "").trim();
       if (!a) return false;
       const b = ent.p ? String(f.here(ent.p) || "").trim() : "";
       if (!ent.p) return false;
-      if (f.key === "name" && nameWrittenShorter(ent.g, ent.p)) return false;
+      if (f.key === "name" && nameWrittenShorter(g, ent.p)) return false;
       return !b || a.toLowerCase() !== b.toLowerCase();
     }).map((f) => f.key);
   }
@@ -5217,15 +5359,17 @@
   // field by field, each line the file could give us carrying its own tick.
   // The same block serves the card itself and every relative opened inside it.
   function gedCompare(ent, onTick) {
+    const g = gedView(ent);
     const grid = document.createElement("div"); grid.className = "gp-grid";
     const th = (txt, cls) => { const d = document.createElement("div"); d.className = "gp-th " + cls; d.textContent = txt; grid.appendChild(d); };
-    th("In the file", "them"); th("In your tree", "mine");
+    th(ent.edit ? "Coming in" : "In the file", "them"); th("In your tree", "mine");
     const offered = gedOffers(ent);
     GED_FIELDS.forEach((f) => {
-      const a = String(f.file(ent.g) || "").trim();
+      const a = String(f.file(g) || "").trim();
+      const raw = String(f.file(ent.g) || "").trim();
       const b = ent.p ? String(f.here(ent.p) || "").trim() : "";
       if (!a && !b) return;
-      const shorter = f.key === "name" && nameWrittenShorter(ent.g, ent.p);
+      const shorter = f.key === "name" && nameWrittenShorter(g, ent.p);
       const differs = !!a && !!b && a.toLowerCase() !== b.toLowerCase();
       const theirs = document.createElement("div"); theirs.className = "gp-cell them" + (differs && !shorter ? " differs" : "");
       const mineC = document.createElement("div"); mineC.className = "gp-cell mine";
@@ -5242,7 +5386,8 @@
       const lab = document.createElement("div"); lab.className = "gp-flabel"; lab.textContent = f.label;
       const val = document.createElement("div"); val.className = "gp-fval"; val.textContent = a || "—";
       wrap.appendChild(lab); wrap.appendChild(val);
-      if (shorter) { const tag = document.createElement("span"); tag.className = "gp-diff same"; tag.textContent = "Same name, written shorter"; wrap.appendChild(tag); }
+      if (a !== raw) { const tag = document.createElement("span"); tag.className = "gp-diff edited"; tag.textContent = raw ? "Edited · file says " + raw : "Added by you"; wrap.appendChild(tag); }
+      else if (shorter) { const tag = document.createElement("span"); tag.className = "gp-diff same"; tag.textContent = "Same name, written shorter"; wrap.appendChild(tag); }
       else if (differs) { const tag = document.createElement("span"); tag.className = "gp-diff"; tag.textContent = "Different"; wrap.appendChild(tag); }
       theirs.appendChild(wrap);
       const l2 = document.createElement("div"); l2.className = "gp-flabel"; l2.textContent = f.label;
@@ -5316,11 +5461,16 @@
       x.onclick = () => close(false);
       const t = document.createElement("div"); t.className = "gp-title"; t.textContent = "Review person";
       head.appendChild(x); head.appendChild(t); m.appendChild(head);
+      const gv = gedView(e);
       const who = document.createElement("div"); who.className = "gp-who";
-      const nm = document.createElement("div"); nm.className = "gp-name"; nm.textContent = e.g.full || "Unnamed";
+      const nm = document.createElement("div"); nm.className = "gp-name"; nm.textContent = gv.full || "Unnamed";
       const yr = document.createElement("div"); yr.className = "gp-years";
-      yr.textContent = [e.g.birth || "", e.g.death ? "–" + e.g.death : (e.g.deceased ? "–" : "")].join("") || "no dates in the file";
+      yr.textContent = [gv.birth || "", gv.death ? "–" + gv.death : (gv.deceased ? "–" : "")].join("") || "no dates in the file";
       who.appendChild(nm); who.appendChild(yr); m.appendChild(who);
+      const ed = document.createElement("button"); ed.type = "button"; ed.className = "btn wide gp-editbtn";
+      ed.textContent = e.edit ? "✎ Edit what comes in (edited)" : "✎ Edit what comes in";
+      ed.onclick = () => openGedEdit(e, draw);
+      m.appendChild(ed);
       if (!e.p) {
         const n = document.createElement("div"); n.className = "gp-newnote";
         n.textContent = "Not found in your tree — this would be added as a new person.";
@@ -5349,10 +5499,11 @@
           const c = document.createElement("input"); c.type = "checkbox"; c.className = "gp-relbox-tick"; c.checked = e.family.has(key);
           c.onchange = () => { if (c.checked) e.family.add(key); else e.family.delete(key); };
           const txt = document.createElement("div"); txt.className = "gp-reltext";
-          const n2 = document.createElement("div"); n2.className = "gp-relname"; n2.textContent = o.g.full || "Unnamed";
+          const ov = gedView(o);
+          const n2 = document.createElement("div"); n2.className = "gp-relname"; n2.textContent = ov.full || "Unnamed";
           const s2 = document.createElement("div"); s2.className = "gp-relrole";
           s2.textContent = tie.role[0].toUpperCase() + tie.role.slice(1)
-            + (o.g.birth ? "  ·  " + o.g.birth + (o.g.death ? "–" + o.g.death : "") : "")
+            + (ov.birth ? "  ·  " + ov.birth + (ov.death ? "–" + ov.death : "") : "")
             + (o.p ? "  ·  already in your tree" : "  ·  would be added");
           txt.appendChild(n2); txt.appendChild(s2);
           r.appendChild(c); r.appendChild(txt);
@@ -5387,6 +5538,10 @@
         link.onclick = () => gedPickExisting(o, all2, redraw);
         panel.appendChild(link);
       }
+      const ed = document.createElement("button"); ed.type = "button"; ed.className = "btn wide gp-editbtn";
+      ed.textContent = o.edit ? "✎ Edit what comes in (edited)" : "✎ Edit what comes in";
+      ed.onclick = () => openGedEdit(o, (took) => { if (took) o.decision = "accept"; redraw(); });
+      panel.appendChild(ed);
       // ticking a detail here is a decision about that person, so say so
       panel.appendChild(gedCompare(o, (ent, on) => { if (on) { ent.decision = "accept"; redraw(); } }));
       const row = document.createElement("div"); row.className = "gp-relfoot";
@@ -5444,9 +5599,11 @@
         sec.appendChild(bulk);
         grp.items.slice(0, 400).forEach((e) => {
           const r = document.createElement("button"); r.type = "button"; r.className = "ged-prow d-" + (e.decision || "none");
-          const nm = document.createElement("span"); nm.className = "ged-pname"; nm.textContent = e.g.full || "Unnamed";
+          const gv = gedView(e);
+          const nm = document.createElement("span"); nm.className = "ged-pname"; nm.textContent = gv.full || "Unnamed";
+          if (e.edit) nm.classList.add("edited");
           const sub = document.createElement("span"); sub.className = "ged-psub";
-          sub.textContent = e.p ? ("↔ " + e.p.name) : [e.g.birth ? "b. " + e.g.birth : "", e.g.birthPlace || ""].filter(Boolean).join("  ·  ");
+          sub.textContent = e.p ? ("↔ " + e.p.name) : [gv.birth ? "b. " + gv.birth : "", gv.birthPlace || ""].filter(Boolean).join("  ·  ");
           const st = document.createElement("span"); st.className = "ged-pstate";
           st.textContent = e.decision === "accept" ? "✓" : e.decision === "ignore" ? "✕" : e.decision === "later" ? "…" : "›";
           r.appendChild(nm); r.appendChild(sub); r.appendChild(st);
@@ -5487,22 +5644,34 @@
     let added = 0;
     taking.forEach((e) => {
       if (e.p) return;
-      const g = e.g;
-      const np = nameParts({ name: g.full, first: g.given.split(" ")[0] || "", middle: g.given.split(" ").slice(1).join(" "),
-        last: g.surn });
+      const g = gedView(e);
+      const np = e.edit
+        ? nameParts({ first: e.edit.first, middle: e.edit.middle, nickname: e.edit.nickname, maiden: e.edit.maiden,
+            last: e.edit.last, suffix: e.edit.suffix, priorNames: e.edit.priorNames })
+        : nameParts({ name: g.full, first: g.given.split(" ")[0] || "", middle: g.given.split(" ").slice(1).join(" "),
+            last: g.surn });
       const p = addPerson({ name: np.name, first: np.first, middle: np.middle, last: np.last, maiden: np.maiden,
+        nickname: np.nickname, suffix: np.suffix, priorNames: np.priorNames,
         sex: g.sex, birth: g.birth, death: g.death, birthDate: g.birthDate, deathDate: g.deathDate,
         birthPlace: g.birthPlace, deathPlace: g.deathPlace, deceased: g.deceased });
-      byGid[g.gid] = p.id; added++;
+      byGid[e.g.gid] = p.id; added++;
     });
     let filled = 0;
     taking.forEach((e) => {
       if (!e.p || !e.take.size) return;
       const q = personById(e.p.id); if (!q) return;
       let did = false;
+      const g = gedView(e);
       e.take.forEach((field) => {
-        const g = e.g;
-        if (field === "name" && g.full) { takeGedName(q, g); did = true; }
+        if (field === "name" && g.full) {
+          // a name corrected here is already split the way it should be kept
+          if (e.edit) {
+            ["first", "middle", "nickname", "maiden", "last", "suffix"].forEach((k) => { q[k] = e.edit[k] || ""; });
+            q.priorNames = priorList(e.edit.priorNames).filter((n) => n !== q.last);
+            q.name = composeName(q) || q.name;
+          } else takeGedName(q, g);
+          did = true;
+        }
         else if (field === "birthDate" && g.birthDate) { q.birthDate = g.birthDate; q.birth = g.birth || q.birth; did = true; }
         else if (field === "deathDate" && g.deathDate) { q.deathDate = g.deathDate; q.death = g.death || q.death; q.deceased = true; did = true; }
         else if (field === "birthPlace" && g.birthPlace) { q.birthPlace = g.birthPlace; did = true; }
