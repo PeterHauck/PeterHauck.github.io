@@ -409,18 +409,65 @@ button.btn.danger { color: var(--divorce); }
 .sweep-map .sweep-map-now { border: 2px solid var(--accent); background: rgba(127, 127, 127, .14); }
 .sweep-map .sweep-map-next { border: 2px dashed var(--accent); opacity: .5; }
 
-/* bringing a GEDCOM in: everything it would change, to tick or not */
+/* bringing a GEDCOM in — the list of everyone who needs looking at */
 .ged-review { width: min(680px, 94vw); display: flex; flex-direction: column; max-height: 88vh; }
 .ged-body { overflow-y: auto; min-height: 0; margin: 6px 0 10px; }
+.ged-tally { font-size: 12.5px; color: var(--muted); margin: 6px 0 2px; }
 .ged-sec { margin: 14px 0 6px; }
 .ged-sec h3 { margin: 0 0 2px; font-size: 13px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
-.ged-row { display: flex; align-items: baseline; gap: 8px; padding: 5px 2px; border-bottom: 1px solid var(--panel-border); cursor: pointer; }
-.ged-row:hover { background: rgba(127, 127, 127, .07); }
-.ged-row input { width: auto; flex: none; }
-.ged-label { flex: 1; min-width: 0; font-size: 13.5px; }
-.ged-sub { color: var(--muted); font-size: 12px; text-align: right; flex: none; max-width: 48%; }
-.ged-bulk { display: flex; gap: 6px; margin-top: 6px; }
+.ged-bulk { display: flex; gap: 6px; margin: 6px 0; }
 .ged-bulk .btn { padding: 3px 10px; font-size: 12px; }
+.ged-prow {
+  display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+  padding: 7px 4px; border: none; border-bottom: 1px solid var(--panel-border);
+  background: transparent; color: var(--ink); font: inherit; cursor: pointer;
+}
+.ged-prow:hover { background: rgba(127, 127, 127, .09); }
+.ged-pname { flex: 1; min-width: 0; font-size: 13.5px; }
+.ged-psub { color: var(--muted); font-size: 12px; text-align: right; flex: none; max-width: 52%; }
+.ged-pstate { flex: none; width: 16px; text-align: center; color: var(--muted); }
+.ged-prow.d-accept .ged-pstate { color: var(--adopt); }
+.ged-prow.d-ignore { opacity: .5; }
+
+/* one person: the file's version beside this tree's */
+.ged-person-back { align-items: flex-start; }
+.ged-person { width: min(620px, 96vw); max-height: 92vh; display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.gp-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--panel-border); }
+.gp-x { border: none; background: rgba(127,127,127,.18); color: var(--ink); width: 30px; height: 30px; border-radius: 50%; cursor: pointer; font-size: 14px; }
+.gp-title { font-weight: 700; font-size: 15px; }
+.gp-who { padding: 12px 14px 8px; }
+.gp-name { font-size: 17px; font-weight: 700; }
+.gp-years { color: var(--muted); font-size: 13px; }
+.gp-newnote { padding: 0 14px 8px; color: var(--muted); font-size: 12.5px; }
+.gp-link { margin: 0 14px 10px; width: calc(100% - 28px); }
+.gp-grid { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--panel-border); overflow-y: auto; }
+.gp-th { padding: 7px 12px; font-size: 12.5px; font-weight: 700; }
+.gp-th.them { background: var(--adopt); color: #fff; }
+.gp-th.mine { background: rgba(127,127,127,.22); }
+.gp-cell { padding: 10px 12px; border-bottom: 1px solid var(--panel-border); display: flex; gap: 8px; align-items: flex-start; font-size: 13.5px; }
+.gp-cell.them { border-right: 1px solid var(--panel-border); }
+.gp-cell input.gp-take { width: auto; flex: none; margin-top: 3px; }
+.gp-vals { min-width: 0; }
+.gp-flabel { color: var(--muted); font-size: 12px; }
+.gp-fval { white-space: pre-wrap; word-break: break-word; }
+.gp-diff { display: inline-block; margin-top: 4px; padding: 1px 7px; border-radius: 4px; font-size: 11px; background: rgba(127,127,127,.28); color: var(--ink); }
+.gp-subhead { padding: 12px 14px 4px; font-weight: 700; font-size: 13.5px; }
+.gp-rel { display: flex; gap: 10px; align-items: flex-start; padding: 8px 14px; border-top: 1px solid var(--panel-border); cursor: pointer; }
+.gp-rel input { width: auto; flex: none; margin-top: 3px; }
+.gp-relname { font-size: 13.5px; }
+.gp-relrole { color: var(--muted); font-size: 12px; }
+.gp-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--panel-border); background: var(--panel); }
+
+/* "they're already in my tree" — find who */
+.gp-pick { width: min(520px, 94vw); display: flex; flex-direction: column; max-height: 86vh; }
+.gp-search { width: 100%; padding: 8px 10px; border: 1px solid var(--panel-border); border-radius: 8px; background: var(--paper); color: var(--ink); font: inherit; margin: 8px 0; }
+.gp-picklist { overflow-y: auto; min-height: 0; flex: 1; }
+.gp-pickrow { display: flex; gap: 10px; align-items: baseline; width: 100%; text-align: left; padding: 8px 4px;
+  border: none; border-bottom: 1px solid var(--panel-border); background: transparent; color: var(--ink); font: inherit; cursor: pointer; }
+.gp-pickrow:hover { background: rgba(127,127,127,.09); }
+.gp-pickrow.gp-spoken .gp-pickdate { color: var(--divorce); }
+.gp-pickname { flex: 1; min-width: 0; font-size: 13.5px; }
+.gp-pickdate { color: var(--muted); font-size: 12px; }
 
 /* right-click menu on the bare grid: add space, or add somebody */
 .ctx-menu {

@@ -21,8 +21,9 @@ const seed={title:'T',version:9,namesSplit:true,
     P({id:'j',name:'Jeffrey W. Nelson',first:'Jeffrey',middle:'W',last:'Nelson',sex:'male',birth:1955}),
     P({id:'g',name:'Gail Arlene Harris',first:'Gail',middle:'Arlene',last:'Harris',sex:'female'}),
     P({id:'b',name:'Barbara (Kaiser) Hauck',first:'Barbara',last:'Hauck',maiden:'Kaiser',sex:'female',birth:1894}),
+    P({id:'e',name:'Ed Hokenstad',first:'Ed',last:'Hokenstad',sex:'male'}),
   ],
-  unions:[],links:[],manual:{k:{x:0,y:0},j:{x:200,y:0},g:{x:400,y:0},b:{x:600,y:0}},hidden:{},manualHidden:{},focus:[]};
+  unions:[],links:[],manual:{k:{x:0,y:0},j:{x:200,y:0},g:{x:400,y:0},b:{x:600,y:0},e:{x:800,y:0}},hidden:{},manualHidden:{},focus:[]};
 // what the other program hands back
 const ged=['0 HEAD','1 GEDC','2 VERS 5.5.1','2 FORM LINEAGE-LINKED','1 CHAR UTF-8',
   // same man, spelled the other way, with a place the app hasn't got
@@ -55,40 +56,91 @@ const state=()=>pg.evaluate(async ()=>{
       const t=db.transaction('kv','readonly').objectStore('kv').get('tree.v1');
       t.onsuccess=()=>res(t.result||null); t.onerror=()=>res(null);}; q.onerror=()=>res(null);});
   return idb || JSON.parse(localStorage.getItem('familyTree.v1')||'{}');});
-ok('the app starts with four people', (await state()).persons.length===4, (await state()).persons.length);
+ok('the app starts with five people', (await state()).persons.length===5, (await state()).persons.length);
 await pg.evaluate(()=>{const m=document.getElementById('tbMenu'); if(m) m.click();});
 await pg.waitForTimeout(500);
 await pg.setInputFiles('#gedcomInput', tmp);
 await pg.waitForSelector('.ged-review',{timeout:15000}); await pg.waitForTimeout(700);
 ok('it opens a review instead of just doing it', true);
-ok('nothing has changed yet', (await state()).persons.length===4, (await state()).persons.length);
+ok('nothing has changed yet', (await state()).persons.length===5, (await state()).persons.length);
 const sections=await pg.evaluate(()=>[...document.querySelectorAll('.ged-sec h3')].map(h=>h.textContent));
-ok('it offers the two people who are new', /People to add \(2\)/.test(sections.join('|')), JSON.stringify(sections));
-ok('…and the details it can fill in', /Details to fill in/.test(sections.join('|')), JSON.stringify(sections));
-ok('…and asks about the year that disagrees', /Disagreements \(1\)/.test(sections.join('|')), JSON.stringify(sections));
-const rowText=await pg.evaluate(()=>[...document.querySelectorAll('.ged-row')].map(r=>r.textContent.replace(/\s+/g,' ').trim()));
-ok('Conrad is matched to Konrad, not offered as new', !rowText.some(t=>/^Conrad Hauck/.test(t)), JSON.stringify(rowText.slice(0,6)));
-ok('Jeffery is matched to Jeffrey', !rowText.some(t=>/^Jeffery Wylum Nelson b/.test(t)));
-ok('the disagreement is NOT ticked by default', await pg.evaluate(()=>{
-  const secs=[...document.querySelectorAll('.ged-sec')];
-  const d=secs.find(s=>/Disagreements/.test(s.querySelector('h3').textContent));
-  return [...d.querySelectorAll('input')].every(i=>!i.checked);}));
+ok('it groups them by how sure it is', /New people \(2\)/.test(sections.join('|')) && /Same person\? \(2\)/.test(sections.join('|')),
+   JSON.stringify(sections));
+const groupOf=(name)=>pg.evaluate((n)=>{const secs=[...document.querySelectorAll('.ged-sec')];
+  for(const s of secs){ if([...s.querySelectorAll('.ged-pname')].some(x=>x.textContent.includes(n)))
+    return s.querySelector('h3').textContent; } return null;},name);
+ok('Conrad is matched to Konrad, not treated as new', /Matched for certain/.test(await groupOf('Conrad')||''), await groupOf('Conrad'));
+ok('Jeffery is matched to Jeffrey', /Matched for certain/.test(await groupOf('Jeffery')||''), await groupOf('Jeffery'));
+
+// --- the per-person card, the way Ancestry shows one
+const openRow=async(name)=>{ await pg.evaluate((n)=>{const r=[...document.querySelectorAll('.ged-prow')]
+    .find(x=>x.querySelector('.ged-pname').textContent.includes(n)); if(r) r.click();},name);
+  await pg.waitForSelector('.ged-person',{timeout:8000}); await pg.waitForTimeout(400); };
+await openRow('Barbara');
+const card=await pg.evaluate(()=>{const m=document.querySelector('.ged-person');
+  return {heads:[...m.querySelectorAll('.gp-th')].map(h=>h.textContent),
+    rows:[...m.querySelectorAll('.gp-cell.them')].map(c=>c.textContent.replace(/\s+/g,' ').trim()),
+    mine:[...m.querySelectorAll('.gp-cell.mine')].map(c=>c.textContent.replace(/\s+/g,' ').trim()),
+    diffs:[...m.querySelectorAll('.gp-diff')].length,
+    buttons:[...m.querySelectorAll('.gp-foot button')].map(b=>b.textContent)};});
+ok('the card shows both trees side by side', card.heads.join('|')==='In the file|In your tree', JSON.stringify(card.heads));
+ok('…with the file on one side and yours on the other', /1895/.test(card.rows.join(' ')) && /1894/.test(card.mine.join(' ')),
+   JSON.stringify({file:card.rows,mine:card.mine}));
+ok('…and marks what differs', card.diffs>=1, card.diffs);
+ok('…and offers Ignore, Later and Accept', card.buttons.join('|')==='Ignore|Later|Accept', JSON.stringify(card.buttons));
+ok('a year that disagrees is NOT ticked', await pg.evaluate(()=>{
+  const row=[...document.querySelectorAll('.gp-cell.them')].find(c=>/^Born/.test(c.textContent.trim())&&/Different/.test(c.textContent));
+  const box=row&&row.querySelector('input'); return !!box && !box.checked;}));
+await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-foot button')].find(x=>/accept/i.test(x.textContent)); b.click();});
+await pg.waitForTimeout(400);
+
+// --- telling it somebody "new" is really somebody you already have
+await openRow('Edmond');
+ok('a new person offers to be linked to somebody already here',
+   await pg.evaluate(()=>!!document.querySelector('.gp-link')));
+await pg.evaluate(()=>document.querySelector('.gp-link').click());
+await pg.waitForSelector('.gp-pick',{timeout:8000}); await pg.waitForTimeout(400);
+ok('…which opens a search of your tree', await pg.evaluate(()=>!!document.querySelector('.gp-search')));
+await pg.evaluate(()=>{const i=document.querySelector('.gp-search'); i.value='Ed Hok'; i.dispatchEvent(new Event('input',{bubbles:true}));});
+await pg.waitForTimeout(400);
+const picks=await pg.evaluate(()=>[...document.querySelectorAll('.gp-pickname')].map(x=>x.textContent));
+ok('…that narrows as you type', picks.length===1 && /Ed Hokenstad/.test(picks[0]), JSON.stringify(picks));
+await pg.evaluate(()=>document.querySelector('.gp-pickrow').click());
+await pg.waitForTimeout(600);
+ok('picking somebody turns the card into a comparison with them',
+   await pg.evaluate(()=>{const m=document.querySelector('.ged-person');
+     return !m.querySelector('.gp-link') && /Ed Hokenstad/.test([...m.querySelectorAll('.gp-cell.mine')].map(c=>c.textContent).join(' '));}));
+await pg.evaluate(()=>{const b=[...document.querySelectorAll('.gp-foot button')].find(x=>/accept/i.test(x.textContent)); b.click();});
+await pg.waitForTimeout(400);
+ok('…and it moves out of the new list', await pg.evaluate(()=>{
+  const s=[...document.querySelectorAll('.ged-sec h3')].map(h=>h.textContent).join('|');
+  return /New people \(1\)/.test(s) && /Linked by you \(1\)/.test(s);}),
+  await pg.evaluate(()=>[...document.querySelectorAll('.ged-sec h3')].map(h=>h.textContent).join(' | ')));
+
+// the likely matches need a look before they count — take them in a batch
+await pg.evaluate(()=>{const secs=[...document.querySelectorAll('.ged-sec')];
+  const s=secs.find(x=>/Same person/.test(x.querySelector('h3').textContent));
+  const b=[...s.querySelectorAll('.ged-bulk button')].find(x=>/accept all/i.test(x.textContent)); b.click();});
+await pg.waitForTimeout(400);
 // take it
 await pg.evaluate(()=>{const b=[...document.querySelectorAll('.ged-review .btn-row button')].find(x=>/bring these in/i.test(x.textContent)); b.click();});
 await pg.waitForTimeout(2500);
 const after=await state();
 const by=(n)=>after.persons.find(p=>new RegExp(n,'i').test(p.name||''));
-ok('the two new people are in', after.persons.length===6, after.persons.length);
+ok('only the one still-new person was added', after.persons.length===6, after.persons.length);
 ok('…and nobody was duplicated', after.persons.filter(p=>/hauck/i.test(p.name)).length===2,
    after.persons.filter(p=>/hauck/i.test(p.name)).map(p=>p.name).join(', '));
 ok('Konrad keeps his spelling', !!by('Konrad') && !by('Conrad'), (by('Konrad')||{}).name);
 ok('…and gains the birth place the file had', (by('Konrad')||{}).birthPlace==='Odessa, Ukraine, Russia', (by('Konrad')||{}).birthPlace);
 ok('Jeffrey gains the full birth date', (by('Jeffrey')||{}).birthDate==='1955-03-12', (by('Jeffrey')||{}).birthDate);
 ok('Gail gains the year she was missing', (by('Gail')||{}).birth===1946, (by('Gail')||{}).birth);
+ok('…and Edmond was not added as a second person', after.persons.filter(p=>/edmond/i.test(p.name)).length===0,
+   after.persons.map(p=>p.name).join(', '));
 ok('Barbara keeps HER year, not the file\'s', (by('Barbara')||{}).birth===1894, (by('Barbara')||{}).birth);
+ok('a new woman is not given the same surname twice', !/\(Hokenstad\) Hokenstad/.test((by('Ruth')||{}).name||''), (by('Ruth')||{}).name);
 ok('a new person brought her dates and place with her',
    (by('Ruth')||{}).birthDate==='1900-07-03' && /Sioux Falls/.test((by('Ruth')||{}).birthPlace||''), JSON.stringify(by('Ruth')&&{b:by('Ruth').birthDate,p:by('Ruth').birthPlace}));
-const ruth=by('Ruth'), ed=by('Edmond');
+const ruth=by('Ruth'), ed=by('Ed Hokenstad');   // Edmond was linked to Ed, so the couple is Ruth + Ed
 const u=(after.unions||[]).find(x=>[x.a,x.b].includes(ruth&&ruth.id)&&[x.a,x.b].includes(ed&&ed.id));
 ok('the family in the file is recorded as a couple', !!u, JSON.stringify(u||null));
 ok('…with its marriage date and place', !!u && u.marriage==='1925-06-14' && /Sioux Falls/.test(u.marriagePlace||''), JSON.stringify(u&&{m:u.marriage,p:u.marriagePlace}));
