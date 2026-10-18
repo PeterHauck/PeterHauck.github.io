@@ -18,6 +18,7 @@ const seed={title:'Test Tree',version:9,namesSplit:true,
     P({id:'d',name:'Darrel E. Boyd',first:'Darrel',middle:'E',last:'Boyd',sex:'male',birth:1928,birthDate:'1928-04-02',death:1990,deathDate:'1990-07-11',deceased:true,
        notes:'PRIVATE: do not share this anywhere',causeOfDeath:'Lung Cancer',
        military:{branch:'Army Reserves',rank:'Private',notes:'Fort Riley'},
+       birthPlace:'Lennox, Lincoln, South Dakota, USA',deathPlace:'Sioux Falls, Minnehaha, South Dakota, USA',
        docs:[{id:'o1',title:'Obituary',docType:'obituary',kind:'text',content:'Darrel E. Boyd, 62, of Sioux Falls, died Wednesday.\n\nHe was a carpenter.'}]}),
     P({id:'v',name:'Verlyn Elaine (Taylor) Boyd',first:'Verlyn',middle:'Elaine',last:'Nelson',maiden:'Taylor',priorNames:['Boyd'],sex:'female',birth:1930,birthDate:'1930-06',color:'#ff8800'}),
     P({id:'k',name:'Kay Boyd',first:'Kay',last:'Boyd',sex:'female',birth:1955,birthDate:'1955-01-09'}),
@@ -28,7 +29,7 @@ const seed={title:'Test Tree',version:9,namesSplit:true,
     P({id:'t',name:'Tom Quiet',first:'Tom',last:'Quiet',sex:'male',birth:1942,death:1980,deathDate:'1980-03-01',deceased:true,
        causeOfDeath:'Took his own life after a long illness'}),
   ],
-  unions:[{id:'u1',a:'d',b:'v',status:'married',marriage:'1949-09-23'},
+  unions:[{id:'u1',a:'d',b:'v',status:'married',marriage:'1949-09-23',marriagePlace:'Leola, McPherson, South Dakota'},
           {id:'u2',a:'v',b:'n',status:'divorced',divorce:'2001-03-04'}],
   links:[{id:'l1',union:'u1',child:'k',type:'bio'},{id:'l2',union:'u1',child:'a',type:'adopted'}],
   manual:{d:{x:0,y:0},v:{x:180,y:0},k:{x:0,y:250},a:{x:180,y:250},n:{x:400,y:0},s:{x:600,y:0},t:{x:780,y:0}},hidden:{},manualHidden:{},focus:['k']};
@@ -78,7 +79,7 @@ ok('an adopted child is marked as adopted', raw.includes('2 PEDI adopted'));
 // what it must and must not contain
 ok('the obituary text is there', raw.includes('Darrel E. Boyd, 62, of Sioux Falls') && raw.includes('He was a carpenter'));
 ok('…and its paragraphs are kept', /1 NOTE Darrel E\. Boyd[\s\S]*?1 CONT/.test(raw));
-ok('a cause of death is recorded against the death', /1 DEAT\r\n2 DATE 11 JUL 1990\r\n2 CAUS Lung Cancer/.test(raw));
+ok('a cause of death is recorded against the death', /1 DEAT\r\n2 DATE 11 JUL 1990\r\n(2 PLAC [^\r]*\r\n)?2 CAUS Lung Cancer/.test(raw));
 ok('…even when only the year of death is known', /1 DEAT Y\r\n2 CAUS Heart failure/.test(raw));
 ok('military service is a fact of its own', /1 EVEN Private, Army Reserves\r\n2 TYPE Military Service/.test(raw));
 ok('…with what was written about it kept', /2 TYPE Military Service\r\n2 NOTE Fort Riley/.test(raw));
@@ -91,6 +92,9 @@ ok('…and those people are still in the file', /1 NAME Sam \/Quiet\//.test(raw)
 ok('the person the tree is focused on is the first record',
    /0 @I1@ INDI\r\n1 NAME Kay \/Boyd\//.test(raw), (raw.split('\r\n')[lines.indexOf('0 @I1@ INDI')+1]||''));
 ok('…and the header names them as the home person', raw.includes('1 _ROOT @I1@'));
+ok('a birth place travels with the birth', /1 BIRT\r\n2 DATE 2 APR 1928\r\n2 PLAC Lennox, Lincoln, South Dakota, USA/.test(raw));
+ok('a death place travels with the death', /2 PLAC Sioux Falls, Minnehaha, South Dakota, USA/.test(raw));
+ok('a marriage place travels with the marriage', /1 MARR\r\n2 DATE 23 SEP 1949\r\n2 PLAC Leola, McPherson, South Dakota/.test(raw));
 ok('private notes are NOT there', !raw.includes('PRIVATE: do not share'));
 ok('colours are not there', !raw.includes('#ff8800'));
 ok('no page errors', errs.length===0, JSON.stringify(errs.slice(0,3)));

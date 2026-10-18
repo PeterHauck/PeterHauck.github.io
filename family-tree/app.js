@@ -192,7 +192,7 @@
 
   function addPerson(data) {
     const np = nameParts(data);
-    const p = { id: uid(), name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, priorNames: np.priorNames, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate || null, deathDate: data.deathDate || null, deceased: !!data.deceased, causeOfDeath: data.causeOfDeath || undefined, sex: data.sex || "unknown", color: data.color || null, photo: data.photo || null, docs: data.docs || [] };
+    const p = { id: uid(), name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, priorNames: np.priorNames, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate || null, deathDate: data.deathDate || null, birthPlace: data.birthPlace || null, deathPlace: data.deathPlace || null, deceased: !!data.deceased, causeOfDeath: data.causeOfDeath || undefined, sex: data.sex || "unknown", color: data.color || null, photo: data.photo || null, docs: data.docs || [] };
     state.persons.push(p);
     // Anyone added while inside a hidden branch stays hidden from the main tree.
     if (hiddenScope) { if (!state.hidden) state.hidden = {}; state.hidden[p.id] = true; }
@@ -3382,6 +3382,11 @@
     const dl = personDatesLine(p);
     if (dl) { const d = document.createElement("div"); d.className = "pv-dates"; d.textContent = dl; txt2.appendChild(d); }
     { const a = ageLabel(p); if (a) { const d = document.createElement("div"); d.className = "pv-age"; d.textContent = (isDeceased(p) ? "Age at death " : "Age ") + a; txt2.appendChild(d); } }
+    // Where, as well as when: a place is what makes a record findable.
+    { const where = [];
+      if (p.birthPlace) where.push("b. " + p.birthPlace);
+      if (p.deathPlace) where.push("d. " + p.deathPlace);
+      where.forEach((t) => { const d = document.createElement("div"); d.className = "pv-sub pv-place"; d.textContent = t; txt2.appendChild(d); }); }
     if (isDeceased(p) && p.causeOfDeath) { const d = document.createElement("div"); d.className = "pv-sub"; d.textContent = p.causeOfDeath; txt2.appendChild(d); }
     if (servedInMilitary(p)) { const d = document.createElement("div"); d.className = "pv-sub"; d.textContent = "★ " + (militaryLine(p) || "Served in the military"); txt2.appendChild(d); }
     row.appendChild(txt2);
@@ -3400,6 +3405,8 @@
     $("#pNick").value = np.nickname || "";
     $("#pMaiden").value = np.maiden || "";
     $("#pPrior").value = priorList(p.priorNames).join(", ");
+    $("#pBirthPlace").value = p.birthPlace || "";
+    $("#pDeathPlace").value = p.deathPlace || "";
     syncPriorEcho();
     $("#pSuffix").value = np.suffix || "";
     renderNotesPanel(p);
@@ -3449,6 +3456,7 @@
     syncAgeLine(null);
     syncDateEchoes();
     setSex("male");
+    { const a = $("#pBirthPlace"), b = $("#pDeathPlace"); if (a) a.value = ""; if (b) b.value = ""; }
     pendingPhoto = null; pendingPhotoFull = null; pendingFrame = null; updatePhotoPreview();
     setColor("");
     $("#personSubmit").textContent = "Add person";
@@ -3958,10 +3966,12 @@
     const birthYear = bIso ? dateYear(bIso) : null;
     const deathYear = dIso ? dateYear(dIso) : null;
     const np = nameParts({ first: $("#pFirst").value.trim(), middle: $("#pMiddle").value.trim(), last: $("#pLast").value.trim(), nickname: $("#pNick").value.trim(), maiden: formSex === "female" ? $("#pMaiden").value.trim() : "", priorNames: formSex === "female" ? $("#pPrior").value : "", suffix: $("#pSuffix").value.trim() });
-    const data = { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, priorNames: np.priorNames, suffix: np.suffix, birth: birthYear, death: deathYear, birthDate, deathDate, deceased: $("#pDeceased").checked, causeOfDeath: $("#pCause").value.trim() || null, sex: formSex, color: formColor, photo: pendingPhoto };
+    const birthPlace = $("#pBirthPlace").value.trim() || null;
+    const deathPlace = $("#pDeathPlace").value.trim() || null;
+    const data = { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, priorNames: np.priorNames, suffix: np.suffix, birth: birthYear, death: deathYear, birthDate, deathDate, birthPlace, deathPlace, deceased: $("#pDeceased").checked, causeOfDeath: $("#pCause").value.trim() || null, sex: formSex, color: formColor, photo: pendingPhoto };
     if (id) {
       const p = personById(id);
-      Object.assign(p, { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, priorNames: np.priorNames, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate, deathDate: data.deathDate, deceased: data.deceased, sex: data.sex, color: data.color || null });
+      Object.assign(p, { name: np.name, first: np.first, middle: np.middle, last: np.last, nickname: np.nickname, maiden: np.maiden, priorNames: np.priorNames, suffix: np.suffix, birth: num(data.birth), death: num(data.death), birthDate: data.birthDate, deathDate: data.deathDate, birthPlace: data.birthPlace, deathPlace: data.deathPlace, deceased: data.deceased, sex: data.sex, color: data.color || null });
       const cause = $("#pCause").value.trim();
       if (cause) p.causeOfDeath = cause; else delete p.causeOfDeath;
       if ($("#pMilitary").checked) {
@@ -4886,12 +4896,16 @@
       if (p.sex === "male") L.push("1 SEX M");
       else if (p.sex === "female") L.push("1 SEX F");
       const born = gedDate(p.birthDate, p.birth);
-      if (born) { L.push("1 BIRT"); L.push("2 DATE " + born); }
+      if (born || p.birthPlace) {
+        L.push("1 BIRT");
+        if (born) L.push("2 DATE " + born);
+        if (p.birthPlace) L.push("2 PLAC " + p.birthPlace);
+      }
       const died = gedDate(p.deathDate, p.death);
       const cause = String(p.causeOfDeath || "").trim();
       const tellCause = cause && !holdBackCause(cause);
-      if (died) { L.push("1 DEAT"); L.push("2 DATE " + died); if (tellCause) gedText(2, "CAUS", cause).forEach((x) => L.push(x)); }
-      else if (isDeceased(p)) { L.push("1 DEAT Y"); if (tellCause) gedText(2, "CAUS", cause).forEach((x) => L.push(x)); }
+      if (died) { L.push("1 DEAT"); L.push("2 DATE " + died); if (p.deathPlace) L.push("2 PLAC " + p.deathPlace); if (tellCause) gedText(2, "CAUS", cause).forEach((x) => L.push(x)); }
+      else if (isDeceased(p) || p.deathPlace) { L.push("1 DEAT Y"); if (p.deathPlace) L.push("2 PLAC " + p.deathPlace); if (tellCause) gedText(2, "CAUS", cause).forEach((x) => L.push(x)); }
       const mil = p.military;
       if (mil && (mil.branch || mil.rank || mil.notes)) {
         const what = [mil.rank, mil.branch].map((x) => String(x || "").trim()).filter(Boolean).join(", ");
@@ -4927,8 +4941,11 @@
       state.links.forEach((l) => { if (l.union === u.id && idOf[l.child]) L.push("1 CHIL " + idOf[l.child]); });
       if (u.status === "married" || u.status === "divorced") {
         const md = gedDate(u.marriage, null);
-        if (md) { L.push("1 MARR"); L.push("2 DATE " + md); }
-        else if (a && b) L.push("1 MARR Y");
+        if (md || u.marriagePlace) {
+          L.push("1 MARR");
+          if (md) L.push("2 DATE " + md);
+          if (u.marriagePlace) L.push("2 PLAC " + u.marriagePlace);
+        } else if (a && b) L.push("1 MARR Y");
       }
       if (u.status === "divorced") {
         const dd = gedDate(u.divorce, null);
@@ -4939,6 +4956,345 @@
     L.push("0 TRLR");
     const held = people.filter((p) => holdBackCause(p.causeOfDeath)).length;
     return { text: L.join("\r\n") + "\r\n", people: people.length, held };   // GEDCOM line endings
+  }
+
+  /* ---- bringing a GEDCOM in ------------------------------------------------
+     The other direction. Ancestry (or any of them) hands back a file holding
+     some of the people already here and some that aren't, and the names won't
+     line up: Konrad comes back as Conrad, Jeffrey as Jeffery, Dick as
+     Richard, and a woman recorded here under her married name is in there
+     under the one she was born with. Matching on the name alone would make a
+     second copy of a hundred people, which is the one thing a family tree
+     must never do to itself.
+
+     So nothing is applied until it's been looked at. The file is read, every
+     person in it is lined up against somebody here or marked as new, and all
+     of it goes on screen to be ticked or not.                              */
+  function gedRead(text) {
+    const recs = [];
+    const stack = [];
+    String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").forEach((line) => {
+      if (!line.trim()) return;
+      const m = /^(\d+)\s+(?:(@[^@]+@)\s+)?(_?[A-Za-z][A-Za-z0-9_]*)(?:\s(.*))?$/.exec(line);
+      if (!m) return;
+      const lvl = +m[1], node = { tag: m[3], id: m[2] || null, val: m[4] === undefined ? "" : m[4], subs: [] };
+      if (lvl === 0) { recs.push(node); stack.length = 0; stack[0] = node; return; }
+      const parent = stack[lvl - 1];
+      if (!parent) return;
+      // CONC continues a line that was too long; CONT starts a new one
+      if (node.tag === "CONC") { parent.val += node.val; stack[lvl] = parent; return; }
+      if (node.tag === "CONT") { parent.val += "\n" + node.val; stack[lvl] = parent; return; }
+      parent.subs.push(node); stack[lvl] = node;
+    });
+    return recs;
+  }
+  const gSub = (n, tag) => (n && n.subs || []).find((x) => x.tag === tag);
+  const gSubs = (n, tag) => (n && n.subs || []).filter((x) => x.tag === tag);
+  // "14 JUN 1912" / "JUN 1912" / "1912" → the app's own date shape
+  const GED_MON = { JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6, JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12 };
+  function gedDateIn(v) {
+    const t = String(v || "").trim().toUpperCase().replace(/^(ABT|EST|CAL|BEF|AFT|FROM|TO)\s+/, "");
+    let m = /^(\d{1,2})\s+([A-Z]{3})\s+(\d{4})$/.exec(t);
+    if (m && GED_MON[m[2]]) return { iso: m[3] + "-" + String(GED_MON[m[2]]).padStart(2, "0") + "-" + String(+m[1]).padStart(2, "0"), year: +m[3] };
+    m = /^([A-Z]{3})\s+(\d{4})$/.exec(t);
+    if (m && GED_MON[m[1]]) return { iso: m[2] + "-" + String(GED_MON[m[1]]).padStart(2, "0"), year: +m[2] };
+    m = /(\d{4})/.exec(t);
+    return m ? { iso: m[1], year: +m[1] } : null;
+  }
+  // Everything the file says about one person, in this app's terms.
+  function gedPeople(recs) {
+    return recs.filter((r) => r.tag === "INDI").map((r) => {
+      const nm = gSub(r, "NAME");
+      const full = String(nm && nm.val || "").replace(/\//g, " ").replace(/\s+/g, " ").trim();
+      const given = String((gSub(nm, "GIVN") || {}).val || "").trim();
+      const surn = String((gSub(nm, "SURN") || {}).val || "").trim();
+      const birt = gSub(r, "BIRT"), deat = gSub(r, "DEAT");
+      const bd = gedDateIn((gSub(birt, "DATE") || {}).val), dd = gedDateIn((gSub(deat, "DATE") || {}).val);
+      const sx = String((gSub(r, "SEX") || {}).val || "").trim().toUpperCase();
+      return {
+        gid: r.id, full, given, surn,
+        first: (given || full).split(" ")[0] || "",
+        sex: sx === "M" ? "male" : sx === "F" ? "female" : "unknown",
+        birthDate: bd ? bd.iso : null, birth: bd ? bd.year : null,
+        deathDate: dd ? dd.iso : null, death: dd ? dd.year : null,
+        deceased: !!(deat || dd),
+        birthPlace: String((gSub(birt, "PLAC") || {}).val || "").trim() || null,
+        deathPlace: String((gSub(deat, "PLAC") || {}).val || "").trim() || null,
+        famc: gSubs(r, "FAMC").map((x) => x.val), fams: gSubs(r, "FAMS").map((x) => x.val),
+      };
+    });
+  }
+  function gedFamilies(recs) {
+    return recs.filter((r) => r.tag === "FAM").map((f) => {
+      const marr = gSub(f, "MARR"), div = gSub(f, "DIV");
+      const md = gedDateIn((gSub(marr, "DATE") || {}).val);
+      const dvd = gedDateIn((gSub(div, "DATE") || {}).val);
+      return {
+        gid: f.id,
+        husb: (gSub(f, "HUSB") || {}).val || null, wife: (gSub(f, "WIFE") || {}).val || null,
+        chil: gSubs(f, "CHIL").map((c) => c.val),
+        marriage: md ? md.iso : null, marriagePlace: String((gSub(marr, "PLAC") || {}).val || "").trim() || null,
+        divorced: !!div, divorce: dvd ? dvd.iso : null,
+      };
+    });
+  }
+
+  /* Who in the file is who here. Names are compared by their parts, allowing
+     for the spellings that are the same name — a letter out, a sound swapped,
+     a shortening — and a birth year that agrees settles it. Years that
+     disagree by more than a couple mean two different people with the same
+     name, which in a family tree is the normal case, not the exception.    */
+  const mTok = (v) => String(v || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z\s]/g, " ").split(/\s+/).filter((t) => t.length > 1 &&
+      // "Baby" is kept: a baby recorded with no given name still has to be able
+      // to find the same baby on the other side, or every one of them is
+      // duplicated. It can't match anybody else on its own — two tokens are
+      // needed for a match, so "Baby Hauck" never reaches "Peter Hauck".
+      !["jr", "sr", "ii", "iii", "iv", "mr", "mrs", "unknown", "dna"].includes(t));
+  const mKey = (t) => t.replace(/ck/g, "k").replace(/c/g, "k").replace(/ph/g, "f").replace(/[aeiouy]+/g, "").replace(/(.)\1+/g, "$1");
+  function mNear(a, b) {
+    if (a === b) return true;
+    if (a[0] === b[0] && mKey(a) === mKey(b)) return true;                       // Konrad / Conrad
+    if (a.length > 3 && b.length > 3 && (a.startsWith(b) || b.startsWith(a))) return true;   // Cassandra / Cassie
+    if (Math.abs(a.length - b.length) <= 1) {                                     // Jeffrey / Jeffery
+      let d = 0, i = 0, j = 0;
+      while (i < a.length && j < b.length) {
+        if (a[i] === b[j]) { i++; j++; continue; }
+        if (++d > 1) return false;
+        if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; }
+      }
+      if (d + (a.length - i) + (b.length - j) <= 1) return true;
+    }
+    return false;
+  }
+  function matchGed(people) {
+    const mine = visiblePersons().concat(state.persons.filter((p) => isHidden(p.id))).filter((p, i, arr) => arr.indexOf(p) === i);
+    const here = state.persons.map((p) => ({
+      p, birth: p.birth || null, death: p.death || null, sex: p.sex,
+      toks: [].concat(mTok(p.first), mTok(p.middle), mTok(p.nickname), mTok(p.last), mTok(p.maiden), mTok(p.name))
+        .filter((t, i, a) => a.indexOf(t) === i),
+    }));
+    const score = (g, h) => {
+      const gt = [].concat(mTok(g.given), mTok(g.surn), mTok(g.full)).filter((t, i, a) => a.indexOf(t) === i);
+      let ov = 0;
+      gt.forEach((x) => { if (h.toks.some((y) => mNear(x, y))) ov++; });
+      if (ov < 2) return 0;
+      let s = ov * 3;
+      if (g.birth && h.birth) {
+        const d = Math.abs(g.birth - h.birth);
+        if (d === 0) s += 8; else if (d <= 1) s += 4; else if (d <= 3) s -= 2; else return 0;
+      }
+      if (g.death && h.death && Math.abs(g.death - h.death) <= 1) s += 3;
+      if (g.sex !== "unknown" && h.sex && h.sex !== "unknown" && g.sex !== h.sex) s -= 6;
+      return s;
+    };
+    const all = [];
+    people.forEach((g) => here.forEach((h) => { const s = score(g, h); if (s >= 6) all.push({ g, h, s }); }));
+    all.sort((x, y) => y.s - x.s);
+    const tookG = new Set(), tookH = new Set();
+    const sure = [], likely = [];
+    all.forEach(({ g, h, s }) => {
+      if (tookG.has(g.gid) || tookH.has(h.p.id)) return;
+      tookG.add(g.gid); tookH.add(h.p.id);
+      (s >= 14 ? sure : likely).push({ g, p: h.p, score: s });
+    });
+    return { sure, likely, fresh: people.filter((g) => !tookG.has(g.gid)) };
+  }
+  // What this file would add to somebody already here — only ever filling a
+  // blank, never writing over something already recorded.
+  function gedGains(g, p) {
+    const out = [];
+    // A year here and a full date there is worth taking: it's the same date,
+    // told more precisely. Only when the years agree — a different year is a
+    // disagreement, and those are asked about separately.
+    const sharpens = (file, haveDate, haveYear, fileYear) =>
+      file && !haveDate && (!haveYear || haveYear === fileYear);
+    if (sharpens(g.birthDate, p.birthDate, p.birth, g.birth))
+      out.push({ field: "birthDate", was: null, now: g.birthDate,
+        label: "born " + fmtDate(g.birthDate) + (p.birth ? " (you have " + p.birth + ")" : "") });
+    if (sharpens(g.deathDate, p.deathDate, p.death, g.death))
+      out.push({ field: "deathDate", was: null, now: g.deathDate,
+        label: "died " + fmtDate(g.deathDate) + (p.death ? " (you have " + p.death + ")" : "") });
+    if (g.birthPlace && !p.birthPlace) out.push({ field: "birthPlace", was: null, now: g.birthPlace, label: "born in " + g.birthPlace });
+    if (g.deathPlace && !p.deathPlace) out.push({ field: "deathPlace", was: null, now: g.deathPlace, label: "died in " + g.deathPlace });
+    return out;
+  }
+  // …and where the two disagree, which is for you to settle, not the file.
+  function gedClashes(g, p) {
+    const out = [];
+    if (g.birth && p.birth && g.birth !== p.birth) out.push({ what: "born", here: p.birth, file: g.birth });
+    if (g.death && p.death && g.death !== p.death) out.push({ what: "died", here: p.death, file: g.death });
+    return out;
+  }
+
+  /* The review. Three lists: people the file would add, facts it would fill in
+     for somebody already here, and pairs it thinks are the same person but
+     isn't sure about. Everything starts ticked except the uncertain pairs and
+     anything that disagrees with what's already recorded — those you choose.  */
+  function openGedReview(parsed) {
+    const { people, fams, sure, likely, fresh } = parsed;
+    const back = document.createElement("div"); back.className = "modal-backdrop";
+    const m = document.createElement("div"); m.className = "modal ged-review";
+    const close = () => back.remove();
+    const gains = [];
+    sure.concat(likely).forEach(({ g, p }) => { const f = gedGains(g, p); if (f.length) gains.push({ g, p, fields: f }); });
+    const clashes = [];
+    sure.concat(likely).forEach(({ g, p }) => { const c = gedClashes(g, p); if (c.length) clashes.push({ g, p, clash: c }); });
+    const h = document.createElement("h2"); h.textContent = "Bring in a GEDCOM"; m.appendChild(h);
+    const hint = document.createElement("div"); hint.className = "hint";
+    hint.textContent = people.length + " people in the file. " + sure.length + " matched somebody here for certain, "
+      + likely.length + " probably, and " + fresh.length + " weren't found here at all. Nothing changes until you press Bring these in.";
+    m.appendChild(hint);
+    const body = document.createElement("div"); body.className = "ged-body"; m.appendChild(body);
+    const section = (title, note) => {
+      const s = document.createElement("div"); s.className = "ged-sec";
+      const t = document.createElement("h3"); t.textContent = title; s.appendChild(t);
+      if (note) { const n = document.createElement("div"); n.className = "hint"; n.textContent = note; s.appendChild(n); }
+      body.appendChild(s); return s;
+    };
+    const row = (host, label, checked, sub) => {
+      const l = document.createElement("label"); l.className = "ged-row";
+      const c = document.createElement("input"); c.type = "checkbox"; c.checked = checked;
+      const t = document.createElement("span"); t.className = "ged-label"; t.textContent = label;
+      l.appendChild(c); l.appendChild(t);
+      if (sub) { const u = document.createElement("span"); u.className = "ged-sub"; u.textContent = sub; l.appendChild(u); }
+      host.appendChild(l); return c;
+    };
+    const bulk = (host, boxes) => {
+      const b = document.createElement("div"); b.className = "ged-bulk";
+      const all = document.createElement("button"); all.type = "button"; all.className = "btn small"; all.textContent = "All";
+      const none = document.createElement("button"); none.type = "button"; none.className = "btn small"; none.textContent = "None";
+      all.onclick = () => boxes.forEach((x) => (x.checked = true));
+      none.onclick = () => boxes.forEach((x) => (x.checked = false));
+      b.appendChild(all); b.appendChild(none); host.appendChild(b);
+    };
+    const when = (g) => [g.birth ? "b. " + g.birth : "", g.death ? "d. " + g.death : ""].filter(Boolean).join("  ");
+    // 1. new people
+    const addBoxes = new Map();
+    if (fresh.length) {
+      const s1 = section("People to add (" + fresh.length + ")", "Not found anywhere in your tree.");
+      const boxes = [];
+      fresh.forEach((g) => {
+        const c = row(s1, g.full || "Unnamed", true, [when(g), g.birthPlace || ""].filter(Boolean).join("  ·  "));
+        addBoxes.set(g.gid, c); boxes.push(c);
+      });
+      bulk(s1, boxes);
+    }
+    // 2. facts for people already here
+    const gainBoxes = [];
+    if (gains.length) {
+      const s2 = section("Details to fill in (" + gains.length + " people)", "Only where your tree has nothing recorded. Nothing already written down is overwritten.");
+      const boxes = [];
+      gains.forEach((x) => {
+        const c = row(s2, x.p.name, true, x.fields.map((f) => f.label).join("  ·  "));
+        gainBoxes.push({ box: c, x }); boxes.push(c);
+      });
+      bulk(s2, boxes);
+    }
+    // 3. the uncertain pairs
+    const likelyBoxes = [];
+    if (likely.length) {
+      const s3 = section("Same person? (" + likely.length + ")", "These look like a match but the file and your tree don't agree on enough to be sure. Tick the ones that are the same person — the rest will be added as new people.");
+      const boxes = [];
+      likely.forEach((pair) => {
+        const c = row(s3, pair.g.full + "  ↔  " + pair.p.name, true,
+          [when(pair.g) || "no dates in the file", pair.p.birth ? "your tree: b. " + pair.p.birth : "your tree: no dates"].join("  ·  "));
+        likelyBoxes.push({ box: c, pair }); boxes.push(c);
+      });
+      bulk(s3, boxes);
+    }
+    // 4. disagreements — never ticked by default
+    const clashBoxes = [];
+    if (clashes.length) {
+      const s4 = section("Disagreements (" + clashes.length + ")", "Your tree and the file say different things. Yours is kept unless you tick it.");
+      clashes.forEach((x) => {
+        const c = row(s4, x.p.name, false,
+          x.clash.map((z) => z.what + ": yours " + z.here + ", file " + z.file).join("  ·  "));
+        clashBoxes.push({ box: c, x });
+      });
+    }
+    if (!fresh.length && !gains.length && !likely.length && !clashes.length) {
+      const s0 = section("Nothing to bring in", "Everything in that file is already in your tree, with nothing to add.");
+      s0.style.opacity = ".8";
+    }
+    const btns = document.createElement("div"); btns.className = "btn-row";
+    const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "Cancel";
+    cancel.onclick = close;
+    const go = document.createElement("button"); go.type = "button"; go.className = "btn primary"; go.textContent = "Bring these in";
+    go.onclick = () => {
+      const takeNew = new Set([...addBoxes.entries()].filter(([, c]) => c.checked).map(([gid]) => gid));
+      likelyBoxes.forEach(({ box, pair }) => { if (!box.checked) takeNew.add(pair.g.gid); });
+      const pairsOk = sure.concat(likelyBoxes.filter((x) => x.box.checked).map((x) => x.pair));
+      const fillIn = gainBoxes.filter((x) => x.box.checked).map((x) => x.x);
+      const overwrite = clashBoxes.filter((x) => x.box.checked).map((x) => x.x);
+      close();
+      applyGed({ people, fams, pairsOk, takeNew, fillIn, overwrite });
+    };
+    btns.appendChild(cancel); btns.appendChild(go); m.appendChild(btns);
+    back.appendChild(m); document.body.appendChild(back);
+    back.addEventListener("click", (e) => { if (e.target === back) close(); });
+    return back;
+  }
+
+  // Put the ticked parts in: new people first, then their families, then the
+  // details filled in for people who were already here.
+  function applyGed({ people, fams, pairsOk, takeNew, fillIn, overwrite }) {
+    pushUndo();
+    const byGid = {};                     // file id → the person here it means
+    pairsOk.forEach(({ g, p }) => (byGid[g.gid] = p.id));
+    let added = 0;
+    people.forEach((g) => {
+      if (!takeNew.has(g.gid)) return;
+      const np = nameParts({ name: g.full, first: g.given.split(" ")[0] || "", middle: g.given.split(" ").slice(1).join(" "),
+        last: g.surn, maiden: g.sex === "female" ? g.surn : "" });
+      const p = addPerson({ name: np.name, first: np.first, middle: np.middle, last: np.last, maiden: np.maiden,
+        sex: g.sex, birth: g.birth, death: g.death, birthDate: g.birthDate, deathDate: g.deathDate,
+        birthPlace: g.birthPlace, deathPlace: g.deathPlace, deceased: g.deceased });
+      byGid[g.gid] = p.id; added++;
+    });
+    let filled = 0;
+    fillIn.forEach(({ p, fields }) => {
+      const q = personById(p.id); if (!q) return;
+      fields.forEach((f) => {
+        q[f.field] = f.now;
+        if (f.field === "birthDate") q.birth = +String(f.now).slice(0, 4) || q.birth;
+        if (f.field === "deathDate") { q.death = +String(f.now).slice(0, 4) || q.death; q.deceased = true; }
+      });
+      q.name = composeName(q) || q.name;
+      filled++;
+    });
+    (overwrite || []).forEach(({ g, p }) => {
+      const q = personById(p.id); if (!q) return;
+      if (g.birthDate) { q.birthDate = g.birthDate; q.birth = g.birth; }
+      if (g.deathDate) { q.deathDate = g.deathDate; q.death = g.death; q.deceased = true; }
+    });
+    // families: a couple, and the children hanging off them
+    let joined = 0;
+    fams.forEach((f) => {
+      const a = f.husb && byGid[f.husb], b = f.wife && byGid[f.wife];
+      const kids = f.chil.map((c) => byGid[c]).filter(Boolean);
+      if (!a && !b && kids.length < 2) return;             // nothing here to record
+      let u = (a && b) ? unionBetween(a, b) : null;
+      if (!u && (a || b)) {
+        // one they're already in with the same partner, or a new one
+        u = state.unions.find((x) => (x.a === a && x.b === b) || (x.a === b && x.b === a)) || null;
+      }
+      if (!u) {
+        const only = kids.length && !a && !b;
+        u = addUnion(a || null, b || null, only ? "siblings" : (f.divorced ? "divorced" : "married"));
+        joined++;
+      }
+      if (f.marriage && !u.marriage) u.marriage = f.marriage;
+      if (f.marriagePlace && !u.marriagePlace) u.marriagePlace = f.marriagePlace;
+      if (f.divorce && !u.divorce) { u.divorce = f.divorce; u.status = "divorced"; }
+      kids.forEach((cid) => { if (!state.links.some((l) => l.union === u.id && l.child === cid)) { addChild(u.id, cid, "bio"); joined++; } });
+    });
+    dedupeParentUnions();
+    autoLayout(); render(); save();
+    try { cloudSaveTree(false); } catch (e) {}
+    toast("Brought in: " + added + (added === 1 ? " person" : " people")
+      + (filled ? ", " + filled + " filled in" : "")
+      + (joined ? ", " + joined + " connections" : ""));
   }
 
   // A self-contained copy with every photo/document folded back in — used for
@@ -8013,6 +8369,58 @@
       toast(ged.people + " people exported — upload the .ged file to Ancestry"
         + (ged.held ? " · " + ged.held + (ged.held === 1 ? " cause of death was" : " causes of death were") + " held back" : ""));
     }; }
+  /* Ancestry hands you a .zip with the .ged inside it, so take either. The
+     zip is unpacked here rather than asking you to do it first — the file you
+     were given should be the file you can hand over.                       */
+  async function gedFromFile(file) {
+    const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+    if (!(head[0] === 0x50 && head[1] === 0x4b)) return await file.text();
+    if (typeof DecompressionStream !== "function") throw new Error("This browser can't open a zip — unzip it first and choose the .ged");
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.length);
+    /* Read it through the central directory at the end, not the header in
+       front of each file: a zip written as it's being made leaves the sizes
+       in front set to zero and puts them in a trailer, so the front of the
+       file can't tell you where the compressed data stops. The directory
+       always knows.                                                        */
+    let eocd = -1;
+    for (let i = buf.length - 22; i >= 0 && i > buf.length - 66000; i--) {
+      if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error("That zip looks damaged — unzip it and choose the .ged");
+    let at = dv.getUint32(eocd + 16, true);
+    const count = dv.getUint16(eocd + 10, true);
+    for (let n = 0; n < count && at < buf.length - 46; n++) {
+      if (dv.getUint32(at, true) !== 0x02014b50) break;
+      const method = dv.getUint16(at + 10, true);
+      const comp = dv.getUint32(at + 20, true);
+      const nameLen = dv.getUint16(at + 28, true), extraLen = dv.getUint16(at + 30, true), cmtLen = dv.getUint16(at + 32, true);
+      const localAt = dv.getUint32(at + 42, true);
+      const name = new TextDecoder().decode(buf.subarray(at + 46, at + 46 + nameLen));
+      at += 46 + nameLen + extraLen + cmtLen;
+      if (!/\.ged$/i.test(name)) continue;
+      const lNameLen = dv.getUint16(localAt + 26, true), lExtraLen = dv.getUint16(localAt + 28, true);
+      const from = localAt + 30 + lNameLen + lExtraLen;
+      const raw = buf.subarray(from, from + comp);
+      if (method === 0) return new TextDecoder("utf-8").decode(raw);
+      const st = new Blob([raw]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      return new TextDecoder("utf-8").decode(await new Response(st).arrayBuffer());
+    }
+    throw new Error("No .ged file inside that zip");
+  }
+  { const b = $("#gedcomInBtn"); if (b) b.onclick = () => { if (!readonly) $("#gedcomInput").click(); }; }
+  { const inp = $("#gedcomInput"); if (inp) inp.addEventListener("change", async (e) => {
+      const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+      toast("Reading " + f.name + "…");
+      let text;
+      try { text = await gedFromFile(f); }
+      catch (err) { toast(err.message || "Couldn't read that file"); return; }
+      const recs = gedRead(text);
+      const people = gedPeople(recs), fams = gedFamilies(recs);
+      if (!people.length) { toast("No people found in that file"); return; }
+      const { sure, likely, fresh } = matchGed(people);
+      openGedReview({ people, fams, sure, likely, fresh });
+    }); }
   $("#importBtn").onclick = () => $("#importInput").click();
   $("#importInput").addEventListener("change", (e) => {
     const f = e.target.files[0]; if (!f) return;
